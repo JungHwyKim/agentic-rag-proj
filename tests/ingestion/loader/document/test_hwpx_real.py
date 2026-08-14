@@ -26,9 +26,11 @@ FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 # 문서별 테스트에서 쓰는 파일명 조각
 AI_GUIDE = "신뢰가능_AI"
 SCHOOL_GUIDE = "학교기록물"
-DECREE_GUIDE = "시행령 개정안"
+# 이 둘은 이름이 겹친다(원본 이름이 가로쪽 판 이름의 접두사다). _find 가 정확 이름으로
+# 갈라내야 하므로 조각이 아니라 파일명 전체를 적는다
+DECREE_GUIDE = "시행령 개정안 안내서(정보시스템의무사항알림)"
 # 같은 문서를 가로 쪽 섹션이 들어가게 고친 판. 쪽 기하 판정을 검증하는 데 쓴다
-DECREE_LANDSCAPE = "_가로쪽"
+DECREE_LANDSCAPE = "시행령 개정안 안내서(정보시스템의무사항알림)_가로쪽"
 
 # 시행령 개정안 안내서를 사람이 직접 열어 확인한 쪽 번호. 로더 결과를 여기에 맞춘다
 DECREE_TABLE_PAGES = [1, 4, 6, 7, 11, 13, 14, 15, 24, 25, 26]
@@ -41,12 +43,26 @@ def _real_files(suffix: str) -> list[Path]:
     return sorted(FIXTURES.glob(f"*{suffix}"))
 
 
-# 파일명 조각으로 실제 파일 하나를 찾는다. 없으면 테스트를 건너뛴다
+# 파일명 조각으로 실제 파일 하나를 찾는다. 없으면 테스트를 건너뛴다.
+# 조각이 여러 파일에 걸리면 어느 문서를 검증하는지 모르게 되므로 조용히 첫 번째를 고르지
+# 않는다 — 이름이 조각과 정확히 같은 후보가 있으면 그걸 쓰고, 없으면 실패시킨다.
+# (실측: "_가로쪽" 판이 들어오면서 "시행령 개정안" 이 두 파일에 걸렸다. 두 문서는 쪽 수가
+#  26/28 로 달라, 사람이 확인한 정답이 엉뚱한 문서에 적용될 뻔했다)
+# 파일이 없어서 건너뛰는 것(정상)과 어느 파일인지 몰라서 멈추는 것(사람이 개입해야 함)을
+# 가르는 게 이 함수의 핵심이다
 def _find(fragment: str, suffix: str = ".hwpx") -> Path:
-    for path in _real_files(suffix):
-        if fragment in path.name:
-            return path
-    pytest.skip(f"tests/fixtures 에 '{fragment}' {suffix} 파일이 없습니다.")
+    candidates = [path for path in _real_files(suffix) if fragment in path.name]
+    if not candidates:
+        pytest.skip(f"tests/fixtures 에 '{fragment}' {suffix} 파일이 없습니다.")
+    if len(candidates) == 1:
+        return candidates[0]
+
+    exact = [path for path in candidates if path.stem == fragment]
+    if len(exact) == 1:
+        return exact[0]
+
+    names = ", ".join(path.name for path in candidates)
+    pytest.fail(f"'{fragment}' 가 여러 파일에 걸립니다. 조각을 파일명 전체로 좁히세요: {names}")
 
 
 # 그림을 건너뛰는 설정. OCR/Vision 없이 구조만 빠르게 검증하기 위함
@@ -71,7 +87,9 @@ def _hwpx_params():
     files = _real_files(".hwpx")
     if not files:
         return [pytest.param(None, marks=pytest.mark.skip(reason="실제 .hwpx 파일 없음"))]
-    return [pytest.param(p, id=p.stem[:24]) for p in files]
+    # id 를 자르지 않는다. 앞부분이 같은 파일이 둘 있으면 pytest 가 0/1 을 붙이는데,
+    # 그러면 실패한 파일이 어느 것인지 이름으로 짚을 수 없다
+    return [pytest.param(p, id=p.stem) for p in files]
 
 
 # ---------------------------------------------------------------- 공통 검증
