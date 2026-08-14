@@ -1,0 +1,34 @@
+"""파이프라인 전역 예외. backend가 이 타입들을 HTTP 상태코드로 매핑한다."""
+
+from __future__ import annotations
+
+
+# 파이프라인에서 발생하는 모든 예외의 최상위. user_message는 그대로 사용자에게 노출된다
+class RagPipelineError(Exception):
+    def __init__(self, message: str, *, user_message: str | None = None) -> None:
+        super().__init__(message)
+        self.user_message = user_message or message
+
+
+# 파싱을 지원하지 않는 포맷 (HTTP 415)
+class UnsupportedFormatError(RagPipelineError):
+    def __init__(
+        self, message: str, *, user_message: str | None = None, detected: str = ""
+    ) -> None:
+        super().__init__(message, user_message=user_message)
+        self.detected = detected
+
+
+# 파일이 손상됐거나 구조가 예상과 달라 파싱에 실패 (HTTP 422)
+class CorruptedFileError(RagPipelineError):
+    pass
+
+
+# 업로드 크기 상한 초과 (HTTP 413)
+class FileTooLargeError(RagPipelineError):
+    pass
+
+
+# ZIP 폭탄 등 압축 해제 크기가 상한을 넘음 (HTTP 413)
+class DecompressionLimitError(RagPipelineError):
+    pass

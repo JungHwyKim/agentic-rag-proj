@@ -1,0 +1,276 @@
+"""2차 라우팅 테스트 — 어떤 핸들러가 선택되고, 실패하면 어디로 폴백하는가.
+
+외부 API는 전부 모킹한다. API 키 없이도 전 항목이 통과해야 한다.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from rag_pipeline.config import ContentRoutingConfig
+from rag_pipeline.ingestion.loader.content import image_vision, table_llamaparse
+from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
+from rag_pipeline.ingestion.loader.content.router import ContentRouter
+from rag_pipeline.schemas.document import ElementType
+
+
+# 외부 API 키가 있다고 가정한 설정. 실제 호출은 모킹으로 가로챈다
+def _online_config(**overrides) -> ContentRoutingConfig:
+    defaults = {
+        "openai_api_key": "test-key",
+        "llama_cloud_api_key": "test-key",
+        "cache_enabled": False,
+    }
+    defaults.update(overrides)
+    return ContentRoutingConfig(**defaults)
+
+
+# 표 리전을 만든다. rows 는 PyMuPDF가 뽑은 폴백용 데이터를 흉내낸다
+def _table_region(*, with_blob: bool) -> ContentRegion:
+    return ContentRegion(
+        content_type=ContentType.TABLE,
+        order=0,
+        source_format="pdf",
+        page=1,
+        rows=[["이름", "점수"], ["홍길동", "95"]],
+        blob=b"%PDF-fake" if with_blob else None,
+        blob_kind="pdf" if with_blob else None,
+    )
+
+
+# 네이티브 구조가 있고 blob이 없으면(docx 등) LlamaParse를 부르지 않는다
+def test_native_table_skips_llamaparse(mocker) -> None:
+    spy = mocker.patch.object(table_llamaparse, "_make_client")
+    config = _online_config()
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=False), ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+    assert ctx.llamaparse_calls == 0
+
+
+# PDF 표는 LlamaParse로 가고 결과 마크다운을 그대로 쓴다
+def test_pdf_table_uses_llamaparse(mocker) -> None:
+    fake_result = SimpleNamespace(markdown="| A | B |\n| --- | --- |\n| 1 | 2 |")
+    fake_client = SimpleNamespace(
+        parsing=SimpleNamespace(parse=mocker.Mock(return_value=fake_result))
+    )
+    mocker.patch.object(table_llamaparse, "_make_client", return_value=fake_client)
+
+    config = _online_config()
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    assert elements[0].metadata["table_source"] == "llamaparse"
+    assert "| 1 | 2 |" in elements[0].text
+    assert ctx.llamaparse_calls == 1
+
+
+# LlamaParse가 실패하면 PyMuPDF가 뽑은 rows 로 내려가야 한다.
+# 외부 API 장애가 적재 전체를 멈추면 안 된다
+def test_llamaparse_failure_falls_back_to_rows(mocker) -> None:
+    fake_client = SimpleNamespace(
+        parsing=SimpleNamespace(parse=mocker.Mock(side_effect=RuntimeError("boom")))
+    )
+    mocker.patch.object(table_llamaparse, "_make_client", return_value=fake_client)
+
+    config = _online_config()
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    assert elements[0].metadata["table_source"] == "native"
+    assert "| 홍길동 | 95 |" in elements[0].text
+    assert any("폴백" in w for w in ctx.warnings)
+
+
+# 키가 없으면 아예 호출하지 않고 바로 로컬 추출로 간다
+def test_missing_key_falls_back_silently() -> None:
+    config = _online_config(llama_cloud_api_key=None)
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    assert elements[0].metadata["table_source"] == "native"
+    assert any("LLAMA_CLOUD_API_KEY" in w for w in ctx.warnings)
+
+
+# 설정을 pymupdf로 두면 blob이 있어도 LlamaParse를 부르지 않는다
+def test_config_can_disable_llamaparse(mocker) -> None:
+    spy = mocker.patch.object(table_llamaparse, "_make_client")
+    config = _online_config(table_pdf_handler="pymupdf")
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+
+
+# 텍스트 리전은 그대로 통과한다
+def test_text_passthrough() -> None:
+    config = _online_config()
+    region = ContentRegion(
+        content_type=ContentType.TEXT,
+        order=3,
+        source_format="docx",
+        text="  본문입니다.  ",
+        metadata={"element_type": ElementType.TITLE},
+    )
+
+    elements = ContentRouter(config).route(region, LoadContext(config=config))
+
+    assert elements[0].text == "본문입니다."
+    assert elements[0].type is ElementType.TITLE
+    assert elements[0].order == 3
+
+
+# 빈 텍스트는 요소를 만들지 않는다
+def test_empty_text_dropped() -> None:
+    config = _online_config()
+    region = ContentRegion(content_type=ContentType.TEXT, order=0, source_format="docx", text="   ")
+
+    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+
+
+# 작은 이미지는 로고로 보고 건너뛴다. PDF에 널린 아이콘을 전부 Vision에 보내면 비용이 터진다
+def test_tiny_image_skipped(png_bytes) -> None:
+    config = _online_config(image_handler="hybrid")
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="pdf",
+        blob=png_bytes(40, 40),
+        blob_kind="png",
+    )
+
+    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+
+
+# Vision 응답을 검색 가능한 텍스트로 합쳐야 한다
+def test_vision_builds_searchable_text(mocker, png_bytes) -> None:
+    payload = (
+        '{"description": "분기별 매출 추이를 보여주는 막대그래프.", '
+        '"extracted_text": "1분기 2분기", '
+        '"data_table": [["분기","매출"],["1분기","100"]]}'
+    )
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=mocker.Mock(
+                    return_value=SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content=payload))]
+                    )
+                )
+            )
+        )
+    )
+    mocker.patch.object(image_vision, "_make_client", return_value=fake_client)
+
+    config = _online_config(image_handler="vision")
+    ctx = LoadContext(config=config)
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="pdf",
+        blob=png_bytes(400, 300),
+        blob_kind="png",
+    )
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    assert elements[0].type is ElementType.IMAGE_TEXT
+    assert "막대그래프" in elements[0].text
+    assert "| 1분기 | 100 |" in elements[0].text
+    assert elements[0].metadata["image_source"] == "vision"
+    assert ctx.vision_calls == 1
+
+
+# Vision이 실패하면 OCR로 내려가야 한다
+def test_vision_failure_falls_back_to_ocr(mocker, korean_image_file) -> None:
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=mocker.Mock(side_effect=RuntimeError("boom")))
+        )
+    )
+    mocker.patch.object(image_vision, "_make_client", return_value=fake_client)
+
+    config = _online_config(image_handler="vision")
+    ctx = LoadContext(config=config)
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="image",
+        blob=korean_image_file.read_bytes(),
+        blob_kind="png",
+    )
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    assert any("폴백" in w for w in ctx.warnings)
+    if elements:
+        assert elements[0].metadata["image_source"] == "ocr"
+
+
+# Vision 호출 상한에 도달하면 더 부르지 않는다
+def test_vision_call_cap(mocker, png_bytes) -> None:
+    spy = mocker.patch.object(image_vision, "_make_client")
+    config = _online_config(image_handler="vision", max_vision_calls_per_doc=0)
+    ctx = LoadContext(config=config)
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="pdf",
+        blob=png_bytes(400, 300),
+        blob_kind="png",
+    )
+
+    ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert any("상한" in w for w in ctx.warnings)
+
+
+# image_handler=skip 이면 이미지를 아예 처리하지 않는다
+def test_image_skip_mode(png_bytes) -> None:
+    config = _online_config(image_handler="skip")
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="pdf",
+        blob=png_bytes(400, 300),
+        blob_kind="png",
+    )
+
+    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+
+
+# 깨진 이미지 바이트가 들어와도 예외로 죽지 않아야 한다
+def test_corrupt_image_is_warned_not_raised() -> None:
+    config = _online_config()
+    ctx = LoadContext(config=config)
+    region = ContentRegion(
+        content_type=ContentType.IMAGE,
+        order=0,
+        source_format="pdf",
+        blob=b"not-an-image",
+        blob_kind="png",
+    )
+
+    assert ContentRouter(config).route(region, ctx) == []
+    assert any("이미지를 열 수 없어" in w for w in ctx.warnings)
+
+
+# 알 수 없는 콘텐츠 유형은 조용히 무시한다
+def test_unknown_content_type() -> None:
+    config = _online_config()
+    region = ContentRegion(
+        content_type="mystery",  # type: ignore[arg-type]
+        order=0,
+        source_format="pdf",
+    )
+
+    assert ContentRouter(config).route(region, LoadContext(config=config)) == []

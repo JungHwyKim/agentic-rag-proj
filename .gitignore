@@ -1,0 +1,28 @@
+# 가상환경
+.venv/
+venv/
+
+# 파이썬
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 환경변수 (실제 API 키)
+.env
+
+# 테스트/린트 캐시
+.pytest_cache/
+.ruff_cache/
+
+# 실제 한컴/PDF 회귀 테스트 파일. 샘플은 conftest.py 가 코드로 생성하는 방침이라
+# 바이너리는 커밋하지 않는다. test_hwpx_real.py 는 여기 파일이 없으면 조용히 skip한다
+tests/fixtures/
+
+# 런타임 데이터
+data/
+uploads/
+.cache/
+
+# 에디터
+.vscode/
+.idea/

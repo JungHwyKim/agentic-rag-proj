@@ -1,0 +1,36 @@
+# ---- 웹 프레임워크 ----
+fastapi
+uvicorn[standard]
+python-multipart          # multipart/form-data 파일 업로드에 필수
+pydantic>=2
+pydantic-settings
+
+# ---- 문서 로더 ----
+pymupdf                   # PDF 텍스트 추출 + 표 bbox 감지 + 페이지 렌더링
+python-docx               # .docx
+python-pptx               # .pptx
+openpyxl                  # .xlsx
+xlrd                      # .xls (구형 바이너리)
+lxml                      # .hwpx XML 파싱
+olefile                   # OLE 판별 -> .hwp/.doc/.ppt/.xls 감지해 정확한 안내 메시지
+pillow                    # 이미지 로드/전처리
+pytesseract               # Tesseract 바인딩
+charset-normalizer        # 한국어 txt/csv 인코딩 자동 감지 (cp949/euc-kr)
+
+# ---- 콘텐츠 유형별 핸들러 ----
+# LlamaParse: PDF/이미지의 표 파싱 (LLAMA_CLOUD_API_KEY 필요).
+# llama-parse / llama-cloud-services 는 둘 다 deprecated 이므로 통합 SDK 사용.
+llama-cloud>=1.0
+openai                    # Vision: gpt-4.1-mini (추후 임베딩도 동일 패키지)
+
+# ---- 테스트 ----
+pytest
+pytest-asyncio
+pytest-mock               # LlamaParse/OpenAI 호출 모킹
+httpx                     # FastAPI TestClient
+
+# ---- 개발 도구 ----
+ruff
+
+# ---- 추후 단계 - 지금은 설치하지 않음 ----
+# qdrant-client           # 로컬 파일 모드
