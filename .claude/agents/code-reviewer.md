@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: agentic-rag-proj 의 코드 변경을 리뷰한다. rag_pipeline/ 또는 backend/ 를 수정한 뒤 커밋·머지 전에 확인받고 싶을 때, "리뷰해줘 / 검토해줘 / 이거 괜찮아? / PR 봐줘" 같은 요청이 올 때 쓴다. 새 로더·새 콘텐츠 핸들러·새 예외를 추가한 직후 등록 누락과 폴백 규약 위반을 잡는 데 특히 유용하다. 읽기 전용이라 코드를 고치지는 않는다 — 지적과 수정안만 돌려준다.
+description: agentic-rag-proj 의 코드 변경을 리뷰한다. rag_pipeline/ 또는 backend/ 를 수정한 뒤 커밋·머지 전에 확인받고 싶을 때, "리뷰해줘 / 검토해줘 / 이거 괜찮아? / PR 봐줘" 같은 요청이 올 때 쓴다. 새 로더·새 핸들러·새 파이프라인 단계·새 예외를 추가한 직후 등록 누락과 폴백 규약 위반을 잡는 데 특히 유용하다. 읽기 전용이라 코드를 고치지는 않는다 — 지적과 수정안만 돌려준다.
 tools: Read, Grep, Glob, Bash, PowerShell, Skill
 model: opus
 ---
