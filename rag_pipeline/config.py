@@ -69,7 +69,21 @@ class ContentRoutingConfig(BaseSettings):
     cache_dir: Path = PROJECT_ROOT / ".cache" / "content"
 
 
-# 적재 파이프라인 전체 설정. 이후 cleaner/splitter/embedding 설정이 여기 추가된다
+# 로더가 뽑은 텍스트를 어디까지 정리할지 결정하는 설정
+class CleanerConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 제어문자(Cc)와 보이지 않는 서식문자(Cf)를 지운다. PDF 는 글머리 기호를 U+0001·U+0007
+    # 같은 제어 코드포인트로 떨어뜨려 본문 한가운데 박아 넣는다(실측: AI 가이드 PDF 243개).
+    # 표 마크다운의 행 구분자인 \n 과 탭은 남기므로 표가 깨지지 않는다
+    remove_control_chars: bool = True
+
+
+# 적재 파이프라인 전체 설정. 이후 splitter/embedding 설정이 여기 추가된다
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -87,6 +101,13 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_content"):
             object.__setattr__(self, "_content", ContentRoutingConfig())
         return self._content  # type: ignore[attr-defined]
+
+    # 정리 단계 설정. content 와 같은 lazy 형태라 테스트에서 _cleaner 로 덮어쓸 수 있다
+    @property
+    def cleaner(self) -> CleanerConfig:
+        if not hasattr(self, "_cleaner"):
+            object.__setattr__(self, "_cleaner", CleanerConfig())
+        return self._cleaner  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다
