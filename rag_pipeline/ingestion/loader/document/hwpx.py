@@ -16,10 +16,23 @@ ZIP 안의 BinData 엔트리를 가리키는 구조라, ID -> 엔트리 경로�
 hp:lineseg 의 vertpos(쪽 안에서의 세로 위치)로 남겨두는데, 이 값이 다음 쪽으로 넘어갈 때
 작아진다. 그래서 최상위 문단의 vertpos가 줄어드는 지점을 쪽 경계로 보고 번호를 매긴다.
 배치 정보가 없는 문서(직접 만든 XML 등)에서는 페이지를 None으로 둔다.
+
+vertpos만으로는 부족한 경우가 하나 있다. 표가 쪽을 넘기면 vertpos가 작아지는 사건은
+표 다음 문단에서 딱 한 번 일어나는데, 표가 두 쪽을 먹었어도 한 쪽으로만 세게 된다.
+그래서 이후 모든 쪽 번호가 밀린다(실측: 시행령 개정안 안내서 26쪽 문서를 24쪽으로
+셌고, 쪽을 넘기는 표 2개 뒤로 표·그림 위치가 전부 어긋났다). 표 높이를 직접 재서
+쪽 수에 반영하는 이유다 — _table_height 와 _PageTracker.consume_table 참고.
+
+한글은 제목·안내문을 그릴 때 표 모양을 빌린 상자를 쓴다 — 1칸짜리 제목 상자("Ⅰ. 개 요"),
+붙임 머리표("붙임1 | 제목"), 테두리를 그리려고 가운데 칸만 채운 3x3 인용 상자다.
+이걸 표로 두면 제목이 마크다운 표 문법 안에 갇혀 검색·임베딩이 나빠지므로 본문
+텍스트로 강등한다(_is_layout_box). 실측: 위 문서의 표 27개 중 17개가 이런 껍데기였고,
+남은 10개(실데이터 표 9개 + 그림 상자 1개)만 표로 남는다.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import zipfile
 from pathlib import Path
@@ -58,6 +71,93 @@ def _table_rows(table: etree._Element) -> list[list[str]]:
     return rows
 
 
+# 내용이 든 칸이 이 개수 이하면 표 모양을 빌린 제목·안내 상자로 본다
+_LAYOUT_BOX_MAX_FILLED = 2
+# 다만 3x3(테두리를 그리려고 가운데 칸만 쓰는 인용 상자)보다 큰 표는 제외한다.
+# 칸이 대부분 비었을 뿐인 서식·양식 표까지 텍스트로 뭉개면 구조가 사라지기 때문
+_LAYOUT_BOX_MAX_CELLS = 9
+
+
+# 속성을 정수로 읽는다. 값이 없거나 숫자가 아니면 기본값
+def _int_attr(element: etree._Element | None, name: str, default: int = 0) -> int:
+    if element is None:
+        return default
+    try:
+        return int(element.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# hp:pagePr 의 landscape 가 이 값이면 가로 쪽이다. 이름과 달리 NARROWLY 가 가로다
+# — 근거는 _usable_body_height 주석에 있다
+_LANDSCAPE = "NARROWLY"
+
+
+# 쪽 안에서 본문이 쓸 수 있는 세로 높이. 용지 치수에서 여백을 뺀다.
+# 머리말·꼬리말 영역도 본문이 못 쓰므로 함께 뺀다. 기하 정보가 없으면 None
+def _usable_body_height(section_root: etree._Element) -> int | None:
+    page = section_root.find(".//{*}pagePr")
+    if page is None:
+        return None
+    margin = page.find("{*}margin")
+    if margin is None:
+        return None
+
+    # 가로 쪽에서도 width/height 에는 물리 용지(세로) 치수가 그대로 들어 있고 방향은
+    # landscape 속성으로만 표시된다. 그래서 가로 섹션의 세로 여유는 width 에서 얻어야 한다.
+    # (실측: 시행령 개정안 안내서 가로쪽 판 — 가로 섹션과 세로 섹션 모두 width=59528
+    #  height=84188 으로 같고 landscape 만 NARROWLY/WIDELY 로 갈렸다. WIDELY 섹션의
+    #  최상위 문단 vertpos 가 69898 까지 올라가 71435(=height-여백)에 육박하는 것이
+    #  WIDELY=세로임을 확정한다 — 가로였다면 46775 를 넘을 수 없다)
+    # 이걸 안 가르면 가로 섹션의 본문 높이를 53% 과대평가해서, 쪽을 넘긴 표를 한 쪽에
+    # 들어간다고 판단하고 그 뒤 쪽 번호가 전부 밀린다
+    landscape = page.get("landscape") == _LANDSCAPE
+    extent = _int_attr(page, "width" if landscape else "height")
+    used = sum(_int_attr(margin, key) for key in ("top", "bottom", "header", "footer"))
+    usable = extent - used
+    return usable if usable > 0 else None
+
+
+# 표가 실제로 차지하는 세로 높이.
+# hp:tbl 의 sz height 를 그냥 믿으면 안 된다 — 쪽을 넘기는 표는 이 값이 '시작 쪽에
+# 남은 공간'으로 잘려서 저장돼 있다(실측: 43행 표가 선언 34206 / 실제 98326).
+# 그래서 셀 높이로 실제 높이를 따로 복원해 둘 중 큰 값을 쓴다.
+# 세로 병합된 셀은 cellSpan rowSpan 만큼의 행을 덮으므로 나눠서 한 행 몫만 센다
+def _table_height(table: etree._Element) -> int:
+    declared = _int_attr(table.find("{*}sz"), "height")
+
+    restored = 0
+    for tr in table.findall("{*}tr"):
+        per_row = []
+        for tc in tr.findall("{*}tc"):
+            cell_size = tc.find("{*}cellSz")
+            if cell_size is None:
+                continue
+            span = max(_int_attr(tc.find("{*}cellSpan"), "rowSpan", 1), 1)
+            per_row.append(_int_attr(cell_size, "height") // span)
+        if per_row:
+            # 같은 행의 셀 높이가 어긋나면 병합 때문이므로 가장 작은 값이 실제 행 높이다
+            restored += min(per_row)
+
+    return max(declared, restored)
+
+
+# 작고 내용 든 칸이 1~2개뿐이며 그림도 없는 표는 데이터가 아니라 제목·인용 상자다.
+# (실측: 시행령 개정안 안내서의 표 27개 중 실데이터 표는 내용 칸이 최소 9개였고
+#  상자는 최대 2개였다. 그 사이가 비어 있어 이 기준으로 깨끗하게 갈린다)
+# 그림이 든 상자는 캡션-그림 배치라서 표로 남겨야 둘의 관계가 유지된다
+def _is_layout_box(table: etree._Element, rows: list[list[str]]) -> bool:
+    if table.find(".//{*}pic") is not None:
+        return False
+
+    total = sum(len(row) for row in rows)
+    if not 0 < total <= _LAYOUT_BOX_MAX_CELLS:
+        return False
+
+    filled = sum(1 for row in rows for cell in row if cell.strip())
+    return 0 < filled <= _LAYOUT_BOX_MAX_FILLED
+
+
 # 문단의 첫 줄이 쪽 안에서 어느 높이에 놓였는지 읽는다. 배치 정보가 없으면 None.
 # 표 셀 안의 linesegarray 를 잡지 않도록 자식 요소만 본다
 def _first_vertpos(paragraph: etree._Element) -> int | None:
@@ -80,11 +180,14 @@ class _PageTracker:
         self.page = 0
         self._prev_vertpos = -1
         self._has_layout = False
+        # 본문에 쓸 수 있는 쪽 높이. 섹션마다 용지 설정이 다를 수 있어 섹션 시작에 갱신한다
+        self._usable_height: int | None = None
 
-    # 새 섹션은 새 쪽에서 시작한다
-    def start_section(self) -> None:
+    # 새 섹션은 새 쪽에서 시작한다. 쪽 기하도 이때 함께 받는다
+    def start_section(self, usable_height: int | None = None) -> None:
         self.page += 1
         self._prev_vertpos = -1
+        self._usable_height = usable_height
 
     # 최상위 문단 하나를 보고 쪽이 넘어갔는지 판단한다
     def advance(self, paragraph: etree._Element) -> None:
@@ -95,6 +198,31 @@ class _PageTracker:
         if vertpos < self._prev_vertpos:
             self.page += 1
         self._prev_vertpos = vertpos
+
+    # 표가 쪽을 넘겨 먹은 쪽 수를 반영하고, 넘긴 쪽 수를 돌려준다.
+    # vertpos 는 '쪽이 넘어갔다'는 사건만 알려줄 뿐 몇 쪽을 넘겼는지는 못 알려주기
+    # 때문에, 표 높이를 직접 재서 더해주지 않으면 이후 쪽 번호가 전부 밀린다.
+    # 표 안의 리전들이 시작 쪽 번호를 받은 뒤에 호출해야 한다
+    def consume_table(self, height: int) -> int:
+        if not self._has_layout or self._usable_height is None or height <= 0:
+            return 0
+
+        start = max(self._prev_vertpos, 0)
+        room = self._usable_height - start
+        if height <= room:
+            # 한 쪽에 들어가는 표는 vertpos 를 건드리지 않는다.
+            # 떠 있는 표(pos treatAsChar=0)는 뒤따르는 문단의 vertpos 에 자기 높이가
+            # 반영되지 않는 경우가 있어서, 끝 위치로 앞당기면 같은 쪽을 새 쪽으로
+            # 오인한다(실측: 학교기록물 지침의 22행 표)
+            return 0
+
+        overflow = height - room
+        extra = math.ceil(overflow / self._usable_height)
+        self.page += extra
+        # 쪽을 넘긴 표는 마지막 쪽에서 끝난 높이를 남긴다. 이걸 안 남기면 뒤따르는
+        # 문단의 작은 vertpos 를 또 하나의 쪽 경계로 세어 쪽이 두 번 올라간다
+        self._prev_vertpos = overflow - (extra - 1) * self._usable_height
+        return extra
 
     # 배치 정보가 전혀 없는 문서면 페이지를 주장하지 않는다
     def current(self) -> int | None:
@@ -139,7 +267,7 @@ class HwpxLoader(BaseDocumentLoader):
                 tracker = _PageTracker()
                 for name in sections:
                     root = etree.fromstring(zf.read(name))
-                    tracker.start_section()
+                    tracker.start_section(_usable_body_height(root))
                     # 최상위 문단에서만 쪽을 갱신한다. 표 셀·도형 안의 문단은
                     # 자체 좌표계를 쓰기 때문에 쪽 판단에 쓰면 안 된다
                     for child in root.iterchildren():
@@ -182,7 +310,29 @@ class HwpxLoader(BaseDocumentLoader):
 
         if name == "tbl":
             rows = _table_rows(element)
-            if any(any(cell for cell in row) for row in rows):
+            text = " ".join(cell for row in rows for cell in row if cell).strip()
+            # 이 표가 만들어낼 리전들의 시작 위치. 쪽 소비를 계산한 뒤 page_end 를 채운다
+            region_start = len(regions)
+
+            if _is_layout_box(element, rows):
+                # 표가 아니라 제목 상자다. 본문 문단으로 내려보내 마크다운 표에 갇히지 않게 한다
+                if text:
+                    regions.append(
+                        ContentRegion(
+                            content_type=ContentType.TEXT,
+                            order=counter[0],
+                            source_format=self.file_format.value,
+                            page=tracker.current(),
+                            text=text,
+                            metadata={
+                                "element_type": ElementType.PARAGRAPH,
+                                # 원래 표였다는 사실. cleaner 가 제목으로 승격할지 판단한다
+                                "layout_table": True,
+                            },
+                        )
+                    )
+                    counter[0] += 1
+            elif any(any(cell for cell in row) for row in rows):
                 regions.append(
                     ContentRegion(
                         content_type=ContentType.TABLE,
@@ -199,6 +349,17 @@ class HwpxLoader(BaseDocumentLoader):
             # 중첩 표 안의 그림까지 훑도록 iter 로 전부 찾는다
             for picture in element.iter("{*}pic"):
                 self._append_picture(picture, regions, counter, zf, binaries, ctx, tracker)
+
+            # 표 안의 리전들이 시작 쪽 번호를 받은 뒤에 쪽 소비를 반영한다
+            spanned = tracker.consume_table(_table_height(element))
+            if spanned:
+                # 여러 쪽에 걸친 표는 시작 쪽만으로 출처를 달면 뒷부분이 엉뚱한 쪽을 가리킨다.
+                # 표 안 그림도 마찬가지로 시작 쪽 번호를 받는다 — 그림이 몇 번째 행에 있는지
+                # 역산하지 않기 때문이다. 끝 쪽을 함께 남겨, 틀린 쪽을 단언하는 대신
+                # 인용할 때 범위를 쓸 수 있게 한다
+                for region in regions[region_start:]:
+                    if region.page is not None:
+                        region.metadata["page_end"] = region.page + spanned
             return
 
         if name == "pic":

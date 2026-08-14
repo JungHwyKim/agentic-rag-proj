@@ -296,6 +296,266 @@ def hwpx_with_image_in_table(tmp_path: Path) -> Path:
     return path
 
 
+# 쪽 기하와 배치 정보가 든 .hwpx. 쪽을 넘기는 표의 쪽 계산을 검증하기 위한 픽스처.
+# 용지 84188 - 여백(4251+2834+2834+2834) = 본문 71435 이 쓸 수 있는 높이다.
+# 표는 vertpos 40000 에서 시작하므로 남은 공간은 31435 인데 실제 높이가 100000 이라
+# 다음 쪽까지 넘어간다. hp:sz height 는 실제 한컴 파일처럼 남은 공간으로 잘린 값을 넣었다
+@pytest.fixture
+def hwpx_paged(tmp_path: Path) -> Path:
+    cell = (
+        '<hp:tc><hp:cellSz height="25000"/>'
+        "<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+    )
+    rows = "".join(
+        f"<hp:tr>{cell.format(text=f'행{i}열1')}{cell.format(text=f'행{i}열2')}</hp:tr>"
+        for i in range(1, 5)
+    )
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p>
+    <hp:run>
+      <hp:secPr>
+        <hp:pagePr width="59528" height="84188">
+          <hp:margin header="2834" footer="2834" left="5669" right="5669"
+                     top="4251" bottom="2834"/>
+        </hp:pagePr>
+      </hp:secPr>
+      <hp:t>표 앞 문단입니다.</hp:t>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run>
+      <hp:tbl rowCnt="4" colCnt="2"><hp:sz height="31435"/>{rows}</hp:tbl>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="40000"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run><hp:t>표 뒤 문단입니다.</hp:t></hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray>
+  </hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "paged.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
+# hwpx_paged 와 모든 수치가 같고 landscape="NARROWLY"(가로) 만 붙은 .hwpx.
+# 가로 쪽은 세로 여유를 width 에서 얻어야 한다 — 59528-12753 = 46775 이 참값이고,
+# height 를 쓰면 71435 로 53% 과대평가된다. 같은 표(높이 100000)가 세로에서는 2쪽,
+# 가로에서는 3쪽을 먹으므로 두 픽스처의 기대값이 갈린다
+@pytest.fixture
+def hwpx_paged_landscape(tmp_path: Path) -> Path:
+    cell = (
+        '<hp:tc><hp:cellSz height="25000"/>'
+        "<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+    )
+    rows = "".join(
+        f"<hp:tr>{cell.format(text=f'행{i}열1')}{cell.format(text=f'행{i}열2')}</hp:tr>"
+        for i in range(1, 5)
+    )
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p>
+    <hp:run>
+      <hp:secPr>
+        <hp:pagePr landscape="NARROWLY" width="59528" height="84188">
+          <hp:margin header="2834" footer="2834" left="5669" right="5669"
+                     top="4251" bottom="2834"/>
+        </hp:pagePr>
+      </hp:secPr>
+      <hp:t>표 앞 문단입니다.</hp:t>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run>
+      <hp:tbl rowCnt="4" colCnt="2"><hp:sz height="31435"/>{rows}</hp:tbl>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="40000"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run><hp:t>표 뒤 문단입니다.</hp:t></hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray>
+  </hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "paged_landscape.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
+# hwpx_paged 와 같은 기하인데 마지막 행(2쪽에 놓인다)의 칸에 그림이 든 .hwpx.
+# 표 안 그림은 시작 쪽 번호를 받으므로, 쪽을 넘긴 표에서는 page_end 로 범위를 남기는지 본다
+@pytest.fixture
+def hwpx_paged_with_image(tmp_path: Path) -> Path:
+    cell = (
+        '<hp:tc><hp:cellSz height="25000"/>'
+        "<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+    )
+    picture_cell = (
+        '<hp:tc><hp:cellSz height="25000"/><hp:subList><hp:p><hp:run>'
+        '<hp:pic><hc:img binaryItemIDRef="image1"/></hp:pic>'
+        "</hp:run></hp:p></hp:subList></hp:tc>"
+    )
+    rows = "".join(
+        f"<hp:tr>{cell.format(text=f'행{i}열1')}{cell.format(text=f'행{i}열2')}</hp:tr>"
+        for i in range(1, 4)
+    )
+    rows += f"<hp:tr>{cell.format(text='행4열1')}{picture_cell}</hp:tr>"
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hp:p>
+    <hp:run>
+      <hp:secPr>
+        <hp:pagePr width="59528" height="84188">
+          <hp:margin header="2834" footer="2834" left="5669" right="5669"
+                     top="4251" bottom="2834"/>
+        </hp:pagePr>
+      </hp:secPr>
+      <hp:t>표 앞 문단입니다.</hp:t>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run>
+      <hp:tbl rowCnt="4" colCnt="2"><hp:sz height="31435"/>{rows}</hp:tbl>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="40000"/></hp:linesegarray>
+  </hp:p>
+</hs:sec>"""
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(buffer, format="PNG")
+
+    path = tmp_path / "paged_image.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+        zf.writestr("BinData/image1.png", buffer.getvalue())
+    return path
+
+
+# 한 쪽에 들어가는 표 뒤에 vertpos 가 표 높이보다 작은 문단이 오는 .hwpx.
+# 떠 있는 표(pos treatAsChar=0)는 뒤 문단의 vertpos 에 자기 높이가 반영되지 않는데,
+# 이때 표 끝 위치로 쪽 경계를 판단하면 같은 쪽을 새 쪽으로 오인한다
+# (실측: 학교기록물 지침의 22행 표 — 표 16046~44126, 뒤 문단 17966 이 같은 쪽이었다)
+@pytest.fixture
+def hwpx_floating_table(tmp_path: Path) -> Path:
+    cell = (
+        '<hp:tc><hp:cellSz height="14040"/>'
+        "<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+    )
+    rows = "".join(
+        "<hp:tr>"
+        + "".join(cell.format(text=f"행{i}열{j}") for j in range(1, 4))
+        + "</hp:tr>"
+        for i in range(1, 3)
+    )
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p>
+    <hp:run>
+      <hp:secPr>
+        <hp:pagePr width="59528" height="84188">
+          <hp:margin header="2834" footer="2834" left="5669" right="5669"
+                     top="4251" bottom="2834"/>
+        </hp:pagePr>
+      </hp:secPr>
+      <hp:t>표 캡션입니다.</hp:t>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="14000"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run>
+      <hp:tbl rowCnt="2" colCnt="3">
+        <hp:sz height="28080"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" vertAlign="TOP"/>
+        {rows}
+      </hp:tbl>
+    </hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="16046"/></hp:linesegarray>
+  </hp:p>
+  <hp:p>
+    <hp:run><hp:t>표 바로 뒤 문단입니다.</hp:t></hp:run>
+    <hp:linesegarray><hp:lineseg vertpos="17966"/></hp:linesegarray>
+  </hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "floating.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
+# 한글이 제목을 그릴 때 쓰는 껍데기 표(1칸 상자, 붙임 머리표, 인용 상자)와
+# 진짜 데이터 표가 함께 든 .hwpx. 강등 규칙 검증용
+@pytest.fixture
+def hwpx_with_layout_boxes(tmp_path: Path) -> Path:
+    def cell(text: str) -> str:
+        return (
+            "<hp:tc><hp:subList><hp:p><hp:run>"
+            f"<hp:t>{text}</hp:t>"
+            "</hp:run></hp:p></hp:subList></hp:tc>"
+        )
+
+    # 3x3 인용 상자 — 테두리를 그리려고 가운데 칸만 채운다
+    quote = (
+        "<hp:tbl rowCnt=\"3\" colCnt=\"3\">"
+        # 꺾쇠는 실제 한컴 파일과 마찬가지로 XML 이스케이프된 형태로 들어있다
+        f"<hp:tr>{cell('')}{cell('&lt; 근거 법령 &gt;')}{cell('')}</hp:tr>"
+        f"<hp:tr>{cell('')}{cell('')}{cell('')}</hp:tr>"
+        "</hp:tbl>"
+    )
+    data = (
+        "<hp:tbl rowCnt=\"2\" colCnt=\"2\">"
+        f"<hp:tr>{cell('이름')}{cell('점수')}</hp:tr>"
+        f"<hp:tr>{cell('홍길동')}{cell('95')}</hp:tr>"
+        "</hp:tbl>"
+    )
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p><hp:run>
+    <hp:tbl rowCnt="1" colCnt="1"><hp:tr>{cell("Ⅰ. 개 요")}</hp:tr></hp:tbl>
+  </hp:run></hp:p>
+  <hp:p><hp:run>
+    <hp:tbl rowCnt="1" colCnt="2">
+      <hp:tr>{cell("붙임1")}{cell("관련 법률·시행령")}</hp:tr>
+    </hp:tbl>
+  </hp:run></hp:p>
+  <hp:p><hp:run>{quote}</hp:run></hp:p>
+  <hp:p><hp:run>{data}</hp:run></hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "layout_boxes.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
 # 어떤 포맷 시그니처와도 맞지 않는 바이너리. UNKNOWN 판정 검증용
 @pytest.fixture
 def unknown_binary_file(tmp_path: Path) -> Path:

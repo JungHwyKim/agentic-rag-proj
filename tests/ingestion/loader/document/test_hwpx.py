@@ -78,6 +78,132 @@ def test_page_is_none_without_layout_info(hwpx_file: Path, offline_config: Inges
     assert all(e.page is None for e in document.elements)
 
 
+# 쪽을 넘기는 표가 먹은 쪽 수까지 세어야 이후 쪽 번호가 밀리지 않는다.
+# vertpos 는 '쪽이 넘어갔다'는 사건만 알려줄 뿐 몇 쪽인지는 못 알려주기 때문에,
+# 표 높이를 안 재면 2쪽짜리 표를 1쪽으로 세고 뒤따르는 내용이 전부 한 쪽씩 당겨진다
+def test_table_spanning_pages_counts_both(hwpx_paged: Path, offline_config: IngestConfig) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_paged)
+    table = next(e for e in document.elements if e.type is ElementType.TABLE)
+    last = document.elements[-1]
+
+    assert table.page == 1
+    # 표는 1쪽에서 시작해 2쪽까지 이어지므로 뒤 문단은 3쪽이다
+    assert last.text == "표 뒤 문단입니다."
+    assert last.page == 3
+    assert document.metadata.page_count == 3
+
+
+# 여러 쪽에 걸친 표는 끝 쪽도 남겨야 인용할 때 뒷부분이 엉뚱한 쪽을 가리키지 않는다
+def test_spanning_table_records_page_end(hwpx_paged: Path, offline_config: IngestConfig) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_paged)
+    table = next(e for e in document.elements if e.type is ElementType.TABLE)
+
+    assert table.metadata["page_end"] == 2
+
+
+# 한 쪽에 들어가는 표는 쪽 경계를 만들면 안 된다.
+# 표 높이로 '표가 끝난 위치'를 계산해 다음 문단과 비교하면, 떠 있는 표에서
+# 같은 쪽을 새 쪽으로 오인한다. 쪽을 실제로 넘긴 표에서만 쪽을 더해야 한다
+def test_fitting_table_does_not_break_page(
+    hwpx_floating_table: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_floating_table)
+
+    assert document.metadata.page_count == 1
+    assert all(e.page == 1 for e in document.elements)
+
+
+# 한 쪽에 들어가는 표에는 page_end 를 달지 않는다 (없는 범위를 지어내지 않는다)
+def test_non_spanning_table_has_no_page_end(
+    hwpx_file: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_file)
+    table = next(e for e in document.elements if e.type is ElementType.TABLE)
+
+    assert "page_end" not in table.metadata
+
+
+# 한글이 제목·인용을 그리려고 쓴 껍데기 표는 본문 문단으로 내려보내야 한다.
+# 표로 두면 "Ⅰ. 개 요" 같은 제목이 마크다운 표 문법 안에 갇혀 검색·임베딩이 나빠진다
+def test_layout_boxes_demoted_to_paragraph(
+    hwpx_with_layout_boxes: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_with_layout_boxes)
+    types = [e.type for e in document.elements]
+
+    # 1칸 상자 / 붙임 머리표 / 인용 상자 3개는 문단, 진짜 데이터 표 1개만 표로 남는다
+    assert types == [
+        ElementType.PARAGRAPH,
+        ElementType.PARAGRAPH,
+        ElementType.PARAGRAPH,
+        ElementType.TABLE,
+    ]
+    assert document.elements[0].text == "Ⅰ. 개 요"
+    assert document.elements[1].text == "붙임1 관련 법률·시행령"
+    assert "|" not in document.elements[0].text
+
+
+# 강등된 문단은 원래 표였다는 표시를 남긴다. cleaner 가 제목으로 승격할지 판단할 근거다
+def test_demoted_box_marked_in_metadata(
+    hwpx_with_layout_boxes: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_with_layout_boxes)
+
+    assert document.elements[0].metadata["layout_table"] is True
+    assert "layout_table" not in document.elements[-1].metadata
+
+
+# 가로 쪽은 세로 여유를 width 에서 얻어야 한다.
+# 한컴은 가로 쪽에서도 width/height 에 물리 용지(세로) 치수를 그대로 넣고 방향은
+# landscape 속성으로만 표시한다. height 를 그냥 쓰면 본문 높이를 53% 과대평가해
+# 쪽을 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 전부 밀린다.
+# 같은 표(높이 100000)가 세로에서는 2쪽, 가로에서는 3쪽을 먹는다
+def test_landscape_section_uses_width_as_height(
+    hwpx_paged_landscape: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_paged_landscape)
+    table = next(e for e in document.elements if e.type is ElementType.TABLE)
+
+    assert table.page == 1
+    # 세로였다면 page_end 2 / page_count 3 이다
+    assert table.metadata["page_end"] == 3
+    assert document.metadata.page_count == 4
+
+
+# 쪽을 넘긴 표 안의 그림도 끝 쪽을 남겨야 한다.
+# 그림은 몇 번째 행에 있는지 역산하지 않아 시작 쪽 번호를 받는데, 범위가 없으면
+# 3쪽에 있는 그림을 1쪽이라고 단언하게 된다. 틀린 쪽 대신 범위를 남긴다.
+# load() 대신 detect_regions() 를 쓰는 이유: offline_config 는 image_handler="ocr" 라
+# load() 를 타면 Tesseract 설치 여부에 테스트가 묶인다
+def test_picture_in_spanning_table_gets_page_range(
+    hwpx_paged_with_image: Path, offline_config: IngestConfig
+) -> None:
+    loader = HwpxLoader(offline_config)
+    ctx = LoadContext(config=offline_config.content)
+    regions = loader.detect_regions(hwpx_paged_with_image, ctx)
+
+    picture = next(r for r in regions if r.content_type is ContentType.IMAGE)
+    table = next(r for r in regions if r.content_type is ContentType.TABLE)
+
+    # 그림은 실제로 2쪽 행에 있지만 시작 쪽을 받는다 — 대신 page_end 로 범위를 준다
+    assert picture.page == 1
+    assert picture.metadata["page_end"] == 2
+    assert table.metadata["page_end"] == 2
+
+
+# 그림이 든 상자는 캡션-그림 배치라서 강등하면 안 된다.
+# 강등해버리면 캡션 텍스트와 그림의 관계가 끊긴다
+def test_box_with_image_stays_a_table(
+    hwpx_with_image_in_table: Path, offline_config: IngestConfig
+) -> None:
+    loader = HwpxLoader(offline_config)
+    ctx = LoadContext(config=offline_config.content)
+    regions = loader.detect_regions(hwpx_with_image_in_table, ctx)
+
+    # 1행 2열 + 내용 칸 1개라 크기만 보면 강등 대상이지만 그림 때문에 표로 남는다
+    assert [r.content_type for r in regions if r.content_type is ContentType.TABLE]
+
+
 # 본문 섹션이 없는 zip 은 경고를 남기고 빈 결과를 돌려줘야 한다 (예외로 죽지 않는다)
 def test_missing_section_warns(tmp_path: Path, offline_config: IngestConfig) -> None:
     import zipfile

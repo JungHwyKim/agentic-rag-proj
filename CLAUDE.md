@@ -90,6 +90,9 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **LlamaParse SDK**: `llama-parse` 와 `llama-cloud-services` 는 둘 다 deprecated다. `llama-cloud>=1.0` 의 `Client.parsing.parse()` 를 쓴다
 - **OCR 한국어**: `ocr_psm=6` 을 쓴다(기본 3은 한글 한 줄을 세로로 오인식). `preserve_interword_spaces=1` 이 없으면 "주식회사"가 "주 식 회 사"로 쪼개져 임베딩·검색이 망가진다. 다만 `image_to_data` 는 이 옵션을 무시하므로 **신뢰도는 `image_to_data`, 최종 텍스트는 `image_to_string`** 으로 용도를 분리해 뒀다 — 합치지 말 것
 - **이미지 전처리**: 600px 미만일 때만 확대한다. 이미 큰 이미지를 늘리면 보간 흐림 때문에 인식률이 떨어진다(실측: 원본 7토큰 → 미세 업스케일 후 0토큰)
+- **HWPX 쪽 번호**: `hp:tbl` 의 `hp:sz height` 를 믿으면 안 된다. 쪽을 넘기는 표는 이 값이 **시작 쪽에 남은 공간으로 잘려서** 저장돼 있다(실측: 43행 표가 선언 34206 / 실제 98326). 실제 높이는 `hp:cellSz height` 를 `hp:cellSpan rowSpan` 으로 나눠 복원해야 나온다. vertpos만 보고 쪽을 세면 쪽 넘긴 표 뒤로 쪽 번호가 전부 밀린다
+- **HWPX 레이아웃 표**: 한글은 제목·인용을 그릴 때 표를 쓴다. 내용 든 칸이 2개 이하이고 9칸 이하인 표는 `_is_layout_box` 가 본문 문단으로 강등한다(`metadata["layout_table"]` 로 표시). 그림이 든 상자는 캡션-그림 관계가 끊기므로 표로 남긴다
+- **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다

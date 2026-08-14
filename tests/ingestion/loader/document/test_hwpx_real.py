@@ -26,6 +26,14 @@ FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 # 문서별 테스트에서 쓰는 파일명 조각
 AI_GUIDE = "신뢰가능_AI"
 SCHOOL_GUIDE = "학교기록물"
+DECREE_GUIDE = "시행령 개정안"
+# 같은 문서를 가로 쪽 섹션이 들어가게 고친 판. 쪽 기하 판정을 검증하는 데 쓴다
+DECREE_LANDSCAPE = "_가로쪽"
+
+# 시행령 개정안 안내서를 사람이 직접 열어 확인한 쪽 번호. 로더 결과를 여기에 맞춘다
+DECREE_TABLE_PAGES = [1, 4, 6, 7, 11, 13, 14, 15, 24, 25, 26]
+DECREE_IMAGE_PAGES = [10, 17, 18, 19, 20, 21, 22, 23]
+DECREE_PAGE_COUNT = 26
 
 
 # 확장자에 맞는 실제 파일 목록. 없으면 빈 리스트
@@ -164,6 +172,89 @@ def test_school_guide_assigns_page_numbers(structure_only_config: IngestConfig) 
     assert document.metadata.page_count > 30
     assert pages == sorted(pages), "쪽 번호가 문서 순서대로 증가해야 한다"
     assert min(pages) == 1
+
+
+# 표·그림이 실제로 놓인 쪽과 로더가 매긴 쪽이 맞아야 한다.
+# 사람이 문서를 열어 확인한 목록이 기준이다. 쪽을 넘기는 표(43행·67행) 2개를
+# 한 쪽으로 세던 시절에는 그 뒤로 전부 밀려서 이 목록과 어긋났다
+def test_decree_guide_page_numbers_match_manual_check(
+    structure_only_config: IngestConfig,
+) -> None:
+    path = _find(DECREE_GUIDE)
+    loader = HwpxLoader(structure_only_config)
+    regions = loader.detect_regions(path, LoadContext(config=structure_only_config.content))
+
+    table_pages: set[int] = set()
+    for region in regions:
+        if region.content_type is ContentType.TABLE and region.page is not None:
+            # 여러 쪽에 걸친 표는 걸친 쪽을 모두 차지한 것으로 본다
+            end = region.metadata.get("page_end", region.page)
+            table_pages.update(range(region.page, end + 1))
+
+    image_pages = {r.page for r in regions if r.content_type is ContentType.IMAGE}
+
+    assert loader.extract_metadata(path)["page_count"] == DECREE_PAGE_COUNT
+    assert sorted(table_pages) == DECREE_TABLE_PAGES
+    assert sorted(image_pages) == DECREE_IMAGE_PAGES
+
+
+# 제목·인용을 그린 껍데기 표는 표로 남으면 안 된다.
+# 이 문서는 표 27개 중 17개가 껍데기였고, 그대로 두면 "Ⅰ. 개 요" 같은 제목이
+# 마크다운 표 문법 안에 갇혀 검색·임베딩 품질이 떨어진다
+def test_decree_guide_layout_boxes_demoted(structure_only_config: IngestConfig) -> None:
+    loader = HwpxLoader(structure_only_config)
+    regions = loader.detect_regions(
+        _find(DECREE_GUIDE), LoadContext(config=structure_only_config.content)
+    )
+    tables = [r for r in regions if r.content_type is ContentType.TABLE]
+    demoted = [r for r in regions if r.metadata.get("layout_table")]
+
+    assert len(tables) == 9
+    assert len(demoted) == 17
+    # 남은 표는 전부 실제 데이터 표라 내용이 든 칸이 넉넉하다
+    assert all(sum(1 for row in (r.rows or []) for c in row if c.strip()) >= 9 for r in tables)
+    # 제목이 표 문법에 갇히지 않고 본문으로 나온다
+    assert any(r.text == "Ⅰ. 개 요" for r in demoted)
+
+
+# 쪽을 넘긴 표는 끝 쪽을 함께 남겨야 뒷부분을 인용할 때 쪽이 맞는다
+def test_decree_guide_records_spanning_tables(structure_only_config: IngestConfig) -> None:
+    loader = HwpxLoader(structure_only_config)
+    regions = loader.detect_regions(
+        _find(DECREE_GUIDE), LoadContext(config=structure_only_config.content)
+    )
+    spans = [
+        (r.page, r.metadata["page_end"]) for r in regions if r.metadata.get("page_end") is not None
+    ]
+
+    assert spans == [(13, 14), (24, 25)]
+
+
+# 가로 섹션은 세로 여유를 height 가 아니라 width 에서 얻어야 한다.
+# 한컴은 가로 쪽에서도 width/height 에 물리 용지(세로) 치수를 그대로 넣고 방향은
+# landscape 속성으로만 표시하기 때문이다. 이 문서는 가로 섹션의 표가 작아서 쪽이
+# 실제로 밀리지는 않지만, NARROWLY/WIDELY 의 의미가 뒤집히면 여기서 잡힌다
+def test_decree_landscape_section_uses_width(structure_only_config: IngestConfig) -> None:
+    import zipfile
+
+    from lxml import etree
+
+    from rag_pipeline.ingestion.loader.document.hwpx import _usable_body_height
+
+    with zipfile.ZipFile(_find(DECREE_LANDSCAPE)) as zf:
+        sections = {
+            name: etree.fromstring(zf.read(name))
+            for name in zf.namelist()
+            if name.startswith("Contents/section")
+        }
+
+    geometry = {
+        root.find(".//{*}pagePr").get("landscape"): _usable_body_height(root)
+        for root in sections.values()
+    }
+
+    # 세로(WIDELY)는 84188-12753, 가로(NARROWLY)는 59528-12753 이어야 한다
+    assert geometry == {"WIDELY": 71435, "NARROWLY": 46775}
 
 
 # ---------------------------------------------------------------- .hwp 거부
