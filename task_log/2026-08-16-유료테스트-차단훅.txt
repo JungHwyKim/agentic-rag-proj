@@ -1,0 +1,164 @@
+integration 마커 테스트 실행을 PreToolUse 훅으로 차단
+작업일: 2026-08-16
+검증 방법: ruff / pytest 기본 실행 / tests/hooks 46개 (판정 24 · 배선 · _hookutil 회귀).
+          외부 API 호출 없음 (이 훅의 목적 자체가 그 호출을 막는 것이다)
+
+
+1. 무엇을 바꿨나
+
+   .claude/hooks/paid_test_check.py  (신규)
+     PreToolUse 에서 Bash/PowerShell 명령을 보고 유료 테스트 실행이면 deny.
+
+   .claude/settings.json
+     PreToolUse matcher 를 "Bash" -> "Bash|PowerShell" 로 넓히고 새 훅을
+     pre_commit_check 앞에 배선. permissions.allow 신설(4개).
+
+   tests/hooks/  (신규)
+     conftest.py            .claude/hooks 를 sys.path 에 얹고 임시 git 저장소 픽스처
+     test_hookutil.py       -uall / -z / 세션 마커 회귀
+     test_paid_test_check.py 판정 24케이스 + 훅 프로세스 종단 5건
+     test_hook_wiring.py    settings.json 배선이 실재하는 파일을 가리키는지
+
+
+2. 설계 결정
+
+   과금 차단을 permissions 가 아니라 훅으로 했다.
+   permissions 의 deny 패턴으로도 막을 수 있지만 표현력이 글로브 수준이라
+   `-m "not slow and integration"` 이나 `-o addopts=` 같은 변형을 못 판다.
+   특히 아래 '부정 판별'은 패턴만으로는 불가능하다. permissions 쪽은 2차
+   방어선으로만 쓰기로 하고 주 방어를 훅에 뒀다.
+
+   matcher 를 Bash 에서 Bash|PowerShell 로 넓혔다.
+   기존 pre_commit_check 는 Bash 에만 걸려 있었다. 이 저장소는 명령 예시가 전부
+   PowerShell 이라(CLAUDE.md 의 실행 명령들) PowerShell 도구로 커밋하면 커밋 전
+   검사가 통째로 안 돌던 상태였다. 새 훅만 넓히면 같은 구멍이 남으므로 둘 다 넓혔다.
+
+   `-m "not integration"` 을 통과시키려고 부정을 먼저 지운다.
+   단순히 "expr 에 integration 이 있으면 차단"으로 짜면 pyproject 의 기본값
+   (addopts = "-m 'not integration'") 과 똑같은 안전한 호출까지 막힌다. 제일 흔한
+   호출이 막히는 훅은 곧바로 무시당하고 탈출구가 상시 켜진다. 그래서
+   `not integration` / `not (integration)` 을 먼저 지운 뒤 남는지를 본다.
+     "not integration"              -> 통과
+     "integration"                  -> 차단
+     "not slow and integration"     -> 차단
+     "not slow and not integration" -> 통과
+
+   마커를 세그먼트 전체가 아니라 '첫 토큰이 pytest 실행기인 세그먼트'에서만 본다.
+   `git commit -m "integration 테스트 추가"` 에도 -m 과 integration 이 둘 다 있다.
+   커밋 메시지 때문에 커밋이 막히는 건 오탐 중에서도 최악이라, 명령을 &&/||/;/|/개행
+   으로 자르고 각 세그먼트의 첫 토큰만 본다. 실행기 판정은 세 갈래다.
+     pytest / py.test(.exe)  -> 그 자체
+     python(.exe)            -> 세그먼트에 `-m pytest` 가 있어야 함
+     uv/uvx/poetry/hatch/... -> 세그먼트에 pytest 라는 말이 있어야 함
+   `python -m pytest -m integration` 에서 앞쪽 -m 값이 "pytest" 인 것은 마커 후보에서
+   뺀다.
+
+   addopts 덮어쓰기도 같이 막는다.
+   `-o addopts=` / `--override-ini addopts=` 는 -m 을 안 쓰고도 기본 제외를 날려서
+   integration 을 돌린다. 덮어쓴 값이 스스로 `not integration` 을 포함하면 통과시킨다.
+
+   --collect-only 는 막지 않는다. 수집만 하고 테스트 본문이 안 돌아 과금이 없다.
+
+
+3. 지표
+
+   검증
+     ruff    : All checks passed!
+     pytest  : 210 passed in 18.04s  (작업 전 164 -> 후 210, tests/hooks 46개 추가)
+     E2E     : 훅을 subprocess 로 실제 실행 5건 — deny 형식 / 빈 출력 통과 /
+               ALLOW_PAID_TESTS=1 / BOM 입력 / JSON 아닌 입력. 전부 의도대로.
+     판정표  : 24개 케이스 (차단 12 · 통과 12)
+
+   테스트가 실제로 판별하는지 확인 (임시 저장소에서 직접 잼)
+     git status --porcelain -z          -> "?? rag_pipeline/"  (접힘 = 검사 무력화)
+     git status --porcelain -uall -z    -> "?? rag_pipeline/ingestion/splitter/splitter.py"
+     git status --porcelain -uall       -> "task_log/\354\213\234..."  (8진 이스케이프)
+     두 실패 모드가 실재하고, 테스트가 정확히 이 차이를 검사한다
+
+   파싱 실측  해당 없음 — 파싱 동작을 바꾸지 않았다
+   검색 품질  해당 없음 — retriever 미구현
+
+
+4. 실패 분석
+
+   처음 종단 검증에서 '차단되어야 할 입력'이 아무 출력 없이 통과했다.
+   원인은 훅이 아니라 검증 방법이었다. PowerShell 5.1 의 `Out-File -Encoding utf8`
+   은 BOM 을 붙이고, BOM 이 붙은 바이트열은 json.load 가 실패한다. 그러면 훅이
+   "판단 근거가 없으면 막지 않는다" 규약대로 조용히 통과한다.
+
+   테스트 쪽 실수였지만 그대로 두지 않았다. 이건 이 저장소가 제일 경계하는 실패
+   모드 — 훅이 죽지도 않고 경고도 없이 **무력화**되는 형태 — 와 정확히 같은 모양이기
+   때문이다(_hookutil.py 의 -uall / -z 교훈과 같은 부류). stdin 인코딩을 utf-8 에서
+   utf-8-sig 로 바꿨다. BOM 이 없는 입력에는 동작이 완전히 같고, 있으면 벗겨낸다.
+
+   같은 취약점이 pre_commit_check.py / _hookutil.py 에도 있다(둘 다 utf-8 고정).
+   실제 훅 입력에는 BOM 이 없으므로 지금 문제가 되진 않지만, 7절에 남긴다.
+
+   판정 케이스를 전부 리터럴 경로로만 짜서 PowerShell 형태를 통째로 놓쳤다.
+   테스트를 쓰다가 드러났다. 두 군데가 샜다.
+     `& $py -m pytest -m integration`
+       첫 토큰이 PowerShell 호출 연산자 `&` 라 실행기 판정에서 바로 탈락했다.
+     `$py` 로 인터프리터를 변수에 담는 형태
+       경로가 정적으로 안 보여 python 으로도 pytest 로도 안 잡혔다.
+   하필 이 저장소의 명령 예시(CLAUDE.md)와 내가 검증할 때 쓴 형태가 정확히 이것이라,
+   제일 흔한 호출이 통째로 새고 있었다. `&` 를 걷어내고, 첫 토큰이 변수면 세그먼트에
+   pytest 라는 말이 있는지로 판정하도록 고쳤다. 둘 다 BLOCKED 케이스로 박았다.
+
+   교훈은 검증 데이터가 한쪽으로 쏠려 있었다는 것이다. 20개를 통과시켰지만 그 20개가
+   전부 같은 형태였다.
+
+
+5. 회귀 테스트
+
+   tests/hooks/ 46개. 4절의 각 항목이 어디서 막혔는지.
+
+     BOM 무음 통과      test_paid_test_check.py::test_bom_prefixed_input_is_still_judged
+     PowerShell `&`     BLOCKED 케이스 "& $py -m pytest -m integration"
+     변수 인터프리터    BLOCKED 케이스 '& "C:\...\python.exe" -m pytest -m integration'
+     부정 오탐          ALLOWED 케이스 "pytest -m 'not integration'" 외 2건
+     git commit 오탐    ALLOWED 케이스 'git commit -m "integration 테스트 추가"' 외 1건
+     -uall 접힘         test_hookutil.py::test_new_directory_is_listed_file_by_file
+     -z 이스케이프      test_hookutil.py::test_korean_path_is_not_escaped
+     무한 루프          test_hookutil.py::test_claim_session_succeeds_only_once
+     배선 끊김          test_hook_wiring.py::test_wired_scripts_exist
+     배선 누락          test_hook_wiring.py::test_every_hook_script_is_wired
+     matcher 우회       test_hook_wiring.py::test_pretooluse_covers_both_shells
+     훅 문법 오류       test_hook_wiring.py::test_hook_module_imports
+
+   test_hookutil 은 subprocess 를 모킹하지 않고 임시 git 저장소를 실제로 만든다.
+   모킹하면 -uall/-z 누락이 그대로 통과한다 — 그게 이 버그를 처음 놓친 이유였다.
+
+   test_hook_module_imports 는 pre_commit_check.py 의 compileall 대상에
+   .claude/hooks 가 빠져 있는 구멍을 대신 메운다.
+
+
+6. 재현
+
+   .\.venv\Scripts\python.exe -m ruff check .
+   .\.venv\Scripts\python.exe -m pytest -q
+   .\.venv\Scripts\python.exe -m pytest tests/hooks -q
+
+   차단 확인 (deny JSON 이 나와야 한다)
+   '{"tool_input":{"command":"pytest -m integration"}}' | .\.venv\Scripts\python.exe .claude\hooks\paid_test_check.py
+
+   통과 확인 (출력이 없어야 한다)
+   '{"tool_input":{"command":"pytest -q"}}' | .\.venv\Scripts\python.exe .claude\hooks\paid_test_check.py
+
+
+7. 남은 것
+
+   - permissions.allow 는 4개만 넣었다. 트랜스크립트 상위는 대부분
+     (a) 이미 자동 허용(grep/head/git status/git diff/ls) 이거나
+     (b) 인터프리터 실행이라 와일드카드로 열면 임의 코드 실행이 된다.
+     그래서 pytest/ruff 두 도구로 좁힌 형태만 넣었다. 쓰다 보면 더 나올 것이다
+   - permissions.deny 에 integration 을 넣는 안은 **하지 않기로 했다.**
+     패턴 표현력이 훅보다 약해서 부정(`not integration`)을 못 가른다.
+     같은 것을 두 곳에서 다르게 판정하면 어느 쪽이 도는지 알기 어려워진다.
+     주 방어는 paid_test_check.py 하나로 둔다
+   - pre_commit_check.py / _hookutil.py 의 stdin 도 utf-8-sig 로 맞출지 결정.
+     4절 참조 — 지금 당장의 버그는 아니다
+   - pre_commit_check.py 의 compileall 대상에 .claude/hooks 를 넣을지.
+     지금은 test_hook_module_imports 가 대신 막고 있어 급하지 않다
+   - SessionStart 훅으로 plan_log/task_log 의 미결 항목을 세션 시작에 주입하는 안.
+     "지난 회차 결정을 뒤집는" 실패를 막는다. 아직 안 함
+   - 설정 변경이므로 새 세션부터 적용된다. 이번 세션에서는 훅이 안 걸릴 수 있다
