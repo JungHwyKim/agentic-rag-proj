@@ -31,7 +31,8 @@ description: agentic-rag-proj(한국어 문서 RAG 적재 파이프라인)의 �
 | (항상) | `references/contracts.md` |
 | `rag_pipeline/ingestion/loader/**` | `references/loader.md` |
 | `backend/**`, `rag_pipeline/exceptions.py` | `references/backend.md` |
-| `rag_pipeline/ingestion/{cleaner,splitter,embedding,indexing,retriever}/**` | `references/next-stages.md` |
+| `rag_pipeline/ingestion/cleaner/**` | `references/cleaner.md` |
+| `rag_pipeline/ingestion/{splitter,embedding,indexing,retriever}/**` | `references/next-stages.md` |
 | `rag_pipeline/schemas/document.py` | `references/contracts.md` (전 단계 공통 계약의 원본) |
 | `rag_pipeline/ingestion/pipeline.py` | `contracts.md` + 추가·변경된 단계의 reference |
 | `rag_pipeline/config.py` | `contracts.md` + 그 설정을 쓰는 영역의 reference |

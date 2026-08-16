@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-한국어 문서(PDF/DOCX/PPTX/XLSX/HWPX/이미지)를 파싱해 통일 스키마로 만드는 RAG 적재 파이프라인. 현재 1단계(loader)까지 구현됐다.
+한국어 문서(PDF/DOCX/PPTX/XLSX/HWPX/이미지/텍스트·CSV·마크다운)를 파싱해 통일 스키마로 만드는 RAG 적재 파이프라인.
 
 ## 명령어
 
@@ -27,9 +27,13 @@ uv pip install -r requirements.txt
 
 기본 테스트는 **API 키 없이 전부 통과**해야 한다. `pyproject.toml` 의 `addopts = "-m 'not integration'"` 이 외부 호출 테스트를 기본 실행에서 뺀다. `-m integration` 으로 돌리면 **LlamaParse/OpenAI에 실제 과금이 발생**하므로 사용자 허락 없이 실행하지 않는다.
 
-## 아키텍처 — 2단계 라우팅
+## 아키텍처
 
-진입점은 `rag_pipeline/ingestion/pipeline.py:ingest()` 하나이며, HTTP를 전혀 모른다. 스크립트나 노트북에서도 그대로 쓸 수 있다.
+진입점은 `rag_pipeline/ingestion/pipeline.py:ingest()` 하나이며, HTTP를 전혀 모른다. 스크립트나 노트북에서도 그대로 쓸 수 있다. `ingest()` 가 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다.
+
+### 로더의 2단계 라우팅
+
+로더 **안에서** 라우팅이 두 번 일어난다(파이프라인 단계 수와는 무관한 이야기다).
 
 ```
 detect_format()            매직바이트로 실제 포맷 판별 (확장자 불신)
@@ -63,6 +67,16 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `max_vision_calls_per_doc` 상한과 `ResultCache`(내용 해시 키)로 재업로드 시 재과금을 막는다
 - hybrid 이미지 판정(`loader/content/classify.py`)이 무료·로컬인 Tesseract를 먼저 돌리는 이유는 유료 Vision 호출을 아끼기 위해서다. 200페이지 스캔본을 전부 Vision에 보내면 감당이 안 된다
 
+### 정리 단계(cleaner)
+
+로더가 뽑은 텍스트를 검색에 쓸 수 있게 다듬는다. 진입점은 `cleaner/__init__.py:clean()` 하나다.
+
+- **`ParsedDocument` → `ParsedDocument` 를 지킨다.** 여기서 다른 타입을 내놓으면 `ingest()` 의 순차 합성이 깨지고 단계를 떼었다 붙였다 할 수 없게 된다
+- 지우는 기준은 코드포인트 목록이 아니라 **유니코드 범주**다 — Cc(제어)와 Cf(서식). `\n` 과 `\t` 는 남기고, `\r` 은 지우지 않고 `\n` 으로 바꾼다(그냥 지우면 앞뒤 줄이 서로 붙는다)
+- 표는 `text` 와 `metadata["rows"]` 를 **함께** 고친다. 한쪽만 고치면 같은 표의 두 표현이 어긋난다
+- **안 바뀌었으면 원본 객체를 그대로 돌려주는 게 규약이다** (`strip_control_chars` → `_clean_element` → `clean` 세 층 모두). 상위가 `is` 비교로 변경 여부를 판단하기 때문이다. 무조건 새 객체를 만들도록 고치면 깨끗한 문서에서도 요소가 통째로 복사되고 `cleaned_elements` 카운트가 조용히 부풀어 오른다
+- 요소를 **지우지 않고** 요소 안의 글자만 고치므로 `order` 에 새 빈틈이 생기지 않는다. 나중에 요소를 지우는 규칙(반복 머리말 제거 등)을 넣더라도 원본 `order` 를 유지한다 — `order` 의 계약상 용도는 정렬 하나뿐이라 연속성이 필요 없고, `elements` 에는 이미 빈틈이 있다(핸들러가 요소를 0개 만든 자리)
+
 ### backend ↔ rag_pipeline 분리
 
 - `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
@@ -81,9 +95,9 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
 - `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값
-- `IngestConfig.content` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 로 덮어쓴다
+- `IngestConfig.content` 와 `IngestConfig.cleaner` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` / `object.__setattr__(config, "_cleaner", CleanerConfig(...))` 로 덮어쓴다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
-- 실제 한컴 파일 회귀 테스트(`tests/ingestion/loader/document/test_hwpx_real.py`)는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다
+- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 둘이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측)와 `cleaner/test_real.py`(PDF 제어문자 실측). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 
 ## 알고 있어야 할 함정
 
@@ -93,6 +107,9 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **HWPX 쪽 번호**: `hp:tbl` 의 `hp:sz height` 를 믿으면 안 된다. 쪽을 넘기는 표는 이 값이 **시작 쪽에 남은 공간으로 잘려서** 저장돼 있다(실측: 43행 표가 선언 34206 / 실제 98326). 실제 높이는 `hp:cellSz height` 를 `hp:cellSpan rowSpan` 으로 나눠 복원해야 나온다. vertpos만 보고 쪽을 세면 쪽 넘긴 표 뒤로 쪽 번호가 전부 밀린다
 - **HWPX 레이아웃 표**: 한글은 제목·인용을 그릴 때 표를 쓴다. 내용 든 칸이 2개 이하이고 9칸 이하인 표는 `_is_layout_box` 가 본문 문단으로 강등한다(`metadata["layout_table"]` 로 표시). 그림이 든 상자는 캡션-그림 관계가 끊기므로 표로 남긴다
 - **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
+- **PDF 제어문자**: PDF는 글머리 기호를 제어 코드포인트로 떨어뜨린다(실측: 신뢰가능 AI 가이드 PDF에서 U+0001 192개 / U+0007 47개 / U+0008 4개, `작성 \x07김동현 수석` 처럼 본문 한가운데에 박혀 있다). 같은 문서의 HWPX 판은 0개다 — 정리 단계가 실제로 필요한 쪽은 PDF 경로다
+- **`\n` 은 지우면 안 된다**: 실측 560개가 전부 표 요소에 있는 마크다운 표의 행 구분자다. 같이 지우면 `| 구 분 | 추진내용 || --- |` 처럼 한 줄로 뭉개져 표가 통째로 깨진다
+- **Cf 제거의 감수 사항**: ZWJ(U+200D)도 Cf라서 이모지 결합(가족 이모지 등)이 쪼개진다. 한국 공문서 코퍼스에는 사실상 안 나와 예외로 두지 않았다. 살려야 하는 코퍼스가 생기면 `cleaner/characters.py` 의 `_KEEP` 에 추가한다
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
@@ -104,6 +121,40 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 3. `loader/document/` 에 `BaseDocumentLoader` 상속 클래스를 만들고 `detect_regions()` 만 구현
 4. `loader/registry.py` 의 `_FACTORIES` 와 `SUPPORTED_EXTENSIONS` 에 등록
 
-## 현재 상태
+## 새 파이프라인 단계 추가
 
-1단계(loader) 완료. 다음은 `cleaner/` 이고, 삽입 지점이 `pipeline.py:ingest()` 안에 주석으로 표시돼 있다(`clean → split → embed → index`). `frontend/` 는 비어 있고 qdrant는 아직 설치하지 않았다.
+cleaner가 실제로 밟은 경로다.
+
+1. `rag_pipeline/ingestion/<stage>/` 에 모듈을 만든다. 공개 진입 함수는 하나이고 HTTP를 모른다
+2. `config.py` 에 `<Stage>Config` 를 만들고 `IngestConfig` 에 lazy 프로퍼티로 붙인다
+3. `.env.example` 에 밖으로 열 설정을 추가한다
+4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다
+5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다
+
+## 기록
+
+성공한 코드는 저장소에 남지만 **기각된 대안·되돌린 시도·아직 못 정한 것은 안 남는다.** 기록의 값어치는 대부분 거기서 나온다. 시점에 따라 둘로 나뉜다.
+
+| | 언제 | 어디에 | 스킬 |
+|---|---|---|---|
+| 설계 논의 | 만들기 **전** — 무엇을 만들지 정하는 동안 | `plan_log/<기능>.md` (기능당 한 파일, 회차 누적) | `plan-log` |
+| 작업 회고 | 만든 **뒤** — 무엇을 만들었고 어떻게 검증했나 | `task_log/YYYY-MM-DD-<주제>.txt` | `task-log` |
+
+둘 다 기록 없이 세션을 끝내려 하면 Stop 훅이 세션당 한 번 막는다(`.claude/hooks/{plan,task}_log_check.py`, 공용부는 `_hookutil.py`). 건너뛰려면 `SKIP_PLANLOG=1` / `SKIP_TASKLOG=1`. 색인은 각 폴더의 `INDEX.md`.
+
+## 이 문서에 쓰지 않는 것
+
+이 문서의 값어치는 **코드를 읽어도 알 수 없는 것**에서 나온다 — 실측값, 함정, 왜 그 값인지, 무엇을 버렸는지. 코드가 이미 말할 수 있는 것을 여기 옮겨 적으면 다음 커밋에 곧바로 거짓이 된다. 그래서 아래 셋은 쓰지 않는다.
+
+- **진행 단계 스냅샷** ("현재 N단계까지 구현됐다", "다음은 X") — 아래 "어디까지 왔나"처럼 출처를 가리킨다
+- **줄번호** (`pipeline.py:31-35`) — 한 줄만 밀려도 조용히 거짓이 되고 아무도 안 알려준다. 파일과 심볼 이름으로 가리킨다
+- **코드에서 바로 읽히는 것** (설정 항목 나열, 함수 시그니처) — 대신 *왜 그 값인지*를 쓴다
+
+## 어디까지 왔나
+
+여기에 현재 상태를 적지 않는다. 적는 순간 낡기 때문이다. 각각의 출처는 이렇다.
+
+- **구현된 단계** — `rag_pipeline/ingestion/` 아래 디렉터리가 전부다
+- **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
+- **어떻게 여기까지 왔나** — `task_log/INDEX.md`
+- **아직 논의 중인 설계** — `plan_log/INDEX.md`

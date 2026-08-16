@@ -1,15 +1,10 @@
 # 아직 구현되지 않은 단계 — 최소 계약
 
-`cleaner` / `splitter` / `embedding` / `indexing` / `retriever` 를 건드린 변경에 적용한다.
+`splitter` / `embedding` / `indexing` / `retriever` 를 건드린 변경에 적용한다.
+**구현된 cleaner 는 `references/cleaner.md` 로 갔다.**
 
-**이 단계들은 아직 코드가 없다.** 삽입 지점만 `pipeline.py:31-35` 에 주석으로 예약돼 있다.
-
-```python
-#   document = clean(document, config.cleaner)
-#   chunks   = split(document, config.splitter)
-#   vectors  = embed(chunks, config.embedding)
-#   index(vectors, config.indexing)
-```
+**이 단계들은 아직 코드가 없다.** 삽입 지점만 `pipeline.py` 의 `ingest()` 안에 주석으로
+예약돼 있다(`split → embed → index`).
 
 그래서 이 파일에는 **기존 코드에서 확실히 도출되는 계약만** 적는다. 추측으로 만든 체크리스트로
 리뷰하면 없는 규칙을 근거로 멀쩡한 설계를 지적하게 된다. 여기 없는 사항은 `contracts.md` 와
@@ -19,9 +14,10 @@
 
 ### 입출력 타입
 
-모든 단계는 `ParsedDocument`(`schemas/document.py`) 에서 출발한다. cleaner 는
-`ParsedDocument → ParsedDocument` 를 유지한다. 여기서 다른 타입을 만들어내면
-`ingest()` 의 순차 합성이 깨지고 단계를 떼었다 붙였다 할 수 없게 된다.
+모든 단계는 `ParsedDocument`(`schemas/document.py`) 에서 출발한다. 여기서 임의의 타입을
+만들어내면 `ingest()` 의 순차 합성이 깨지고 단계를 떼었다 붙였다 할 수 없게 된다.
+splitter 처럼 타입을 바꿔야 하는 단계는 **무엇으로 바꾸는지가 설계 결정**이므로, 그 자리에서
+정해진 바가 없으면 지적이 아니라 "확인 필요"로 올린다.
 
 ### 순서 계약
 
@@ -68,6 +64,6 @@
 
 ## 승격 규칙
 
-해당 단계가 실제로 구현되면 이 섹션을 `references/cleaner.md` / `splitter.md` /
-`embedding.md` / `indexing.md` 로 승격하고, `SKILL.md` 라우팅 표에 해당 줄을 추가한다.
-그때 이 파일에서는 승격된 내용을 지운다.
+해당 단계가 실제로 구현되면 이 섹션을 `references/splitter.md` / `embedding.md` /
+`indexing.md` 로 승격하고, `SKILL.md` 라우팅 표에 해당 줄을 추가한다.
+그때 이 파일에서는 승격된 내용을 지운다. cleaner 가 그렇게 `references/cleaner.md` 로 갔다.

@@ -37,4 +37,3 @@ E2E:     docx/xlsx/png 업로드 정상, .exe·미확인 바이너리 415 거부
 검증 끝나면 다음은 cleaner/입니다.
 
 claude --resume 6a7e4432-c1c7-4524-b91a-4d98205e09e5
-  
