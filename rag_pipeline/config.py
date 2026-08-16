@@ -82,6 +82,21 @@ class CleanerConfig(BaseSettings):
     # 표 마크다운의 행 구분자인 \n 과 탭은 남기므로 표가 깨지지 않는다
     remove_control_chars: bool = True
 
+    # 연속된 공백·탭을 한 칸으로 줄이고 줄 앞뒤 공백을 없앤다. BPE 토크나이저는 " " 와 "  " 를
+    # 다르게 쪼개므로 같은 문장이 다른 벡터가 된다(실측: HWPX 89요소 · PDF 13요소)
+    normalize_whitespace: bool = True
+
+    # 쪽마다 되풀이되는 문서 제목·기관명을 지운다. 그대로 두면 그 쪽들에서 나오는 모든 청크에
+    # 제목이 딸려 들어가 검색 결과가 엉킨다(실측: AI 가이드에서 25개 쪽의 첫 요소가 동일)
+    remove_repeated_headers: bool = True
+    # 머리말로 보려면 최소 이만큼의 쪽에 나와야 한다
+    header_min_pages: int = 3
+    # 그리고 '첫 등장~마지막 등장' 폭이 전체 쪽수의 이 비율 이상이어야 한다.
+    # 등장 '횟수' 비율을 안 쓰는 이유: 로더의 쪽 수가 틀리면(같은 문서를 HWPX 97쪽 / PDF 28쪽으로
+    # 센다) 분모가 흔들려 판정이 뒤집힌다. 폭 비율은 분자·분모가 함께 부풀어 그 오류에 강하다
+    # (실측: 진짜 머리말 HWPX 93.8% / PDF 89.3%, 오탐 후보 29.9~45.4%)
+    header_min_span_ratio: float = 0.60
+
 
 # 적재 파이프라인 전체 설정. 이후 splitter/embedding 설정이 여기 추가된다
 class IngestConfig(BaseSettings):

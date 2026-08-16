@@ -67,8 +67,13 @@ class DocumentMetadata(BaseModel):
     # LlamaParse 호출 횟수 (비용 추적용)
     llamaparse_calls: int = 0
     parse_duration_ms: int = 0
-    # cleaner 가 실제로 손댄 요소 수. 검색 품질이 이상할 때 정리 단계를 의심할 근거가 된다
+    # cleaner 가 텍스트를 고친 요소 수. 검색 품질이 이상할 때 정리 단계를 의심할 근거가 된다
     cleaned_elements: int = 0
+    # cleaner 가 통째로 지운 요소 수(반복 머리말 등). 고친 것과 지운 것은 뜻이 다르므로 따로 센다
+    removed_elements: int = 0
+    # 지운 문구들. 개수만으로는 오탐을 알아차릴 수 없어 무엇을 지웠는지 남긴다.
+    # warnings 와 섞지 않는다 — 이건 문제가 아니라 정상 동작의 내역이다
+    removed_texts: list[str] = Field(default_factory=list)
     # 파싱 중 발생했으나 치명적이지 않았던 문제 (폴백 발생 등)
     warnings: list[str] = Field(default_factory=list)
 
