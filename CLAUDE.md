@@ -75,7 +75,8 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - 지우는 기준은 코드포인트 목록이 아니라 **유니코드 범주**다 — Cc(제어)와 Cf(서식). `\n` 과 `\t` 는 남기고, `\r` 은 지우지 않고 `\n` 으로 바꾼다(그냥 지우면 앞뒤 줄이 서로 붙는다)
 - 표는 `text` 와 `metadata["rows"]` 를 **함께** 고친다. 한쪽만 고치면 같은 표의 두 표현이 어긋난다
 - **안 바뀌었으면 원본 객체를 그대로 돌려주는 게 규약이다** (`strip_control_chars` → `_clean_element` → `clean` 세 층 모두). 상위가 `is` 비교로 변경 여부를 판단하기 때문이다. 무조건 새 객체를 만들도록 고치면 깨끗한 문서에서도 요소가 통째로 복사되고 `cleaned_elements` 카운트가 조용히 부풀어 오른다
-- 요소를 **지우지 않고** 요소 안의 글자만 고치므로 `order` 에 새 빈틈이 생기지 않는다. 나중에 요소를 지우는 규칙(반복 머리말 제거 등)을 넣더라도 원본 `order` 를 유지한다 — `order` 의 계약상 용도는 정렬 하나뿐이라 연속성이 필요 없고, `elements` 에는 이미 빈틈이 있다(핸들러가 요소를 0개 만든 자리)
+- 요소를 지우는 규칙(반복 머리말 제거)이 있어도 **원본 `order` 를 유지한다.** 지운 자리의 번호를 메우지 않는다 — `order` 의 계약상 용도는 정렬 하나뿐이라 연속성이 필요 없고, `elements` 에는 이미 빈틈이 있다(핸들러가 요소를 0개 만든 자리). 번호를 다시 매기면 앞뒤 단계가 참조하던 값이 조용히 달라진다
+- 요소를 지울 때는 **무엇을 지웠는지**를 `removed_texts` 에 남긴다. 개수(`removed_elements`)만으로는 오탐을 알아차릴 수 없다. `warnings` 와 섞지 않는다 — 정상 제거는 파싱 '문제'가 아니라서, 같은 칸에 넣으면 파싱 경고를 보는 쪽이 노이즈에 묻힌다
 
 ### backend ↔ rag_pipeline 분리
 
@@ -97,7 +98,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값
 - `IngestConfig.content` 와 `IngestConfig.cleaner` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` / `object.__setattr__(config, "_cleaner", CleanerConfig(...))` 로 덮어쓴다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
-- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 둘이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측)와 `cleaner/test_real.py`(PDF 제어문자 실측). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
+- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 둘이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측)와 `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 
 ## 알고 있어야 할 함정
 
@@ -107,6 +108,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **HWPX 쪽 번호**: `hp:tbl` 의 `hp:sz height` 를 믿으면 안 된다. 쪽을 넘기는 표는 이 값이 **시작 쪽에 남은 공간으로 잘려서** 저장돼 있다(실측: 43행 표가 선언 34206 / 실제 98326). 실제 높이는 `hp:cellSz height` 를 `hp:cellSpan rowSpan` 으로 나눠 복원해야 나온다. vertpos만 보고 쪽을 세면 쪽 넘긴 표 뒤로 쪽 번호가 전부 밀린다
 - **HWPX 레이아웃 표**: 한글은 제목·인용을 그릴 때 표를 쓴다. 내용 든 칸이 2개 이하이고 9칸 이하인 표는 `_is_layout_box` 가 본문 문단으로 강등한다(`metadata["layout_table"]` 로 표시). 그림이 든 상자는 캡션-그림 관계가 끊기므로 표로 남긴다
 - **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
+- **HWPX 쪽 수를 분모로 쓰지 말 것** (미해결): 로더가 세는 HWPX 쪽 수가 문서에 따라 크게 부풀어 있다. 실측 — 신뢰가능 AI 가이드는 PDF 판이 28쪽(파일 구조에서 직접 확인)인데 HWPX 판을 97쪽으로 센다. 본문 분량은 20,895자 vs 21,843자로 거의 같다. 쪽당 요소 수 중앙값이 PDF 19 / HWPX 5 이고 요소가 1개뿐인 쪽이 21개다. 섹션은 14개뿐이라 `start_section()` 만으로는 설명이 안 되고 `vertpos` 감소 휴리스틱의 과다 발화로 보인다. 시행령 문서는 사람이 확인한 26쪽과 맞으므로 일률적으로 깨진 것은 아니다. **쪽 수로 비율을 계산하는 판정(머리말 등)을 만들 때 이 값을 분모로 쓰면 문서마다 결과가 뒤집힌다** — `cleaner/headers.py` 가 등장 횟수 비율 대신 걸친 폭을 쓰는 이유다
 - **PDF 제어문자**: PDF는 글머리 기호를 제어 코드포인트로 떨어뜨린다(실측: 신뢰가능 AI 가이드 PDF에서 U+0001 192개 / U+0007 47개 / U+0008 4개, `작성 \x07김동현 수석` 처럼 본문 한가운데에 박혀 있다). 같은 문서의 HWPX 판은 0개다 — 정리 단계가 실제로 필요한 쪽은 PDF 경로다
 - **`\n` 은 지우면 안 된다**: 실측 560개가 전부 표 요소에 있는 마크다운 표의 행 구분자다. 같이 지우면 `| 구 분 | 추진내용 || --- |` 처럼 한 줄로 뭉개져 표가 통째로 깨진다
 - **Cf 제거의 감수 사항**: ZWJ(U+200D)도 Cf라서 이모지 결합(가족 이모지 등)이 쪼개진다. 한국 공문서 코퍼스에는 사실상 안 나와 예외로 두지 않았다. 살려야 하는 코퍼스가 생기면 `cleaner/characters.py` 의 `_KEEP` 에 추가한다
