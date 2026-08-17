@@ -19,8 +19,9 @@
 
 ```
 detect_format()  →  get_loader()  →  BaseDocumentLoader.load()
-                                       ├ detect_regions()   포맷별 구현
-                                       └ route_all()        ContentType → 핸들러
+                                       ├ detect_regions()     포맷별 구현
+                                       ├ promote_headings()   글자 크기 → TITLE 승격
+                                       └ route_all()          ContentType → 핸들러
 ```
 
 **문서 로더는 "어디에 무엇이 있는가"만 답한다.** `ContentRegion` 목록을 돌려주는 게 전부다.
@@ -43,6 +44,29 @@ detect_format()  →  get_loader()  →  BaseDocumentLoader.load()
 
 경계 위반은 발견하면 **반드시 Critical 로 올린다.** 지금 안 잡으면 다음 포맷을 추가할 때 복사된다.
 
+## 1-2. 제목 승격 — 되돌리면 조용히 깨지는 것들
+
+`loader/document/headings.py` 가 글자 크기를 보고 문단을 `TITLE` 로 올린다. 이게 있어야
+splitter 가 청크를 끊을 경계를 얻는다(`splitter.md` 1절). 로더는 관측한 크기를
+`metadata["font_sizes"]` 로 싣기만 하고 **판정은 이 파일에서만** 한다 — 포맷 로더가 직접
+`TITLE` 을 결정하기 시작하면 같은 규칙이 포맷 수만큼 복제된다.
+
+되돌리면 안 되는 것 넷이다. 전부 실측으로 정해졌고 근거는 그 파일 docstring에 있다.
+
+- **`min(sizes) > body` 다. `max` 로 바꾸면 안 된다.** 문단 안에 본문 크기 이하 글자가 섞이면
+  제목이 아니라 강조다(`작성 [큰글씨]홍길동[/] 수석`). `max` 로 바꾸면 강조가 제목이 된다
+- **본문 크기는 문서별 최빈값이다.** 절대 임계값으로 바꾸면 문서마다 결과가 뒤집힌다
+  (본문이 HWPX 949 / 1500 / 1200, PDF 9.5)
+- **배율이 아니라 부등호 하나다.** 1.2배 같은 임계값을 넣으면 제목 1600 / 본문 1500 인
+  문서에서 제목 19개가 통째로 사라진다
+- **번호·기호 머리(`□` · `1.` · `제N조`)로 승격하지 않는다.** 기각된 안이다 — 큰 글씨와
+  마커가 겹치는 문단이 0/74 · 0/54 였고, 마커만 보면 시행령에서 158개를 오인한다
+
+그리고 **호출 위치가 `detect_regions()` 밖이라는 점**을 지킨다. `regression/baseline.json` 이
+`detect_regions()` 출력을 기준선으로 재므로, 안으로 옮기면 같은 결과를 내면서 기준선만 흔든다.
+
+`font_sizes` 가 `Element.metadata` 로 새는지도 본다 — 판정에만 쓰고 버려야 한다.
+
 ## 2. 폴백 사슬
 
 규약(예외 금지·경고·재계산 금지)은 `contracts.md` 2절에 있다. loader 의 구체적인 사슬은 둘이다.
@@ -60,8 +84,9 @@ detect_format()  →  get_loader()  →  BaseDocumentLoader.load()
 
 ## 3. 정렬 계약 — `route_all()` 이 두 번 정렬하는 이유
 
-`loader/content/router.py:82` 가 regions 를 `order` 로, `:84` 가 elements 를 `order` 로
-정렬한다. 리전 하나가 여러 Element 로 늘어나기 때문이다.
+`loader/content/router.py` 의 `route_all()` 이 **두 번** 정렬한다 — 먼저 regions 를 `order` 로,
+핸들러를 다 돌린 뒤 결과 elements 를 다시 `order` 로. 리전 하나가 여러 Element 로 늘어나기
+때문이다.
 
 - **앞 정렬**은 핸들러 호출 순서를 결정론적으로 만든다 → 비용 카운터·경고 누적 순서가 재현된다
 - **뒤 정렬**은 늘어난 Element 를 문서 순서로 다시 합친다

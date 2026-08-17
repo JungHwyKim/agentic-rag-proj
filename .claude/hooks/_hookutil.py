@@ -1,13 +1,16 @@
-"""기록 강제 훅들이 공유하는 최소 도구 모음.
+"""훅들이 공유하는 최소 도구 모음.
 
-`task_log_check.py`(구현 후 회고)와 `plan_log_check.py`(설계 논의)는 트리거가 다르지만
-바닥에서 하는 일은 같다 — 훅 입력을 읽고, git 변경을 보고, 세션당 한 번만 막는다.
+`task_log_check.py`(구현 후 회고) · `plan_log_check.py`(설계 논의) · `auto_test_check.py`
+(자동 테스트)는 트리거가 다 다르지만 바닥에서 하는 일은 같다 — 훅 입력을 읽고, 무엇이
+바뀌었는지 보고, 세션당 한 번만 막는다.
 
-**이 모듈이 존재하는 진짜 이유는 git 옵션 두 개다.** 아래 `changed_paths()` 의 `-z` 와
-`-uall` 은 둘 다 없으면 검사가 조용히 무력화된다. 실제로 `-uall` 누락은 구현 중에 한 번
-겪었고(새 디렉터리를 통째로 만들면 "?? rag_pipeline/" 한 줄로 접혀 안의 .py 가 안 보인다)
-단위 테스트로는 안 잡혀 실제 저장소 호출로만 드러났다. 같은 코드가 훅마다 복사되면 한쪽만
-고쳐져 그 버그가 되살아난다. 그래서 이 교훈이 한 곳에만 있게 한다.
+**이 모듈이 존재하는 진짜 이유는 조용히 무력화되는 함정들이다.** 아래 `changed_paths()` 의
+`-z` 와 `-uall` 은 둘 다 없으면 검사가 소리 없이 통과한다. 실제로 `-uall` 누락은 구현 중에
+한 번 겪었고(새 디렉터리를 통째로 만들면 "?? rag_pipeline/" 한 줄로 접혀 안의 .py 가 안
+보인다) 단위 테스트로는 안 잡혀 실제 저장소 호출로만 드러났다. `read_payload()` 의
+utf-8-sig 도 같은 종류다. 같은 코드가 훅마다 복사되면 한쪽만 고쳐져 그 버그가 되살아난다 —
+BOM 교훈이 실제로 `paid_test_check.py` 에만 있다가 `auto_test_check.py` 에서 다시 걸렸다.
+그래서 이런 교훈이 한 곳에만 있게 한다. `relative_to_root()` 를 여기 둔 것도 그래서다.
 
 공통 규약: **판단이 서지 않으면 막지 않는다.** 기록 하나를 놓치는 것보다 사용자를 끝나지
 않는 세션에 가두는 쪽이 훨씬 나쁘다. 그래서 모든 실패 경로가 None/False 를 돌려준다.
@@ -83,6 +86,22 @@ def changed_paths() -> list[str] | None:
         entry = chunk[3:] if chunk[2:3] == b" " else chunk
         paths.append(entry.decode("utf-8", "replace"))
     return paths
+
+
+# 절대·상대 경로를 저장소 기준 posix 경로로 바꾼다. 저장소 밖이면 None
+def relative_to_root(raw: str) -> str | None:
+    # 훅 입력의 file_path 는 절대 경로로 온다. 접두사 비교를 하려면 먼저 저장소 기준으로
+    # 낮춰야 한다. 저장소 밖(스크래치패드 등)은 우리가 볼 것이 아니라 None 이다
+    if not raw:
+        return None
+    try:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        rel = path.resolve().relative_to(PROJECT_ROOT.resolve())
+    except (OSError, ValueError):
+        return None
+    return rel.as_posix()
 
 
 # 세션 마커 파일 경로. 세션 id 를 못 쓰면 None

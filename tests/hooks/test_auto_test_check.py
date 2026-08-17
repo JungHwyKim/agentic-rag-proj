@@ -79,7 +79,7 @@ def test_editing_a_test_file_runs_that_file():
     [
         "CLAUDE.md",
         "plan_log/하네스-확장.md",
-        "task_log/phase1.txt",
+        "task_log/phase1.md",
         "regression/baseline.json",
         ".claude/skills/rag-code-review/SKILL.md",
     ],

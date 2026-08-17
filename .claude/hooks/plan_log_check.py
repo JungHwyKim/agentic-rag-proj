@@ -11,16 +11,24 @@
     때문이다. **표시는 여기서 만들지 않는다** — 오탐으로 엉뚱한 세션이 막히면 짜증나지만,
     리마인더는 오탐이어도 한 줄 무시하면 끝이라 비용이 비대칭이다.
 
-  PostToolUse (matcher: Skill)
+  PostToolUse (matcher: Skill|Write|Edit)
     plan-log 스킬이 호출되면 `.git/claude_plan_log_active/<session_id>` 마커를 만든다.
-    "이 세션은 설계 논의 세션"이라는 표시다.
+    "이 세션은 설계 논의 세션"이라는 표시다. `plan_log/` 아래에 쓰면 별도로
+    `claude_plan_log_written` 마커를 만든다 — "이번 세션에 실제로 기록했다"는 표시다.
 
   Stop
-    마커가 있는데 `plan_log/` 에 변경이 없으면 종료코드 2 로 막는다.
+    설계 논의 표시가 있는데 기록 표시가 없으면 종료코드 2 로 막는다.
 
 Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립트로 확인했다 —
 `{"name":"Skill","input":{"skill":"rag-code-review"}}` 형태로 남는다. 즉 tool_name 은
 "Skill", 스킬명은 tool_input.skill 이다.
+
+**기록 여부를 `git status` 로 보지 않는 이유.** 처음에는 `plan_log/` 에 변경이 하나라도
+있으면 통과시켰는데, 그 판정은 세션을 구분하지 못한다. 지난 세션이 남긴 미커밋 기록이
+작업트리에 있으면 이번 세션이 한 줄도 안 써도 통과한다. 2026-08-17 에 실제로 그 상태를
+발견했다 — `plan_log/` 에 미커밋 3건이 쌓여 검사가 통째로 무력화돼 있었다. 기록이 밀릴수록
+검사가 더 헐거워지니 방향이 정반대다. 표시를 만드는 수법이 이미 여기 있었으므로 그대로
+한 칸 더 쓴다.
 
 표시를 모델이 직접 파일로 쓰게 하지 않고 훅으로 만드는 이유는 이 장치 전체의 전제와
 같다. 모델에게 시키는 일은 지켜질 때도 있고 아닐 때도 있지만, 훅은 하네스가 돌린다.
@@ -44,6 +52,9 @@ LOG_PREFIX = "plan_log/"
 
 # 설계 논의 세션 표시
 ACTIVE_NS = "claude_plan_log_active"
+
+# 이번 세션에 실제로 기록을 썼다는 표시
+WRITTEN_NS = "claude_plan_log_written"
 
 # 세션당 한 번만 막기 위한 표시
 BLOCKED_NS = "claude_plan_log_blocked"
@@ -105,6 +116,15 @@ def _is_plan_log_skill(payload: dict) -> bool:
     return name.rsplit(":", 1)[-1] == SKILL_NAME
 
 
+# 이번 도구 호출이 plan_log/ 아래에 쓴 것인가
+def _wrote_plan_log(payload: dict) -> bool:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    rel = _hookutil.relative_to_root(str(tool_input.get("file_path") or ""))
+    return rel is not None and rel.startswith(LOG_PREFIX)
+
+
 # 설계 질문으로 보이면 스킬을 쓰라는 한 줄을 주입한다. 절대 막지 않는다
 def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
     # 이 분기에서 종료코드 2 는 다른 이벤트와 뜻이 완전히 다르다. Stop 에서는 "멈추지 말고
@@ -140,23 +160,23 @@ def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
         return
 
 
-# 설계 논의 세션이라고 표시한다. 이미 표시돼 있으면 그대로 둔다
+# 두 가지를 표시한다 — 설계 논의 세션인가, 이번 세션에 기록을 썼는가.
+# 한 이벤트에서 둘 다 볼 수 있으므로 tool_name 으로 가르지 않고 양쪽을 그냥 확인한다
 def _handle_post_tool_use(payload: dict, session_id: str) -> None:
     if _is_plan_log_skill(payload):
         _hookutil.claim_session(ACTIVE_NS, session_id)
 
+    if _wrote_plan_log(payload):
+        _hookutil.claim_session(WRITTEN_NS, session_id)
 
-# 표시가 있는데 기록이 없으면 막는다
+
+# 표시가 있는데 이번 세션에 기록을 안 썼으면 막는다
 def _handle_stop(session_id: str) -> None:
     if not _hookutil.is_marked(ACTIVE_NS, session_id):
         # 설계 논의 세션이 아니다
         return
 
-    paths = _hookutil.changed_paths()
-    if paths is None:
-        return
-
-    if any(p.startswith(LOG_PREFIX) for p in paths):
+    if _hookutil.is_marked(WRITTEN_NS, session_id):
         return
 
     if not _hookutil.claim_session(BLOCKED_NS, session_id):

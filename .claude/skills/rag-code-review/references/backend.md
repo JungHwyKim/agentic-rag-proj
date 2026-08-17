@@ -8,9 +8,9 @@
 `backend/app/api/routes/documents.py` 가 하는 일은 넷뿐이다.
 
 1. 업로드 수신
-2. 확장자 화이트리스트 1차 검증 (`SUPPORTED_EXTENSIONS`, `documents.py:70`)
-3. UUID 임시저장 (`documents.py:36`)
-4. 정리 (`finally` 에서 `temp_path.unlink(missing_ok=True)`, `documents.py:84-85`)
+2. 확장자 화이트리스트 1차 검증 (`upload_document()` 가 `SUPPORTED_EXTENSIONS` 로 거른다)
+3. UUID 임시저장 (`_save_upload()`)
+4. 정리 (`upload_document()` 의 `finally` 에서 `temp_path.unlink(missing_ok=True)`)
 
 **파싱은 전부 `ingest()` 가 한다.** 라우트에 포맷 분기·리전 판별·핸들러 선택이 들어오면
 경계 위반이다. `ingest()` 가 HTTP 를 모르는 덕에 스크립트·노트북에서 그대로 쓸 수 있는데,
@@ -21,15 +21,15 @@
 
 ## 2. 로더는 동기·CPU 바운드다
 
-`await run_in_threadpool(ingest, ...)` (`documents.py:83`) 로 넘긴다.
+`upload_document()` 가 `await run_in_threadpool(ingest, ...)` 로 넘긴다.
 `ingest()` 를 이벤트 루프에서 직접 부르면 파싱이 도는 동안 서버 전체가 멈춘다.
 200페이지 PDF 하나가 다른 모든 요청을 막는다.
 
 ## 3. 예외 → HTTP 매핑
 
-`backend/app/main.py:21` 의 `_STATUS_BY_EXCEPTION` 규칙은 `contracts.md` 4절에 있다.
+`backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 규칙은 `contracts.md` 4절에 있다.
 요약하면 **새 예외는 반드시 등록**하고(안 하면 500), **하위 클래스를 상위보다 먼저** 넣는다
-(`isinstance` 순차 검사).
+(`_status_for()` 의 `isinstance` 순차 검사).
 
 `user_message`(한국어)가 그대로 응답에 나가므로, 새 예외의 `user_message` 가 사용자에게
 보여도 되는 문장인지 본다 — 내부 경로·스택·라이브러리 예외 문자열이 새면 지적한다.

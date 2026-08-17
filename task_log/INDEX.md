@@ -2,11 +2,16 @@
 
 설계 결정 · 평가 지표 · 실패 분석을 작업 단위로 남긴다. 최신이 위.
 
-기록을 남기는 방법은 `task-log` 스킬에 있다. `rag_pipeline/` 이나 `backend/` 를 고친 뒤
-기록 없이 세션을 끝내려 하면 Stop 훅(`.claude/hooks/task_log_check.py`)이 한 번 막는다.
+기록을 남기는 방법은 `task-log` 스킬에 있다. 기록 대상(`rag_pipeline/`·`backend/` 와
+하네스 동작부인 `.claude/hooks/`·`settings.json`)을 고친 뒤 기록 없이 세션을 끝내려 하면
+Stop 훅(`.claude/hooks/task_log_check.py`)이 한 번 막는다. 정확한 경계는 그 파일의
+`is_recordable()` 이 답한다.
 
-- [2026-08-17-하네스-확장-자동테스트훅.txt](2026-08-17-하네스-확장-자동테스트훅.txt) — subagent 3종(ingestion 은 두껍게, retrieval·evaluation 은 얇게)·skill 2종·자동 테스트 훅 신설. 편집 시 영역별(cleaner 6.7초) / 종료 시 전체(18.3초)로 가름. **`_hookutil.read_payload()` 가 BOM 입력에 조용히 죽어 훅 셋이 통째로 무력화되던 것을 발견해 utf-8-sig 로 고침.** 매핑 누락은 산문이 아니라 테스트로 강제. 훅 타임아웃 예산(settings.json 바깥 > 훅 내부)도 테스트로 박음 — 합이 아니라 이벤트별 최댓값으로 재야 pre_commit_check 오탐이 안 난다. pytest 234→268
-- [2026-08-16-cleaner-공백정규화-반복머리말.txt](2026-08-16-cleaner-공백정규화-반복머리말.txt) — cleaner 2차. 반복 머리말 판정을 '등장 횟수 비율'에서 '걸친 폭'으로 갈아엎음(HWPX 97쪽/PDF 28쪽 분모 오류에 강함). AI 가이드 두 포맷 모두 25개 제거, pytest 210→234
-- [2026-08-16-유료테스트-차단훅.txt](2026-08-16-유료테스트-차단훅.txt) — `-m integration` 실행을 PreToolUse 훅으로 차단. 부정(`not integration`)과 `git commit -m` 오탐을 갈라내 부정(`not integration`)과 `git commit -m` 오탐을 갈라냄. PreToolUse matcher 를 Bash|PowerShell 로 넓혀 커밋 전 검사의 우회 구멍도 막음. tests/hooks 46개 신설(훅 배선·-uall·-z 회귀). pytest 164→210
-- [routing-diff-시행령개정안.txt](routing-diff-시행령개정안.txt) — HWPX 라우팅 실파일 검증. 쪽 넘긴 표의 쪽 계산 버그와 레이아웃 표 강등을 고침. page_count 24→26, 표 26→9
-- [phase1.txt](phase1.txt) — 1단계(loader) 완료 보고. llama-parse 이중 deprecated 교체, OCR PSM 6, 전처리 임계값 600px, 한글 음절 분해 대응. ruff 통과 / pytest 106 passed
+- [2026-08-17-기록형식-md전환.md](2026-08-17-기록형식-md전환.md) — 작업 기록 7건을 `.txt` → `.md` 로 이관하고 형식 규격을 `task-log` SKILL.md 에 박음. **문장은 한 글자도 안 고치고 마크업만 얹는다**(확장자만 바꾸는 안·전면 재작성 둘 다 기각). 규칙 4개 + "원문에 열 이름이 있는 블록만 표로, 없으면 코드펜스" — 열을 지어내는 순간 옮기기가 아니라 해석이 된다(실제로 `(HWPX)`/`(PDF)` 표기를 지웠다가 되돌림). 무손실 대조 7/7 일치, 텍스트를 더한 자리는 "위 표 순서." 1곳뿐. 대조 스크립트가 내 손실 2건(콜론 1자·`—` 3개)을 잡았다. 훅은 확장자를 안 봐서 동작 변화 없음. pytest 337 그대로
+- [2026-08-17-splitter-청킹단계.md](2026-08-17-splitter-청킹단계.md) — 청킹 단계 신설. **실측이 초안을 뒤집었다** — 1200자 넘는 텍스트 요소가 세 문서 전부 0개(중앙값 15~40자, PDF 블록의 49%가 20자 미만)라 주 작업은 자르기가 아니라 병합이고, 상한 분할은 표에서만 발화한다. 병합 경계인 제목을 PDF·HWPX 가 안 내놔 로더에 글자 크기 기반 승격을 먼저 붙였다(요소 509→청크 70 / 721→47 / 285→45 / 474→102). 승격은 **문단 전체가 본문 최빈 크기보다 클 때만** — 본문 크기 이하가 섞이면 강조로 보고 버린다. **번호·기호 머리 단독 승격은 기각**(큰글씨와 겹침 0/74·0/54, 마커만 보면 시행령 158개 오인), 배율 임계값도 기각(제목 1600/본문 1500). 제목 머리를 분할 뒤에 붙여 상한이 새던 것(최대 1258자)을 예산 선차감으로 고침. `pipeline.py` 는 **일부러 안 고침** — `ingest()` 반환이 곧 HTTP 응답 스키마이고 청크 소비처가 없다. 회귀 기준선 documents 6건 동일, pytest 268→337
+- [2026-08-17-기록훅-사각지대.md](2026-08-17-기록훅-사각지대.md) — 기록 여부 판정을 git status 에서 세션 마커로 교체. 미커밋 기록이 쌓이면 검사가 무력화되던 구멍을 막음(발견 시점 plan_log/ 미커밋 3건). 기록 대상에 `.claude/hooks/`·`settings.json` 추가, `skills/**`·CLAUDE.md 는 제외. 시나리오 7개 확인, pytest 268
+- [2026-08-17-하네스-확장-자동테스트훅.md](2026-08-17-하네스-확장-자동테스트훅.md) — subagent 3종(ingestion 은 두껍게, retrieval·evaluation 은 얇게)·skill 2종·자동 테스트 훅 신설. 편집 시 영역별(cleaner 6.7초) / 종료 시 전체(18.3초)로 가름. **`_hookutil.read_payload()` 가 BOM 입력에 조용히 죽어 훅 셋이 통째로 무력화되던 것을 발견해 utf-8-sig 로 고침.** 매핑 누락은 산문이 아니라 테스트로 강제. 훅 타임아웃 예산(settings.json 바깥 > 훅 내부)도 테스트로 박음 — 합이 아니라 이벤트별 최댓값으로 재야 pre_commit_check 오탐이 안 난다. pytest 234→268
+- [2026-08-16-cleaner-공백정규화-반복머리말.md](2026-08-16-cleaner-공백정규화-반복머리말.md) — cleaner 2차. 반복 머리말 판정을 '등장 횟수 비율'에서 '걸친 폭'으로 갈아엎음(HWPX 97쪽/PDF 28쪽 분모 오류에 강함). AI 가이드 두 포맷 모두 25개 제거, pytest 210→234
+- [2026-08-16-유료테스트-차단훅.md](2026-08-16-유료테스트-차단훅.md) — `-m integration` 실행을 PreToolUse 훅으로 차단. 부정(`not integration`)과 `git commit -m` 오탐을 갈라내 부정(`not integration`)과 `git commit -m` 오탐을 갈라냄. PreToolUse matcher 를 Bash|PowerShell 로 넓혀 커밋 전 검사의 우회 구멍도 막음. tests/hooks 46개 신설(훅 배선·-uall·-z 회귀). pytest 164→210
+- [routing-diff-시행령개정안.md](routing-diff-시행령개정안.md) — HWPX 라우팅 실파일 검증. 쪽 넘긴 표의 쪽 계산 버그와 레이아웃 표 강등을 고침. page_count 24→26, 표 26→9
+- [phase1.md](phase1.md) — 1단계(loader) 완료 보고. llama-parse 이중 deprecated 교체, OCR PSM 6, 전처리 임계값 600px, 한글 음절 분해 대응. ruff 통과 / pytest 106 passed

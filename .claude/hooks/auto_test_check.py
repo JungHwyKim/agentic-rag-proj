@@ -35,7 +35,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import _hookutil
 
@@ -62,6 +61,7 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/loader/content/", "tests/ingestion/loader/content"),
     ("rag_pipeline/ingestion/loader/", "tests/ingestion/loader"),
     ("rag_pipeline/ingestion/cleaner/", "tests/ingestion/cleaner"),
+    ("rag_pipeline/ingestion/splitter/", "tests/ingestion/splitter"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
@@ -79,24 +79,9 @@ UNMAPPED_BY_DESIGN: tuple[str, ...] = (
 )
 
 
-# 절대·상대 경로를 저장소 기준 posix 경로로 바꾼다. 저장소 밖이면 None
-def _relative_to_root(raw: str) -> str | None:
-    if not raw:
-        return None
-    try:
-        path = Path(raw)
-        if not path.is_absolute():
-            path = PROJECT_ROOT / path
-        rel = path.resolve().relative_to(PROJECT_ROOT.resolve())
-    except (OSError, ValueError):
-        # 저장소 밖 경로(예: 스크래치패드)는 우리가 볼 것이 아니다
-        return None
-    return rel.as_posix()
-
-
 # 이 경로를 고쳤을 때 돌릴 테스트 대상. 없으면 None (조용히 통과)
 def test_target_for(raw_path: str) -> str | None:
-    rel = _relative_to_root(raw_path)
+    rel = _hookutil.relative_to_root(raw_path)
     if rel is None or not rel.endswith(".py"):
         return None
 
