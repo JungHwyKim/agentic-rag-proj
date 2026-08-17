@@ -78,6 +78,28 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - 요소를 지우는 규칙(반복 머리말 제거)이 있어도 **원본 `order` 를 유지한다.** 지운 자리의 번호를 메우지 않는다 — `order` 의 계약상 용도는 정렬 하나뿐이라 연속성이 필요 없고, `elements` 에는 이미 빈틈이 있다(핸들러가 요소를 0개 만든 자리). 번호를 다시 매기면 앞뒤 단계가 참조하던 값이 조용히 달라진다
 - 요소를 지울 때는 **무엇을 지웠는지**를 `removed_texts` 에 남긴다. 개수(`removed_elements`)만으로는 오탐을 알아차릴 수 없다. `warnings` 와 섞지 않는다 — 정상 제거는 파싱 '문제'가 아니라서, 같은 칸에 넣으면 파싱 경고를 보는 쪽이 노이즈에 묻힌다
 
+### 청킹 단계(splitter)
+
+정리된 요소를 검색 단위로 만든다. 진입점은 `splitter/__init__.py:split()` 하나이고
+`ParsedDocument` 를 받아 `list[Chunk]`(`schemas/chunk.py`)를 돌려준다 — **타입을 바꾸는 첫
+단계**라 여기서 순차 합성 사슬이 끝난다.
+
+- **주 작업은 자르기가 아니라 병합이다.** 실측으로 요소가 잘아서(아래 함정 절) 제목이 나올
+  때까지 이어 붙인다. 크기 하한은 두지 않는다 — 섹션이 짧아도 다음 섹션과 합치지 않는다
+- 병합 경계는 `ElementType.TITLE` 이다. 그 경계를 만드는 것은 **로더**이고
+  (`loader/document/headings.py`), splitter 는 포맷을 모른다
+- 표는 텍스트 청커에 안 태운다. `metadata["rows"]` 를 행 그룹으로 나누되 **모든 조각에 헤더
+  행을 반복해 넣는다.** 행 하나만 검색됐을 때 열 이름이 없으면 숫자만 남아 뜻을 잃는다
+- 겹침은 **상한 초과로 쪼갠 구간에만** 준다. 섹션 경계와 표에는 주지 않는다(표는 행이 중복 색인된다)
+- 제목 머리는 본문 앞에 붙이되 **예산에서 미리 빼고 자른다.** 자른 뒤에 붙이면 상한을 선언해
+  놓고 넘긴다(실측: 1200 상한에 최대 1258자)
+- **`split()` 은 아직 `ingest()` 안에서 불리지 않는다.** 누락이 아니라 결정이다 —
+  `ingest()` 의 반환 타입이 곧 `backend` 의 `response_model` 이고 청크를 소비할 곳이 없다.
+  근거는 `plan_log/splitter.md` 의 "합성 지점" 절
+- `chunk_id` 는 `f"{document_key}:{chunk_index:04d}"`. `document_key` 를 안 주면 파싱 결과
+  해시를 쓴다 — 저장소에 `document_id` 가 없고 "재업로드 = 중복"인지는 indexing 결정이라,
+  그 결정을 splitter 가 앞질러 내리지 않기 위해서다
+
 ### backend ↔ rag_pipeline 분리
 
 - `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
@@ -96,9 +118,10 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
 - `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값
-- `IngestConfig.content` 와 `IngestConfig.cleaner` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` / `object.__setattr__(config, "_cleaner", CleanerConfig(...))` 로 덮어쓴다
+- `IngestConfig.content` · `cleaner` · `splitter` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
-- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 둘이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측)와 `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
+- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 셋이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
+- **테스트 파일 이름은 저장소 전체에서 유일해야 한다.** `tests/` 에 `__init__.py` 가 없어 basename 이 곧 모듈명이라, 같은 이름이 두 폴더에 있으면 pytest 가 collection error 로 죽는다. 영역 테스트만 돌릴 때는 안 나고 전체에서만 난다. 그래서 실파일 테스트가 `test_hwpx_real.py` · `test_splitter_real.py` 처럼 영역 이름을 달고 있다
 
 ## 알고 있어야 할 함정
 
@@ -109,6 +132,8 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **HWPX 레이아웃 표**: 한글은 제목·인용을 그릴 때 표를 쓴다. 내용 든 칸이 2개 이하이고 9칸 이하인 표는 `_is_layout_box` 가 본문 문단으로 강등한다(`metadata["layout_table"]` 로 표시). 그림이 든 상자는 캡션-그림 관계가 끊기므로 표로 남긴다
 - **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
 - **HWPX 쪽 수를 분모로 쓰지 말 것** (미해결): 로더가 세는 HWPX 쪽 수가 문서에 따라 크게 부풀어 있다. 실측 — 신뢰가능 AI 가이드는 PDF 판이 28쪽(파일 구조에서 직접 확인)인데 HWPX 판을 97쪽으로 센다. 본문 분량은 20,895자 vs 21,843자로 거의 같다. 쪽당 요소 수 중앙값이 PDF 19 / HWPX 5 이고 요소가 1개뿐인 쪽이 21개다. 섹션은 14개뿐이라 `start_section()` 만으로는 설명이 안 되고 `vertpos` 감소 휴리스틱의 과다 발화로 보인다. 시행령 문서는 사람이 확인한 26쪽과 맞으므로 일률적으로 깨진 것은 아니다. **쪽 수로 비율을 계산하는 판정(머리말 등)을 만들 때 이 값을 분모로 쓰면 문서마다 결과가 뒤집힌다** — `cleaner/headers.py` 가 등장 횟수 비율 대신 걸친 폭을 쓰는 이유다
+- **요소는 청크가 아니다 — 아주 잘다**: 실측으로 요소 자수 중앙값이 PDF 23 / HWPX 15 / 시행령 40 이고, **1200자를 넘는 텍스트 요소가 세 문서 전부 0개**다. PDF 는 PyMuPDF 블록 단위라 707개 중 349개(49%)가 20자 미만이다. 그래서 청크 상한은 텍스트에서 사실상 발화하지 않고 **큰 표에서만** 걸린다(시행령의 67행 표 3,243자). 청킹을 "자르는 일"로 설계하면 20자짜리 청크가 절반이 된다
+- **HWPX 제목은 스타일로 못 찾는다**: 한컴이 서식을 문단 스타일이 아니라 `charPr` 로 직접 박는 문서가 흔하다. 실측으로 신뢰가능 AI 가이드 HWPX 의 `Contents/header.xml` 에는 스타일이 `Normal` **하나뿐**이었다(글자 높이는 240~2617 로 살아 있다). 그래서 `headings.py` 가 글자 크기를 쓴다. 판정 규칙 셋(문서별 최빈값 / 배율 아닌 부등호 / `min` 이지 `max` 가 아님)은 그 파일 docstring에 근거와 함께 있다 — **되돌리면 강조가 제목이 되거나 제목이 통째로 사라진다**
 - **PDF 제어문자**: PDF는 글머리 기호를 제어 코드포인트로 떨어뜨린다(실측: 신뢰가능 AI 가이드 PDF에서 U+0001 192개 / U+0007 47개 / U+0008 4개, `작성 \x07김동현 수석` 처럼 본문 한가운데에 박혀 있다). 같은 문서의 HWPX 판은 0개다 — 정리 단계가 실제로 필요한 쪽은 PDF 경로다
 - **`\n` 은 지우면 안 된다**: 실측 560개가 전부 표 요소에 있는 마크다운 표의 행 구분자다. 같이 지우면 `| 구 분 | 추진내용 || --- |` 처럼 한 줄로 뭉개져 표가 통째로 깨진다
 - **Cf 제거의 감수 사항**: ZWJ(U+200D)도 Cf라서 이모지 결합(가족 이모지 등)이 쪼개진다. 한국 공문서 코퍼스에는 사실상 안 나와 예외로 두지 않았다. 살려야 하는 코퍼스가 생기면 `cleaner/characters.py` 의 `_KEEP` 에 추가한다
@@ -130,7 +155,7 @@ cleaner가 실제로 밟은 경로다.
 1. `rag_pipeline/ingestion/<stage>/` 에 모듈을 만든다. 공개 진입 함수는 하나이고 HTTP를 모른다
 2. `config.py` 에 `<Stage>Config` 를 만들고 `IngestConfig` 에 lazy 프로퍼티로 붙인다
 3. `.env.example` 에 밖으로 열 설정을 추가한다
-4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다
+4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다 — **다만 그 단계의 출력을 쓸 곳이 있을 때만이다.** splitter 는 이 칸을 일부러 비워뒀다(위 "청킹 단계" 절). 소비자 없이 끼우면 업로드마다 결과를 만들어 버리는 셈이고, `ingest()` 의 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다
 5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다
 6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 
@@ -141,9 +166,24 @@ cleaner가 실제로 밟은 경로다.
 | | 언제 | 어디에 | 스킬 |
 |---|---|---|---|
 | 설계 논의 | 만들기 **전** — 무엇을 만들지 정하는 동안 | `plan_log/<기능>.md` (기능당 한 파일, 회차 누적) | `plan-log` |
-| 작업 회고 | 만든 **뒤** — 무엇을 만들었고 어떻게 검증했나 | `task_log/YYYY-MM-DD-<주제>.txt` | `task-log` |
+| 작업 회고 | 만든 **뒤** — 무엇을 만들었고 왜 그렇게 골랐나 | `task_log/YYYY-MM-DD-<주제>.md` | `task-log` |
+| 검증 수치 | **재는 동안** — 검증·테스트에서 얼마가 나왔나 | `verify_log/YYYY-MM-DD-<주제>.md` | `verify-log` |
 
-둘 다 기록 없이 세션을 끝내려 하면 Stop 훅이 세션당 한 번 막는다(`.claude/hooks/{plan,task}_log_check.py`, 공용부는 `_hookutil.py`). 건너뛰려면 `SKIP_PLANLOG=1` / `SKIP_TASKLOG=1`. 색인은 각 폴더의 `INDEX.md`.
+앞의 둘은 산문이고 셋째는 수치다. 가르는 기준은 **떼어냈을 때 문장이 성립하는가** 하나다 —
+`pytest 337 passed` 는 `verify_log/` 고, `큰 글씨와 마커가 겹치는 문단이 0/74 라 마커 승격을
+기각했다` 는 떼면 문장이 죽으므로 `task_log/` 다. `verify_log/` 는 **가상 데이터와 실제
+데이터를 갈라 적는다** — 가상은 "규칙이 도는가"에만 답하고 임계값을 못 정한다(합성 문서는
+만든 사람의 기대를 그대로 갖고 있어 자기 확인이 된다). 반대로 실파일에 우연히 없는 경계값은
+가상만 만들 수 있다. `regression/baseline.json` 과도 다르다 — 저쪽은 승인된 **기대값 하나**다.
+
+**`verify_log/` 에는 훅이 없다.** 차단 게이트를 셋으로 늘리면 `SKIP_*=1` 이 습관이 되므로,
+`task-log` 2단계가 `verify-log` 를 부르게 해서 기존 게이트 하나가 둘 다 강제한다.
+
+앞의 둘은 기록 없이 세션을 끝내려 하면 Stop 훅이 세션당 한 번 막는다(`.claude/hooks/{plan,task}_log_check.py`, 공용부는 `_hookutil.py`). 건너뛰려면 `SKIP_PLANLOG=1` / `SKIP_TASKLOG=1`. 색인은 각 폴더의 `INDEX.md`.
+
+설계 쪽은 검사가 무장되는 조건이 하나 더 있다 — **`plan-log` 스킬을 호출해야** "이 세션은 설계 논의"라는 표시가 생기고, 그래야 Stop 검사가 돈다. 안 부르면 검사 자체가 없다. 그래서 확인 요청으로 시작한 대화가 규칙·형식을 바꾸는 논의로 번지면 **알아챈 그 시점에** 부른다. 늦게 부르는 것과 안 부르는 것은 다르다.
+
+두 훅이 "기록했는가"를 판정하는 기준은 **이번 세션에 그 폴더에 썼는가**(PostToolUse 마커)이지 git 변경이 아니다. git 으로 보면 지난 세션의 미커밋 기록이 이번 세션을 통과시켜, **기록이 밀릴수록 검사가 헐거워진다** — 실제로 그 상태로 무력화돼 있던 것을 2026-08-17 에 발견했다. 기록 대상은 제품 코드에 더해 **하네스 중 동작이 있는 것**(`.claude/hooks/`·`settings.json`)까지다. `.claude/skills/**` 와 이 문서는 일부러 뺐다(문서 갱신은 `task-log` 5단계 몫이고, 문서마다 회고를 요구하면 `SKIP_TASKLOG=1` 이 습관이 된다). 경계는 `task_log_check.py` 의 `is_recordable()` 이 답한다.
 
 ## 자동 검증
 
