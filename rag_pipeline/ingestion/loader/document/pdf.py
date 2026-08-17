@@ -16,10 +16,22 @@ import pymupdf
 
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
 from rag_pipeline.ingestion.loader.document.base import BaseDocumentLoader
+from rag_pipeline.ingestion.loader.document.headings import FONT_SIZES_KEY
 from rag_pipeline.schemas.document import FileFormat
 
 # 표 영역을 잘라낼 때 테두리가 잘리지 않도록 주는 여백(pt)
 _CROP_PADDING = 4.0
+
+
+# 블록 안 span 들의 글자 크기. 제목 승격 판정에만 쓰이고 headings.py 가 걷어낸다.
+# 공백뿐인 span 은 뺀다 — 줄바꿈용 빈 span 이 엉뚱한 크기를 갖고 있어 최빈값을 흔든다.
+# 소수점 첫째 자리로 반올림하는 이유는 같은 본문이 9.5 와 9.499996 으로 갈려 들어오기 때문
+def _span_sizes(spans: list[dict]) -> list[float]:
+    return [
+        round(float(span["size"]), 1)
+        for span in spans
+        if span.get("text", "").strip() and span.get("size")
+    ]
 
 
 # 두 사각형이 의미 있게 겹치는지 판단. 표 영역 안의 텍스트 블록을 걸러내는 데 쓴다
@@ -117,11 +129,10 @@ class PdfLoader(BaseDocumentLoader):
             if any(_overlaps(bbox, tb) for tb in table_bboxes):
                 continue
 
-            text = "".join(
-                span.get("text", "")
-                for line in block.get("lines", [])
-                for span in line.get("spans", [])
-            ).strip()
+            spans = [
+                span for line in block.get("lines", []) for span in line.get("spans", [])
+            ]
+            text = "".join(span.get("text", "") for span in spans).strip()
             if not text:
                 continue
 
@@ -136,6 +147,7 @@ class PdfLoader(BaseDocumentLoader):
                         page=page_no + 1,
                         bbox=bbox,  # type: ignore[arg-type]
                         text=text,
+                        metadata={FONT_SIZES_KEY: _span_sizes(spans)},
                     ),
                 )
             )

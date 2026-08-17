@@ -217,3 +217,43 @@ def test_missing_section_warns(tmp_path: Path, offline_config: IngestConfig) -> 
 
     assert document.elements == []
     assert any("섹션" in w for w in document.metadata.warnings)
+
+
+# run 의 charPrIDRef -> header.xml 의 charPr height 를 이어야 제목 승격이 돈다.
+# HWPX 는 스타일에 기댈 수 없다 — 실측으로 스타일이 'Normal' 하나뿐인 문서가 있다
+def test_larger_paragraph_becomes_title(
+    hwpx_with_heading: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_with_heading)
+
+    titles = [e for e in document.elements if e.type is ElementType.TITLE]
+    assert [e.text for e in titles] == ["□ 개요"]
+    assert titles[0].metadata["heading_level"] == 1
+
+
+# 큰 글씨가 본문 크기와 섞인 문단은 제목이 아니라 강조다
+def test_mixed_size_paragraph_stays_paragraph(
+    hwpx_with_heading: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_with_heading)
+
+    emphasised = [e for e in document.elements if "홍길동" in e.text]
+    assert emphasised
+    assert all(e.type is ElementType.PARAGRAPH for e in emphasised)
+
+
+# 판정에만 쓰고 버린다
+def test_font_sizes_do_not_leak(
+    hwpx_with_heading: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_with_heading)
+
+    assert all("font_sizes" not in e.metadata for e in document.elements)
+
+
+# header.xml 이 없는 문서(직접 만든 XML 등)에서도 죽지 않고 승격만 꺼진다
+def test_missing_header_xml_is_safe(hwpx_file: Path, offline_config: IngestConfig) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_file)
+
+    assert document.elements
+    assert all(e.type is not ElementType.TITLE for e in document.elements)

@@ -41,6 +41,7 @@ from lxml import etree
 
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
 from rag_pipeline.ingestion.loader.document.base import BaseDocumentLoader
+from rag_pipeline.ingestion.loader.document.headings import FONT_SIZES_KEY
 from rag_pipeline.schemas.document import ElementType, FileFormat
 
 # Contents/section0.xml, section1.xml ... 순서대로 읽어야 문서 순서가 맞는다
@@ -59,6 +60,42 @@ def _local_name(element: etree._Element) -> str:
 def _text_of(element: etree._Element) -> str:
     parts = [t.text for t in element.iter("{*}t") if t.text]
     return "".join(parts).strip()
+
+
+# Contents/header.xml 의 hh:charPr 에서 {id: 글자높이} 표를 만든다.
+# HWPX 는 글자 크기를 문단이 아니라 run 마다 charPrIDRef 로 가리키므로 이 표가 있어야
+# 문단의 글자 크기를 알 수 있다. header.xml 이 없거나 깨지면 빈 표를 돌려주고,
+# 그러면 제목 승격이 조용히 꺼진다(승격은 크기를 아는 문서에서만 하는 것이 맞다)
+def _charpr_heights(zf: zipfile.ZipFile) -> dict[str, int]:
+    try:
+        root = etree.fromstring(zf.read("Contents/header.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}
+
+    heights: dict[str, int] = {}
+    for char_pr in root.iter("{*}charPr"):
+        identifier = char_pr.get("id")
+        height = _int_attr(char_pr, "height", 0)
+        if identifier is not None and height > 0:
+            heights[identifier] = height
+    return heights
+
+
+# 요소 아래 run 들의 글자 높이 목록. 글자가 없는 run 은 뺀다 —
+# 빈 run 의 크기가 섞이면 '문단 전체가 본문보다 큰가' 판정이 흔들린다
+def _run_sizes(element: etree._Element, heights: dict[str, int]) -> list[int]:
+    if not heights:
+        return []
+
+    sizes: list[int] = []
+    for run in element.iter("{*}run"):
+        text = "".join(t.text or "" for t in run.iter("{*}t"))
+        if not text.strip():
+            continue
+        height = heights.get(run.get("charPrIDRef", ""))
+        if height:
+            sizes.append(height)
+    return sizes
 
 
 # 표 요소를 2차원 셀 배열로 복원한다
@@ -250,6 +287,8 @@ class HwpxLoader(BaseDocumentLoader):
         super().__init__(config)
         # detect_regions 가 계산한 쪽 수. extract_metadata 가 재파싱 없이 가져다 쓴다
         self._page_count: int | None = None
+        # {charPr id: 글자높이}. _walk 의 인자를 8개로 늘리는 대신 파싱 동안만 여기 둔다
+        self._charpr: dict[str, int] = {}
 
     # 섹션 XML을 순서대로 파싱해 문단·표·그림 리전을 만든다
     def detect_regions(self, path: Path, ctx: LoadContext) -> list[ContentRegion]:
@@ -264,6 +303,7 @@ class HwpxLoader(BaseDocumentLoader):
                     return []
 
                 binaries = _binary_map(zf)
+                self._charpr = _charpr_heights(zf)
                 tracker = _PageTracker()
                 for name in sections:
                     root = etree.fromstring(zf.read(name))
@@ -326,8 +366,10 @@ class HwpxLoader(BaseDocumentLoader):
                             text=text,
                             metadata={
                                 "element_type": ElementType.PARAGRAPH,
-                                # 원래 표였다는 사실. cleaner 가 제목으로 승격할지 판단한다
+                                # 원래 표였다는 사실. 한글이 표로 그린 제목 상자라
+                                # promote_headings 가 글자 크기를 보고 제목으로 올릴 수 있다
                                 "layout_table": True,
+                                FONT_SIZES_KEY: _run_sizes(element, self._charpr),
                             },
                         )
                     )
@@ -385,7 +427,10 @@ class HwpxLoader(BaseDocumentLoader):
                         source_format=self.file_format.value,
                         page=tracker.current(),
                         text=text,
-                        metadata={"element_type": ElementType.PARAGRAPH},
+                        metadata={
+                            "element_type": ElementType.PARAGRAPH,
+                            FONT_SIZES_KEY: _run_sizes(element, self._charpr),
+                        },
                     )
                 )
                 counter[0] += 1

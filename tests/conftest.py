@@ -178,6 +178,61 @@ def pdf_with_table_file(tmp_path: Path) -> Path:
     return path
 
 
+# 큰 제목 한 줄과 작은 본문 여러 줄이 든 .pdf. 제목 승격 검증용.
+# 본문 크기는 최빈값으로 정해지므로 본문 줄이 제목보다 많아야 한다
+@pytest.fixture
+def pdf_with_heading_file(tmp_path: Path) -> Path:
+    document = pymupdf.open()
+    page = document.new_page()
+
+    _write_korean(page, (72, 90), "1. 지원 대상", size=22)
+    for index, line in enumerate(
+        ["중소기업이 해당한다.", "스타트업도 해당한다.", "연구기관도 포함한다."]
+    ):
+        _write_korean(page, (72, 140 + index * 24), line, size=10)
+
+    path = tmp_path / "heading.pdf"
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 글자 크기가 다른 문단들이 든 .hwpx. header.xml 의 charPr 를 실제 한컴 파일처럼 넣는다.
+# '강조' 문단은 본문 크기와 큰 크기를 섞어, 큰 글씨가 제목이 아니라 강조인 경우를 만든다
+@pytest.fixture
+def hwpx_with_heading(tmp_path: Path) -> Path:
+    header = """<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:charProperties>
+      <hh:charPr id="0" height="1000"/>
+      <hh:charPr id="1" height="1600"/>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"""
+
+    def run(text: str, char_pr: str) -> str:
+        return f'<hp:run charPrIDRef="{char_pr}"><hp:t>{text}</hp:t></hp:run>'
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p>{run("□ 개요", "1")}</hp:p>
+  <hp:p>{run("첫 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("두 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("세 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("작성 ", "0")}{run("홍길동", "1")}{run(" 수석", "0")}</hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "heading.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/header.xml", header)
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
 # cp949로 저장한 텍스트 파일. 한국어 인코딩 자동 감지 검증용
 @pytest.fixture
 def cp949_text_file(tmp_path: Path) -> Path:

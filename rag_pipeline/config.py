@@ -98,7 +98,31 @@ class CleanerConfig(BaseSettings):
     header_min_span_ratio: float = 0.60
 
 
-# 적재 파이프라인 전체 설정. 이후 splitter/embedding 설정이 여기 추가된다
+# 정리된 요소를 검색 단위(청크)로 묶고 쪼갤 때 쓰는 설정
+class SplitterConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 청크 한 개의 상한. **임시값이고 실측 전이다.**
+    # 실측상 텍스트 요소는 제일 긴 것이 554자라 이 상한이 텍스트에서는 거의 발화하지 않는다.
+    # 실제로 걸리는 곳은 표다(시행령 안내서의 67행 표가 3,243자). 근거 있는 값으로 바꾸려면
+    # 정답 질의 세트가 필요하다 — plan_log/평가-세트.md
+    max_chunk_chars: int = 1200
+
+    # 상한을 넘겨 쪼갠 구간에만 주는 겹침. **섹션 경계에는 주지 않는다** —
+    # 구조 경계로 자른 뒤 겹침을 얹으면 애써 지킨 의미 단위를 다시 흐린다.
+    # 표에도 주지 않는다(행이 중복 색인된다)
+    chunk_overlap_chars: int = 150
+
+    # 제목 경로를 청크 본문 맨 앞에 붙인다. 표 청크와 분할 조각이 자기가 어느 절 소속인지
+    # 본문만으로도 알 수 있어야 sparse 검색에서 제목 어휘가 걸린다
+    include_heading_in_text: bool = True
+
+
+# 적재 파이프라인 전체 설정. 이후 embedding/indexing 설정이 여기 추가된다
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -109,6 +133,12 @@ class IngestConfig(BaseSettings):
     max_upload_size_mb: int = 50
     # Excel 시트당 읽을 최대 행 수. 거대한 시트가 메모리를 잡아먹는 것을 막는다
     max_excel_rows: int = 5000
+
+    # 글자 크기를 보고 문단을 제목(TITLE)으로 승격한다. PDF·HWPX 는 제목 표시를 파일에 안 남겨
+    # 이게 없으면 splitter 가 청크를 끊을 경계를 못 얻는다(판정 근거는 loader/document/headings.py).
+    # ContentRoutingConfig 가 아니라 여기 있는 이유: 저쪽은 '어떤 핸들러를 쓰고 외부 API 비용을
+    # 어디서 끊나'의 집합인데 제목 판정은 둘 다 아니다. 같은 성격인 max_excel_rows 옆이 맞다
+    detect_headings: bool = True
 
     # 콘텐츠 라우팅 설정은 별도 객체로 분리해 핸들러들에게만 넘긴다
     @property
@@ -123,6 +153,13 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_cleaner"):
             object.__setattr__(self, "_cleaner", CleanerConfig())
         return self._cleaner  # type: ignore[attr-defined]
+
+    # 청킹 단계 설정. 같은 lazy 형태라 테스트에서 _splitter 로 덮어쓸 수 있다
+    @property
+    def splitter(self) -> SplitterConfig:
+        if not hasattr(self, "_splitter"):
+            object.__setattr__(self, "_splitter", SplitterConfig())
+        return self._splitter  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

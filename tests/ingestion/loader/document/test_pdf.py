@@ -123,3 +123,37 @@ def test_no_llamaparse_without_key(pdf_file: Path, offline_config: IngestConfig)
     document = PdfLoader(offline_config).load(pdf_file)
 
     assert document.metadata.llamaparse_calls == 0
+
+
+# span 의 글자 크기가 실려야 제목 승격이 돈다. 이 로더가 크기를 안 실으면 승격 규칙이
+# 멀쩡해도 PDF 에서는 아무 제목도 안 나온다
+def test_larger_line_becomes_title(
+    pdf_with_heading_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_with_heading_file)
+
+    titles = [e for e in document.elements if e.type is ElementType.TITLE]
+    assert [e.text for e in titles] == ["1. 지원 대상"]
+    assert titles[0].metadata["heading_level"] == 1
+
+
+# 판정에만 쓰고 버린다
+def test_font_sizes_do_not_leak(
+    pdf_with_heading_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_with_heading_file)
+
+    assert all("font_sizes" not in e.metadata for e in document.elements)
+
+
+# 꺼두면 승격하지 않는다
+def test_detect_headings_can_be_disabled(pdf_with_heading_file: Path) -> None:
+    config = IngestConfig(detect_headings=False)
+    object.__setattr__(config, "_content", ContentRoutingConfig(
+        openai_api_key=None, llama_cloud_api_key=None,
+        table_pdf_handler="pymupdf", image_handler="ocr", cache_enabled=False,
+    ))
+
+    document = PdfLoader(config).load(pdf_with_heading_file)
+
+    assert all(e.type is not ElementType.TITLE for e in document.elements)
