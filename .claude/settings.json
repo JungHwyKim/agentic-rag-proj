@@ -48,11 +48,28 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/auto_test_check.py\"",
+            "timeout": 120,
+            "statusMessage": "고친 곳의 테스트 실행 중..."
+          }
+        ]
       }
     ],
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/auto_test_check.py\"",
+            "timeout": 600,
+            "statusMessage": "전체 테스트 확인 중..."
+          },
           {
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/task_log_check.py\"",

@@ -1,0 +1,96 @@
+{
+  "_meta": {
+    "생성일": "2026-08-17",
+    "무엇인가": "회귀 판정의 기준값. 코드를 고친 뒤 이 값과 대조해 '의도한 변화'와 '회귀'를 가른다.",
+    "재는 방법": "detect_regions() 단독 실행 — route_all 을 안 타므로 외부 API 호출도 과금도 없다. task_log/routing-diff-시행령개정안.txt 가 택한 방식과 같다.",
+    "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. 어느 쪽이 맞는지 실제 문서로 확인하고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다. 절차는 regression-test 스킬에 있다.",
+    "주의": "documents 의 입력 파일은 tests/fixtures/ 에 있고 gitignore 다. 없는 환경에서는 그 항목을 조용히 skip 한다 — 없다고 해서 회귀가 아니다.",
+    "pages_by_type 의 뜻": "리전이 시작하는 쪽 번호의 집합이다. 쪽을 넘기는 표는 시작 쪽만 들어간다(끝 쪽은 요소의 metadata['page_end'])."
+  },
+
+  "tests": {
+    "명령": ".\\.venv\\Scripts\\python.exe -m pytest -q",
+    "passed": 234,
+    "failed": 0,
+    "duration_sec": 18.3,
+    "주의": "-m integration 은 제외된 값이다(pyproject 의 addopts). 유료 테스트는 이 기준선에 안 들어간다."
+  },
+
+  "documents": {
+    "시행령 개정안 안내서(정보시스템의무사항알림).hwpx": {
+      "format": "hwpx",
+      "size_bytes": 3743407,
+      "page_count": 26,
+      "regions_total": 297,
+      "regions_by_type": { "image": 12, "table": 9, "text": 276 },
+      "pages_by_type": {
+        "image": [10, 17, 18, 19, 20, 21, 22, 23],
+        "table": [1, 4, 6, 7, 11, 13, 15, 24, 26]
+      },
+      "warnings": [],
+      "근거": "task_log/routing-diff-시행령개정안.txt — 사람이 확인한 정답과 일치한다. 표 시작 쪽 9개, 쪽 걸친 표는 13~14 와 24~25 두 개. 레이아웃 표 17개는 본문으로 강등된 상태다(26 -> 9)."
+    },
+
+    "시행령 개정안 안내서(정보시스템의무사항알림)_가로쪽.hwpx": {
+      "format": "hwpx",
+      "size_bytes": 3675316,
+      "page_count": 28,
+      "regions_total": 297,
+      "regions_by_type": { "image": 12, "table": 9, "text": 276 },
+      "pages_by_type": {
+        "image": [12, 19, 20, 21, 22, 23, 24, 25],
+        "table": [3, 6, 8, 9, 13, 15, 17, 26, 28]
+      },
+      "warnings": [],
+      "근거": "같은 문서의 가로 쪽 판. 리전 수는 세로 판과 같고 쪽 번호만 밀린다(26 -> 28). 가로 섹션의 본문 높이를 width 에서 얻는 보정이 살아 있는지 보는 항목이다 — 안 가르면 53% 과대평가한다."
+    },
+
+    "2025년 학교기록물 관리 지침.hwpx": {
+      "format": "hwpx",
+      "size_bytes": 8919632,
+      "page_count": 61,
+      "regions_total": 494,
+      "regions_by_type": { "image": 20, "table": 31, "text": 443 },
+      "pages_by_type": {
+        "image": [1, 2, 18, 23, 25, 27, 32, 34, 35],
+        "table": [1, 2, 11, 14, 17, 22, 23, 25, 26, 27, 28, 30, 31, 32, 33, 35, 57, 58, 59, 60, 61]
+      },
+      "warnings": [],
+      "근거": "routing-diff 의 부수 확인 대상. 쪽 58->61, 표 43->31(강등 12). 떠 있는 표(hp:pos treatAsChar=0)가 없는 쪽 경계를 만들어내던 회귀가 여기서 잡혔다."
+    },
+
+    "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf": {
+      "format": "pdf",
+      "size_bytes": 1097567,
+      "page_count": 28,
+      "regions_total": 538,
+      "regions_by_type": { "image": 4, "table": 10, "text": 524 },
+      "pages_by_type": {
+        "image": [8, 9, 10, 23],
+        "table": [2, 4, 5, 12, 13, 14, 15, 16, 17, 18]
+      },
+      "warnings": [],
+      "근거": "PDF 경로의 기준. 이 문서는 제어문자가 실제로 나오는 쪽이라 cleaner 회귀도 여기서 본다(U+0001 192개 / U+0007 47개 / U+0008 4개). 쪽 수 28 은 파일 구조에서 직접 확인된 값이다."
+    },
+
+    "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx": {
+      "format": "hwpx",
+      "size_bytes": 980726,
+      "page_count": 97,
+      "regions_total": 774,
+      "regions_by_type": { "image": 28, "text": 746 },
+      "pages_by_type": {
+        "image": [1, 17, 18, 19, 21, 32, 40, 48, 56, 64, 84, 97]
+      },
+      "warnings": [],
+      "근거": "바로 위 PDF 와 같은 문서의 HWPX 판. 표를 하나도 안 잡는 것과 page_count 97 은 둘 다 알려진 상태다 — CLAUDE.md 의 'HWPX 쪽 수를 분모로 쓰지 말 것' 이 이 문서에서 나왔다(PDF 28쪽 vs HWPX 97쪽, 본문 분량은 20,895자 vs 21,843자로 거의 같다). 이 값이 줄어들면 회귀가 아니라 개선이므로 확인 후 갱신한다."
+    },
+
+    "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwp": {
+      "format": "hwp",
+      "size_bytes": 1159168,
+      "지원": false,
+      "근거": "레거시 포맷이라 감지만 하고 파싱하지 않는다. UnsupportedLegacyLoader 가 변환 안내와 함께 415 로 거부한다. 여기 있는 이유는 '감지는 되는가'를 지키기 위해서다 — format 이 hwp 로 안 나오면 회귀다."
+    }
+  }
+}

@@ -31,8 +31,15 @@ GIT_TIMEOUT_SEC = 20
 def read_payload() -> dict | None:
     # 훅 입력에 한국어 경로·메시지가 담겨 오므로 UTF-8 로 못 박는다. cp949 로 읽으면
     # UnicodeDecodeError 가 나는데 이건 ValueError 하위라 아래 except 에 조용히 먹히고
-    # 검사가 통째로 무력화된다
-    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    # 검사가 통째로 무력화된다.
+    #
+    # utf-8 이 아니라 **utf-8-sig** 인 이유: BOM 이 붙어 오면 json.load 가
+    # "Unexpected UTF-8 BOM" 으로 죽고, 그것도 ValueError 하위라 같은 경로로 조용히
+    # 통과한다. PowerShell 이 파이프에 BOM 을 붙이는 일이 실제로 있다 —
+    # paid_test_check.py 가 먼저 겪어 자체 stdin 읽기에 utf-8-sig 를 박아뒀는데,
+    # 그 교훈이 공용부에는 안 와 있어서 auto_test_check.py 를 검증하다 다시 걸렸다.
+    # utf-8-sig 는 BOM 이 없는 입력도 그대로 읽으므로 잃는 것이 없다
+    sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):

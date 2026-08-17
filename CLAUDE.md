@@ -132,6 +132,7 @@ cleaner가 실제로 밟은 경로다.
 3. `.env.example` 에 밖으로 열 설정을 추가한다
 4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다
 5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다
+6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 
 ## 기록
 
@@ -143,6 +144,12 @@ cleaner가 실제로 밟은 경로다.
 | 작업 회고 | 만든 **뒤** — 무엇을 만들었고 어떻게 검증했나 | `task_log/YYYY-MM-DD-<주제>.txt` | `task-log` |
 
 둘 다 기록 없이 세션을 끝내려 하면 Stop 훅이 세션당 한 번 막는다(`.claude/hooks/{plan,task}_log_check.py`, 공용부는 `_hookutil.py`). 건너뛰려면 `SKIP_PLANLOG=1` / `SKIP_TASKLOG=1`. 색인은 각 폴더의 `INDEX.md`.
+
+## 자동 검증
+
+`auto_test_check.py` 가 파일을 고칠 때마다 **그 영역의 테스트만** 돌리고(PostToolUse), 세션을 끝낼 때 **전체 pytest** 를 한 번 돌린다(Stop). 영역 매핑과 그 이유는 훅 파일 안에 있다. 건너뛰려면 `SKIP_AUTOTEST=1`.
+
+`-m integration` 은 어느 훅도 자동으로 돌리지 않는다. `paid_test_check.py` 가 아예 막고, 풀려면 `ALLOW_PAID_TESTS=1` 로 사용자가 직접 승인해야 한다.
 
 ## 이 문서에 쓰지 않는 것
 

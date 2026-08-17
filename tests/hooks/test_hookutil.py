@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import _hookutil
@@ -48,6 +49,33 @@ def test_korean_path_is_not_escaped(git_repo: Path, monkeypatch: pytest.MonkeyPa
     assert "task_log/시행령-개정안.txt" in paths
     # 따옴표로 감싸이거나 이스케이프되면 안 된다
     assert not any(p.startswith('"') or "\\3" in p for p in paths)
+
+
+# BOM 이 붙은 입력도 읽혀야 한다.
+#
+# `read_payload()` 가 실패하면 모든 훅이 "판단 근거 없음" 경로로 빠져 **조용히 통과**한다.
+# 훅이 죽지도 경고를 내지도 않아서 알아챌 방법이 없다. json.load 는 BOM 을 만나면
+# "Unexpected UTF-8 BOM" 으로 죽고 그건 ValueError 하위라 그 경로로 그대로 들어간다.
+#
+# paid_test_check.py 가 이걸 먼저 겪어 자체 stdin 읽기를 utf-8-sig 로 박아뒀는데,
+# 그 교훈이 공용부에는 안 와 있었다. auto_test_check.py 를 실제로 돌려보다 다시 걸렸다 —
+# PowerShell 이 파이프에 BOM 을 붙여서, 훅이 0.1초 만에 exit 0 으로 끝나고 있었다.
+@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf"], ids=["BOM 없음", "BOM 있음"])
+def test_read_payload_accepts_bom(prefix: bytes):
+    hooks_dir = Path(_hookutil.__file__).parent
+    snippet = (
+        f"import sys; sys.path.insert(0, r'{hooks_dir}'); "
+        "import _hookutil; print(_hookutil.read_payload())"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-c", snippet],
+        input=prefix + b'{"session_id": "abc"}',
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert b"abc" in proc.stdout, f"payload 를 못 읽었다: {proc.stdout!r} {proc.stderr!r}"
 
 
 # 판단이 서지 않으면 막지 않는다 — git 을 못 부르면 None 이어야 한다.
