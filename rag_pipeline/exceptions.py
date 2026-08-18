@@ -32,3 +32,13 @@ class FileTooLargeError(RagPipelineError):
 # ZIP 폭탄 등 압축 해제 크기가 상한을 넘음 (HTTP 413)
 class DecompressionLimitError(RagPipelineError):
     pass
+
+
+# 임베딩을 만들지 못했다 — 키 없음 / API 실패 / 응답 개수 불일치 / 토큰 상한 (HTTP 503)
+#
+# **왜 예외인가.** 다른 외부 API 핸들러는 빈 결과를 돌려주고 상위 폴백에 맡기지만
+# (LlamaParse -> PyMuPDF, Vision -> OCR), 임베딩에는 내려갈 층이 없다. 빈 벡터를 돌려주면
+# 그 청크는 영원히 검색되지 않는데 아무도 모른다 — 그 규약이 막으려던 상황이 규약을 지켜서
+# 일어난다. 근거는 plan_log/embedding.md 의 "실패 계약" 절
+class EmbeddingError(RagPipelineError):
+    pass

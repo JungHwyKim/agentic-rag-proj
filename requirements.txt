@@ -21,7 +21,12 @@ charset-normalizer        # 한국어 txt/csv 인코딩 자동 감지 (cp949/euc
 # LlamaParse: PDF/이미지의 표 파싱 (LLAMA_CLOUD_API_KEY 필요).
 # llama-parse / llama-cloud-services 는 둘 다 deprecated 이므로 통합 SDK 사용.
 llama-cloud>=1.0
-openai                    # Vision: gpt-4.1-mini (추후 임베딩도 동일 패키지)
+openai                    # Vision: gpt-4.1-mini + 임베딩: text-embedding-3-small
+
+# ---- 임베딩 ----
+# 토큰 수를 로컬에서 센다(과금 없음). 호출 전 비용 상한 검사와 한국어 문자/토큰 비율 실측에 쓴다.
+# 상한을 호출 수로 두면 배치라 아무것도 못 막아서, 토큰으로 세려면 이게 필요하다
+tiktoken
 
 # ---- 테스트 ----
 pytest

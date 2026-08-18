@@ -100,6 +100,35 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
   해시를 쓴다 — 저장소에 `document_id` 가 없고 "재업로드 = 중복"인지는 indexing 결정이라,
   그 결정을 splitter 가 앞질러 내리지 않기 위해서다
 
+### 임베딩 단계(embedding)
+
+청크 텍스트를 벡터로 만든다. 진입점은 `embedding/__init__.py:get_embedder()` 하나이고
+`list[str]` 을 받아 `list[list[float]]` 를 돌려준다. `Chunk` 를 안 받는 이유는 질의
+임베딩과 대칭을 지키기 위해서다 — 상위가 `[c.text for c in chunks]` 를 넘긴다.
+
+- **여기서는 예외를 던진다. 폴백 규약을 일부러 안 따르는 유일한 자리다.** "외부 API 는 빈
+  결과 + `warn()`" 은 **내려갈 층이 있어서** 성립하는 규약이다(LlamaParse→PyMuPDF,
+  Vision→OCR). 임베딩에는 없다 — 빈 벡터를 돌려주면 그 청크는 영원히 검색되지 않는데 아무도
+  모른다. 그래서 `len(반환) == len(입력)` 이거나 `EmbeddingError` 다
+- **상한은 호출 수가 아니라 토큰이다.** `max_vision_calls_per_doc` 를 베끼면 아무것도 못
+  막는다 — 배치라 청크 500개가 5회 호출로 끝난다. `tiktoken` 으로 **보내기 전에** 센다
+- **캐시 salt 에 모델명과 차원이 둘 다 들어간다**(`embed:{model}:{dim}`). 빠지면 모델을
+  바꿔도 옛 벡터가 나오는데 에러가 안 난다. 차원이 salt 에 있는 이유는 `text-embedding-3-*`
+  가 `dimensions` 로 차원을 줄일 수 있어 **차원이 설정값**이기 때문이다
+- **`provider` 설정은 일부러 없다.** 구현체가 하나면 합법값이 하나뿐인 죽은 설정이다
+  (`table_pdf_handler` 에 두 값이 있는 건 두 경로가 실재해서다). 추상화(`Embedder`
+  Protocol + `get_embedder()`)만 두고 설정은 로컬 구현체가 생길 때 함께 더한다
+- **벡터는 단위 길이다**(실측 0.9998~1.0005, `dimensions=256` 축소본도 0.9999). indexing 이
+  Cosine 대신 더 싼 Dot 을 쓸 수 있고 재정규화도 필요 없다
+- **두 벡터를 원소별로 비교하지 않는다.** 호출 간 비트 재현성은 보장되지 않는다 — 같은
+  텍스트가 한 번은 1e-6 넘게 달랐고 한 번은 정확히 같았다(배치 구성이 다르면 ~1e-4 로
+  흔들린다). 판정은 코사인으로 한다. 특히 **순서 검증을 값 비교로 쓰면 자리 밀림과 잡음을
+  구분하지 못한다** — 자기 짝과의 유사도가 남과의 유사도보다 높은가로 본다
+- **`get_embedder()` 도 `ingest()` 안에서 안 불린다.** splitter 와 같은 이유이고 한 칸 밀린
+  같은 상황이다 — 벡터를 소비할 곳(indexing)이 없다. 부수 효과가 중요하다: 기본 `pytest` 가
+  이 단계를 아예 안 불러서 "키 없으면 예외"가 기본 테스트를 안 깬다. **두 결정이 서로를
+  지탱하므로 한쪽만 되돌리면 안 된다**
+
 ### backend ↔ rag_pipeline 분리
 
 - `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
@@ -117,10 +146,10 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 테스트 패턴
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
-- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값
-- `IngestConfig.content` · `cleaner` · `splitter` 는 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다
+- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다
+- `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
-- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 셋이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
+- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 넷이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 - **테스트 파일 이름은 저장소 전체에서 유일해야 한다.** `tests/` 에 `__init__.py` 가 없어 basename 이 곧 모듈명이라, 같은 이름이 두 폴더에 있으면 pytest 가 collection error 로 죽는다. 영역 테스트만 돌릴 때는 안 나고 전체에서만 난다. 그래서 실파일 테스트가 `test_hwpx_real.py` · `test_splitter_real.py` 처럼 영역 이름을 달고 있다
 
 ## 알고 있어야 할 함정
@@ -133,6 +162,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
 - **HWPX 쪽 수를 분모로 쓰지 말 것** (미해결): 로더가 세는 HWPX 쪽 수가 문서에 따라 크게 부풀어 있다. 실측 — 신뢰가능 AI 가이드는 PDF 판이 28쪽(파일 구조에서 직접 확인)인데 HWPX 판을 97쪽으로 센다. 본문 분량은 20,895자 vs 21,843자로 거의 같다. 쪽당 요소 수 중앙값이 PDF 19 / HWPX 5 이고 요소가 1개뿐인 쪽이 21개다. 섹션은 14개뿐이라 `start_section()` 만으로는 설명이 안 되고 `vertpos` 감소 휴리스틱의 과다 발화로 보인다. 시행령 문서는 사람이 확인한 26쪽과 맞으므로 일률적으로 깨진 것은 아니다. **쪽 수로 비율을 계산하는 판정(머리말 등)을 만들 때 이 값을 분모로 쓰면 문서마다 결과가 뒤집힌다** — `cleaner/headers.py` 가 등장 횟수 비율 대신 걸친 폭을 쓰는 이유다
 - **요소는 청크가 아니다 — 아주 잘다**: 실측으로 요소 자수 중앙값이 PDF 23 / HWPX 15 / 시행령 40 이고, **1200자를 넘는 텍스트 요소가 세 문서 전부 0개**다. PDF 는 PyMuPDF 블록 단위라 707개 중 349개(49%)가 20자 미만이다. 그래서 청크 상한은 텍스트에서 사실상 발화하지 않고 **큰 표에서만** 걸린다(시행령의 67행 표 3,243자). 청킹을 "자르는 일"로 설계하면 20자짜리 청크가 절반이 된다
+- **한국어 청크는 문자 ≈ 토큰이다**: cl100k_base(`text-embedding-3-*`)로 잰 청크의 문자/토큰 비율이 중앙값 1.03~1.09 / 최소 0.90 이다. 한글 낱글자는 UTF-8 바이트로 쪼개져 글자당 2~3토큰이지만, 청크에는 공백·숫자·영문·마크다운 표가 섞여 있어 희석된다. **그래서 `max_chunk_chars` 를 문자로 두는 것이 토큰 상한까지 지켜준다** — 실측 최대 청크가 1,201토큰으로 모델 입력 상한 8191 의 15% 다. 낱글자 비율(2~3토큰)을 그대로 적용해 상한을 잡으면 청크가 3배로 잘아진다
 - **HWPX 제목은 스타일로 못 찾는다**: 한컴이 서식을 문단 스타일이 아니라 `charPr` 로 직접 박는 문서가 흔하다. 실측으로 신뢰가능 AI 가이드 HWPX 의 `Contents/header.xml` 에는 스타일이 `Normal` **하나뿐**이었다(글자 높이는 240~2617 로 살아 있다). 그래서 `headings.py` 가 글자 크기를 쓴다. 판정 규칙 셋(문서별 최빈값 / 배율 아닌 부등호 / `min` 이지 `max` 가 아님)은 그 파일 docstring에 근거와 함께 있다 — **되돌리면 강조가 제목이 되거나 제목이 통째로 사라진다**
 - **PDF 제어문자**: PDF는 글머리 기호를 제어 코드포인트로 떨어뜨린다(실측: 신뢰가능 AI 가이드 PDF에서 U+0001 192개 / U+0007 47개 / U+0008 4개, `작성 \x07김동현 수석` 처럼 본문 한가운데에 박혀 있다). 같은 문서의 HWPX 판은 0개다 — 정리 단계가 실제로 필요한 쪽은 PDF 경로다
 - **`\n` 은 지우면 안 된다**: 실측 560개가 전부 표 요소에 있는 마크다운 표의 행 구분자다. 같이 지우면 `| 구 분 | 추진내용 || --- |` 처럼 한 줄로 뭉개져 표가 통째로 깨진다
@@ -155,8 +185,8 @@ cleaner가 실제로 밟은 경로다.
 1. `rag_pipeline/ingestion/<stage>/` 에 모듈을 만든다. 공개 진입 함수는 하나이고 HTTP를 모른다
 2. `config.py` 에 `<Stage>Config` 를 만들고 `IngestConfig` 에 lazy 프로퍼티로 붙인다
 3. `.env.example` 에 밖으로 열 설정을 추가한다
-4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다 — **다만 그 단계의 출력을 쓸 곳이 있을 때만이다.** splitter 는 이 칸을 일부러 비워뒀다(위 "청킹 단계" 절). 소비자 없이 끼우면 업로드마다 결과를 만들어 버리는 셈이고, `ingest()` 의 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다
-5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다
+4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다 — **다만 그 단계의 출력을 쓸 곳이 있을 때만이다.** splitter 와 embedding 이 이 칸을 일부러 비워뒀다(위 두 절). 소비자 없이 끼우면 업로드마다 결과를 만들어 버리는 셈이고, `ingest()` 의 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다
+5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다. **`ingest()` 에 안 끼운 단계도 마찬가지다** — 설정 객체가 `.env` 를 직접 읽으므로 안 지우면 개발자 머신의 실키가 픽스처에 실린다
 6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 
 ## 기록

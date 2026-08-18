@@ -11,6 +11,7 @@ from backend.app.core.config import get_settings
 from rag_pipeline.exceptions import (
     CorruptedFileError,
     DecompressionLimitError,
+    EmbeddingError,
     FileTooLargeError,
     RagPipelineError,
     UnsupportedFormatError,
@@ -23,6 +24,9 @@ _STATUS_BY_EXCEPTION: list[tuple[type[RagPipelineError], int]] = [
     (FileTooLargeError, status.HTTP_413_CONTENT_TOO_LARGE),
     (DecompressionLimitError, status.HTTP_413_CONTENT_TOO_LARGE),
     (CorruptedFileError, status.HTTP_422_UNPROCESSABLE_CONTENT),
+    # 임베딩은 아직 ingest() 밖에 있어 이 줄에 닿는 HTTP 경로가 없다. 그래도 지금 넣는 이유는
+    # 끼우는 순간 살아나는데 그때 빠져 있으면 _status_for() 가 500 을 돌려주기 때문이다
+    (EmbeddingError, status.HTTP_503_SERVICE_UNAVAILABLE),
 ]
 
 

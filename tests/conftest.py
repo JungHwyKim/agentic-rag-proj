@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.util import Inches
 
-from rag_pipeline.config import ContentRoutingConfig, IngestConfig
+from rag_pipeline.config import ContentRoutingConfig, EmbeddingConfig, IngestConfig
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
 _KOREAN_FONTS = [
@@ -53,6 +53,14 @@ def offline_config() -> IngestConfig:
             image_handler="ocr",
             cache_enabled=False,
         ),
+    )
+    # 임베딩은 ingest() 밖에 있어 이 픽스처로 호출될 일이 없다. 그래도 덮어쓰는 이유는
+    # EmbeddingConfig() 가 .env 를 읽기 때문이다 — 개발자 머신의 실제 키가 픽스처로 새면
+    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다)
+    object.__setattr__(
+        config,
+        "_embedding",
+        EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
     )
     return config
 

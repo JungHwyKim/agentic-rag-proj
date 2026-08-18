@@ -62,6 +62,7 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/loader/", "tests/ingestion/loader"),
     ("rag_pipeline/ingestion/cleaner/", "tests/ingestion/cleaner"),
     ("rag_pipeline/ingestion/splitter/", "tests/ingestion/splitter"),
+    ("rag_pipeline/ingestion/embedding/", "tests/ingestion/embedding"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),

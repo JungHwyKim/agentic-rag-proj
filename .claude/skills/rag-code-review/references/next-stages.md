@@ -1,12 +1,13 @@
 # 아직 구현되지 않은 단계 — 최소 계약
 
-`embedding` / `indexing` / `retriever` 를 건드린 변경에 적용한다.
-**구현된 cleaner 는 `references/cleaner.md`, splitter 는 `references/splitter.md` 로 갔다.**
+`indexing` / `retriever` 를 건드린 변경에 적용한다.
+**구현된 단계는 각자 승격됐다** — cleaner 는 `references/cleaner.md`, splitter 는
+`references/splitter.md`, embedding 은 `references/embedding.md` 다.
 
 **이 단계들은 아직 코드가 없다.** 삽입 지점만 `pipeline.py` 의 `ingest()` 안에 주석으로
-예약돼 있다(`split → embed → index`). splitter 는 구현됐지만 **일부러 그 자리에 안 끼웠다** —
-`references/splitter.md` 3절 참고. `ingest()` 에 아무 호출도 없다는 이유로 "splitter 가 아직
-없다"고 판단하지 않는다.
+예약돼 있다(`split → embed → index`). splitter 와 embedding 은 구현됐지만 **일부러 그 자리에
+안 끼웠다** — `references/splitter.md` 3절 · `references/embedding.md` 3절 참고.
+`ingest()` 에 아무 호출도 없다는 이유로 "그 단계가 아직 없다"고 판단하지 않는다.
 
 그래서 이 파일에는 **기존 코드에서 확실히 도출되는 계약만** 적는다. 추측으로 만든 체크리스트로
 리뷰하면 없는 규칙을 근거로 멀쩡한 설계를 지적하게 된다. 여기 없는 사항은 `contracts.md` 와
@@ -22,7 +23,8 @@
 없으면 지적이 아니라 "확인 필요"로 올린다.
 
 splitter 가 그 사슬의 끝이다 — `ParsedDocument` 를 받아 `list[Chunk]`(`schemas/chunk.py`)를
-돌려준다. embedding 은 `ParsedDocument` 가 아니라 **`list[Chunk]` 에서 출발한다.**
+돌려준다. 그 뒤는 `ParsedDocument` 로 돌아가지 않는다. indexing 은 `list[Chunk]` 와
+그에 대응하는 벡터에서 출발한다.
 
 ### 순서 계약
 
@@ -42,15 +44,15 @@ splitter 가 그 사슬의 끝이다 — `ParsedDocument` 를 받아 `list[Chunk
 `offline_config` 픽스처가 맞아야 한다. `offline_config` 는 "키 없음 + 외부 호출 없음"을 보장하는
 픽스처이므로, 새 단계가 기본값으로 외부 호출을 하면 여기에 끄는 설정이 추가돼야 한다.
 
-### 외부 API 를 쓰는 단계 (embedding / indexing)
+### 외부 API 를 쓰는 단계 (indexing)
 
 **`contracts.md` 2·3절이 그대로 적용된다.** 이건 새로운 추측이 아니라 이미 선 규약이다.
 
 - 예외를 밖으로 던지지 않는다 → 빈 결과 + `ctx.warn()`
 - 카운터는 성공한 호출 뒤에 올린다. 호출당 비용이 보여야 한다
 - 호출 상한 (`max_vision_calls_per_doc` 에 해당하는 것)
-- 캐시 salt 에 **모델명·차원·버전** 을 넣는다. 임베딩 모델을 바꿨는데 옛 벡터가 나오면
-  검색이 조용히 망가진다
+- 캐시 salt 에 **결과를 바꾸는 설정을 전부** 넣는다. embedding 이 `embed:{model}:{dim}` 으로
+  그렇게 했다 (`references/embedding.md` 2절)
 - **`LoadContext`/`content_hash`/`ResultCache` 를 재사용·일반화했는지 vs 복제했는지 확인한다.**
   지금 이 셋은 `loader/content/base.py` 안에 있다 (`contracts.md` 3절)
 
@@ -68,11 +70,10 @@ splitter 가 그 사슬의 끝이다 — `ParsedDocument` 를 받아 `list[Chunk
   (`references/splitter.md`). 수치의 근거는 정답 질의 세트가 생겨야 나온다
 - **`document_id`** — 저장소에 없다. "재업로드 = 중복"인지가 indexing 결정이라 splitter 가
   앞질러 정하지 않고 `document_key` 를 인자로 열어뒀다
-- 임베딩 배치 크기와 재시도 정책
 - `frontend/` 는 비어 있다
 
 ## 승격 규칙
 
-해당 단계가 실제로 구현되면 이 섹션을 `references/embedding.md` / `indexing.md` 로
-승격하고, `SKILL.md` 라우팅 표에 해당 줄을 추가한다.
-그때 이 파일에서는 승격된 내용을 지운다. cleaner 가 그렇게 `references/cleaner.md` 로 갔다.
+해당 단계가 실제로 구현되면 이 섹션을 `references/indexing.md` / `retriever.md` 로 승격하고,
+`SKILL.md` 라우팅 표에 해당 줄을 추가한다. 그때 이 파일에서는 승격된 내용을 지운다.
+cleaner·splitter·embedding 이 그렇게 갔다.

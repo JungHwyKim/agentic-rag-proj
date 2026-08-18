@@ -122,7 +122,42 @@ class SplitterConfig(BaseSettings):
     include_heading_in_text: bool = True
 
 
-# 적재 파이프라인 전체 설정. 이후 embedding/indexing 설정이 여기 추가된다
+# 청크 텍스트를 벡터로 만들 때 쓰는 설정. 비용이 붙는 유일한 항목은 토큰이다
+class EmbeddingConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ContentRoutingConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정 객체가 독립이라
+    # 각자 읽는 것이다 — 임베딩만 끄고 Vision 은 살리는 식의 조합이 가능해야 한다
+    openai_api_key: str | None = None
+
+    # **임시값이고 실측 전이다.** 모델 간 한국어 검색 품질은 지금 못 잰다 — 정답 질의 세트가
+    # 없다(plan_log/평가-세트.md). 싼 쪽에서 시작하고 캐시 salt 로 교체 가능하게 뒀다
+    embedding_model: str = "text-embedding-3-small"
+
+    # None 이면 모델 기본 차원. text-embedding-3-* 는 이 값으로 차원을 줄일 수 있어
+    # "차원은 모델이 정한다"가 반만 맞다 — 설정값이므로 캐시 salt 에 함께 들어간다
+    embedding_dimensions: int | None = None
+
+    # 한 번에 보낼 텍스트 개수. 실측상 문서당 청크가 45~102개라 대부분 1회 호출로 끝난다.
+    # 최악의 청크가 1,201토큰이므로 100개를 묶어도 요청당 12만 토큰 — 요청 상한에 여유가 있다
+    embedding_batch_size: int = 100
+
+    # 문서 하나당 토큰 상한. **호출 수가 아니라 토큰인 이유**: 배치라 청크 500개가 5회 호출로
+    # 끝나 max_vision_calls_per_doc 를 그대로 베끼면 아무것도 안 막는다. 돈은 토큰이다.
+    # 실측 최대가 51,341토큰(학교기록물, 청크 102개)이라 그 약 4배로 잡았다. 그 위는 400청크급
+    # 문서인데, 이 코퍼스에서는 사고를 의심할 구간이다
+    max_embedding_tokens_per_doc: int = 200_000
+
+    # 같은 텍스트를 두 번 임베딩하지 않는다. 콘텐츠 캐시와 수명이 달라 디렉터리를 가른다
+    embedding_cache_enabled: bool = True
+    embedding_cache_dir: Path = PROJECT_ROOT / ".cache" / "embedding"
+
+
+# 적재 파이프라인 전체 설정. 이후 indexing 설정이 여기 추가된다
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -160,6 +195,13 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_splitter"):
             object.__setattr__(self, "_splitter", SplitterConfig())
         return self._splitter  # type: ignore[attr-defined]
+
+    # 임베딩 단계 설정. 같은 lazy 형태라 테스트에서 _embedding 으로 덮어쓸 수 있다
+    @property
+    def embedding(self) -> EmbeddingConfig:
+        if not hasattr(self, "_embedding"):
+            object.__setattr__(self, "_embedding", EmbeddingConfig())
+        return self._embedding  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다
