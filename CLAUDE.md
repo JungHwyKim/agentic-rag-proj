@@ -29,7 +29,12 @@ uv pip install -r requirements.txt
 
 ## 아키텍처
 
-진입점은 `rag_pipeline/ingestion/pipeline.py:ingest()` 하나이며, HTTP를 전혀 모른다. 스크립트나 노트북에서도 그대로 쓸 수 있다. `ingest()` 가 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다.
+진입점은 `rag_pipeline/ingestion/pipeline.py` 에 둘 있고 **둘 다 HTTP를 전혀 모른다.** 스크립트나 노트북에서도 그대로 쓸 수 있다.
+
+- `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
+- `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
+
+**둘을 합치지 않는 이유는 아래 "색인 단계" 절에 있다.** `ingest()` 의 반환이 곧 backend 의 `response_model` 이라는 것이 첫째이고, 기본 `pytest` 가 임베딩을 안 부르는 상태가 유지되어야 한다는 것이 둘째다.
 
 ### 로더의 2단계 라우팅
 
@@ -129,6 +134,42 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
   이 단계를 아예 안 불러서 "키 없으면 예외"가 기본 테스트를 안 깬다. **두 결정이 서로를
   지탱하므로 한쪽만 되돌리면 안 된다**
 
+### 색인 단계(indexing)
+
+벡터를 저장하고 찾는다. 진입점은 `indexing/__init__.py:get_store()` 하나이고, 파일 하나를
+끝까지 색인하는 전 구간 흐름은 `pipeline.py:index_document()` 다. 반환값이 아니라
+**부수 효과**가 목적인 첫 단계다.
+
+- **여기서도 예외를 던진다.** embedding 과 같은 이유이고 한 칸 밀린 같은 상황이다 —
+  저장 못 한 청크는 영원히 검색되지 않는데 아무도 모른다. `IndexingError` 하나로 받는다
+- **`document_id` 는 원본 파일명에서 뽑는다**(`records.py:document_id_for`). splitter·embedding
+  이 열어두고 기다린 미결이 여기서 닫혔다. 내용 해시로 잡으면 **문서를 고치는 순간 키가 바뀌어**
+  재색인이 옛 청크를 못 찾고 문서가 통째로 두 벌 남는다 — 막으려던 일이 그대로 일어난다.
+  `unicodedata.normalize("NFC", ...)` 가 필수다: 한글 파일명을 macOS 는 NFD, Windows 는 NFC 로
+  저장해 정규화 없이는 눈에 같은 이름이 다른 키가 된다
+- **`VectorRecord.id` 는 `chunk_id` 가 아니라 `uuid5(chunk_id)` 다.** qdrant 가 point ID 로
+  **unsigned int 또는 UUID 만** 받아 문자열은 `ValueError` 로 거절한다(실측). uuid5 는
+  결정론적이라 재색인이 갱신이 된다. `_NAMESPACE` 를 바꾸면 기존 색인 전체가 새 point 가 된다
+- **컬렉션 이름에 모델명과 차원이 들어간다**(`{collection_name}_{model}_{dim}`). 차원만
+  검사하면 `-small` 기본 1536 과 `dimensions=1536` 으로 줄인 `-large` 를 못 가른다 — 크기가
+  같고 벡터 공간이 달라 에러 없이 검색 품질만 나빠진다. 이름에 넣으면 혼입이 검사 통과 여부가
+  아니라 **구조적으로** 불가능해진다. `embed:{model}:{dim}` salt 와 같은 판단이다
+- **거리 척도는 Dot 고정이고 설정이 아니다.** 벡터가 단위 길이라는 실측이 근거다
+- **재색인은 `delete_by_document_id()` → `upsert()` 다.** upsert 만으로는 문서가
+  `A B C D E` 에서 `A B D` 로 줄었을 때 C·E 가 남아 계속 검색된다. **레코드가 0개여도
+  delete 는 부른다** — 빈 문서로 바뀐 경우를 건너뛰면 옛 청크가 통째로 남는다
+- **`store.close()` 가 선택이 아니다.** qdrant 로컬 파일 모드는 저장 디렉터리에 배타 잠금을
+  걸어, 안 닫으면 두 번째 색인이 `RuntimeError` 로 죽는다. `index_document()` 가
+  `try/finally` 로 푼다
+- **비용 카운터·호출 상한·캐시가 없고 그게 맞다.** 그 규약은 유료 외부 API 것이고 로컬 파일
+  모드에는 호출당 과금이 없다. `ResultCache` 도 안 쓴다 — qdrant 자체가 저장소라 캐시를
+  얹으면 진실이 두 곳이 된다. 관리형 qdrant 로 가면 셋 다 필요해진다
+- **`index_document()` 는 `ingest()` 를 안 바꾼다.** `ingest()` 반환이 곧 공개 응답
+  스키마인 것이 첫째 이유이고, **둘째가 더 중요하다** — 기본 `pytest` 가 `ingest()` 만 불러
+  임베딩이 호출되지 않으므로 "키 없으면 예외"가 테스트를 안 깬다. 합치면 그 지탱이 무너진다
+- **`search(filters=...)` 와 backend 색인 엔드포인트는 일부러 없다.** 필터로 쓸 축이
+  `document_id` 뿐이고 `page` 는 못 쓴다(아래 HWPX 쪽 수 함정). 근거는 `plan_log/indexing.md`
+
 ### backend ↔ rag_pipeline 분리
 
 - `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
@@ -146,10 +187,10 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 테스트 패턴
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
-- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다
+- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다
 - `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
-- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 넷이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
+- 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 다섯이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율), `indexing/test_indexing_real.py`(청크 수백 개에서의 자리 밀림·실제 한글 파일명). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 - **테스트 파일 이름은 저장소 전체에서 유일해야 한다.** `tests/` 에 `__init__.py` 가 없어 basename 이 곧 모듈명이라, 같은 이름이 두 폴더에 있으면 pytest 가 collection error 로 죽는다. 영역 테스트만 돌릴 때는 안 나고 전체에서만 난다. 그래서 실파일 테스트가 `test_hwpx_real.py` · `test_splitter_real.py` 처럼 영역 이름을 달고 있다
 
 ## 알고 있어야 할 함정
@@ -170,6 +211,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
+- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. `.qdrant/` 는 `.gitignore` 에 있다
 
 ## 새 포맷 추가
 
@@ -185,7 +227,7 @@ cleaner가 실제로 밟은 경로다.
 1. `rag_pipeline/ingestion/<stage>/` 에 모듈을 만든다. 공개 진입 함수는 하나이고 HTTP를 모른다
 2. `config.py` 에 `<Stage>Config` 를 만들고 `IngestConfig` 에 lazy 프로퍼티로 붙인다
 3. `.env.example` 에 밖으로 열 설정을 추가한다
-4. `pipeline.py:ingest()` 의 예약 주석 자리를 실제 호출로 바꾼다 — **다만 그 단계의 출력을 쓸 곳이 있을 때만이다.** splitter 와 embedding 이 이 칸을 일부러 비워뒀다(위 두 절). 소비자 없이 끼우면 업로드마다 결과를 만들어 버리는 셈이고, `ingest()` 의 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다
+4. 합성 지점을 정한다. **`ingest()` 에 끼우는 것이 기본값이 아니다** — 그 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다. splitter·embedding·indexing 셋 다 `ingest()` 밖에 있고, 대신 `pipeline.py:index_document()` 라는 **두 번째 진입점**을 만들어 이었다. 새 단계도 소비자가 어디에 있는지부터 본다
 5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다. **`ingest()` 에 안 끼운 단계도 마찬가지다** — 설정 객체가 `.env` 를 직접 읽으므로 안 지우면 개발자 머신의 실키가 픽스처에 실린다
 6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 

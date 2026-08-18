@@ -147,6 +147,19 @@ def test_unmapped_by_design_entries_exist():
         assert (PROJECT_ROOT / item).exists(), f"UNMAPPED_BY_DESIGN 에 없는 경로가 있다: {item}"
 
 
+# ---- 종료코드 판정 ----
+
+
+# pytest 종료코드 5 는 "수집된 테스트가 없음"이지 실패가 아니다. 실패로 보면
+# integration 전용 파일을 고칠 때마다 훅이 막는다 — addopts 가 전부 deselect 해서 5가 난다
+def test_no_tests_collected_is_not_a_failure():
+    assert 5 in auto_test_check._OK_RETURNCODES
+    assert 0 in auto_test_check._OK_RETURNCODES
+    # 진짜 실패(1)와 사용 오류(4)는 통과시키면 안 된다
+    assert 1 not in auto_test_check._OK_RETURNCODES
+    assert 4 not in auto_test_check._OK_RETURNCODES
+
+
 # ---- 루프 방지 ----
 
 

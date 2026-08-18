@@ -47,6 +47,12 @@ MAX_OUTPUT_CHARS = 4000
 SCOPED_TIMEOUT_SEC = 90
 FULL_TIMEOUT_SEC = 540
 
+# 통과로 볼 pytest 종료코드. 0 은 전부 성공이고 **5 는 "수집된 테스트가 없음"** 이다.
+# 5 를 실패로 보면 integration 전용 파일(test_*_integration.py)을 고칠 때마다 훅이 막는다 —
+# addopts = "-m 'not integration'" 이 그 파일의 테스트를 전부 deselect 해서 5가 나온다.
+# 돌 것이 없는 것은 실패가 아니고, 진짜 실패는 1로 온다
+_OK_RETURNCODES = (0, 5)
+
 # Stop 게이트가 세션당 한 번만 막게 하는 마커 이름
 GATE_NS = "claude_autotest_gate"
 
@@ -63,6 +69,7 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/cleaner/", "tests/ingestion/cleaner"),
     ("rag_pipeline/ingestion/splitter/", "tests/ingestion/splitter"),
     ("rag_pipeline/ingestion/embedding/", "tests/ingestion/embedding"),
+    ("rag_pipeline/ingestion/indexing/", "tests/ingestion/indexing"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
@@ -139,7 +146,7 @@ def _run_pytest(args: list[str], *, timeout: int) -> tuple[bool, str]:
     output = (proc.stdout + proc.stderr).strip()
     if len(output) > MAX_OUTPUT_CHARS:
         output = output[:MAX_OUTPUT_CHARS] + "\n... (출력 생략)"
-    return proc.returncode == 0, output
+    return proc.returncode in _OK_RETURNCODES, output
 
 
 # PostToolUse — 고친 파일의 영역 테스트만 돌린다. 사용자를 막지 않고 모델에게 되먹인다

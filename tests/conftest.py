@@ -18,7 +18,12 @@ from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.util import Inches
 
-from rag_pipeline.config import ContentRoutingConfig, EmbeddingConfig, IngestConfig
+from rag_pipeline.config import (
+    ContentRoutingConfig,
+    EmbeddingConfig,
+    IndexingConfig,
+    IngestConfig,
+)
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
 _KOREAN_FONTS = [
@@ -41,7 +46,7 @@ def _korean_font(size: int = 48) -> ImageFont.FreeTypeFont | None:
 
 # 외부 API를 절대 호출하지 않는 설정. 단위 테스트 기본값
 @pytest.fixture
-def offline_config() -> IngestConfig:
+def offline_config(tmp_path: Path) -> IngestConfig:
     config = IngestConfig()
     object.__setattr__(
         config,
@@ -61,6 +66,15 @@ def offline_config() -> IngestConfig:
         config,
         "_embedding",
         EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
+    )
+    # 색인도 같은 이유로 덮어쓴다. 여기서 막는 것은 키가 아니라 **저장 위치**다 —
+    # IndexingConfig() 의 기본 qdrant_path 가 PROJECT_ROOT/.qdrant 라, 안 덮으면 테스트가
+    # 개발자의 실제 색인을 건드리고 테스트끼리도 서로의 상태를 물려받는다.
+    # qdrant 로컬 모드는 이 경로에 배타 잠금을 걸어 병렬 실행도 막힌다
+    object.__setattr__(
+        config,
+        "_indexing",
+        IndexingConfig(qdrant_path=tmp_path / "qdrant"),
     )
     return config
 

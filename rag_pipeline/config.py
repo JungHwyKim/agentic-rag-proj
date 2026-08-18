@@ -157,7 +157,28 @@ class EmbeddingConfig(BaseSettings):
     embedding_cache_dir: Path = PROJECT_ROOT / ".cache" / "embedding"
 
 
-# 적재 파이프라인 전체 설정. 이후 indexing 설정이 여기 추가된다
+# 벡터를 어디에 저장하고 어떤 컬렉션에 넣을지 결정하는 설정
+class IndexingConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # qdrant 로컬 파일 모드의 저장 경로. **서버가 아니라 파일인 이유**: 기본 pytest 가 키도
+    # 서버도 없이 전부 통과해야 한다는 규약을 도커 전제로는 지킬 수 없다.
+    # 테스트는 conftest 의 offline_config 가 tmp_path 로 덮어쓴다
+    qdrant_path: Path = PROJECT_ROOT / ".qdrant"
+
+    # 컬렉션 이름의 앞부분. 실제 이름은 여기에 모델·차원을 덧붙여 파생한다 —
+    # 근거는 ingestion/indexing/qdrant_store.py 의 collection_name_for()
+    collection_name: str = "documents"
+
+    # 한 번에 보낼 point 수. 문서당 청크가 45~102개(embedding 실측)라 대부분 1회로 끝난다
+    upsert_batch_size: int = 128
+
+
+# 적재 파이프라인 전체 설정
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -202,6 +223,13 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_embedding"):
             object.__setattr__(self, "_embedding", EmbeddingConfig())
         return self._embedding  # type: ignore[attr-defined]
+
+    # 색인 단계 설정. 같은 lazy 형태라 테스트에서 _indexing 으로 덮어쓸 수 있다
+    @property
+    def indexing(self) -> IndexingConfig:
+        if not hasattr(self, "_indexing"):
+            object.__setattr__(self, "_indexing", IndexingConfig())
+        return self._indexing  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

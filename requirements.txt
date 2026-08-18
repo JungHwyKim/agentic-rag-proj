@@ -28,6 +28,11 @@ openai                    # Vision: gpt-4.1-mini + 임베딩: text-embedding-3-s
 # 상한을 호출 수로 두면 배치라 아무것도 못 막아서, 토큰으로 세려면 이게 필요하다
 tiktoken
 
+# ---- 색인 (Vector DB) ----
+# 로컬 파일 모드로 쓴다(서버·도커 없음). 그래야 기본 pytest 가 키도 서버도 없이 통과한다 —
+# 이 단계가 qdrant 를 고른 이유의 절반이 그것이다. 서버 모드로 갈 때 설정을 함께 더한다
+qdrant-client
+
 # ---- 테스트 ----
 pytest
 pytest-asyncio
@@ -38,4 +43,4 @@ httpx                     # FastAPI TestClient
 ruff
 
 # ---- 추후 단계 - 지금은 설치하지 않음 ----
-# qdrant-client           # 로컬 파일 모드
+# (없음)
