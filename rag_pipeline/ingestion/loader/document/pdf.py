@@ -32,6 +32,10 @@ _MERGE_MAX_GAP = 12.0
 # 좌우 끝: 같은 표에서 잘린 조각은 x 가 소수점까지 같다. 반올림 오차만 흡수한다
 _MERGE_X_TOLERANCE = 2.0
 
+# 격자 칸의 중심점이 어느 칸에 덮였는지 볼 때 쓰는 여유. 테두리에 정확히 걸치는 경우만
+# 흡수하면 되므로 작다 — 크게 잡으면 이웃 칸까지 덮은 것으로 오인한다
+_GRID_EPS = 0.5
+
 # (bbox, rows) — 표 하나. 되붙이기 전후로 같은 모양을 쓴다
 _Table = tuple[tuple[float, ...], list[list[str]]]
 
@@ -80,31 +84,42 @@ def _fill_merged_cells(table: Any) -> list[list[str]]:
     if not rows or len(rows) != len(values):
         return values
 
-    # 열의 왼쪽 끝. 그 열에 실제 칸이 있는 아무 행에서 얻는다
-    col_x0: dict[int, float] = {}
-    for row in rows:
-        for index, cell in enumerate(row.cells):
-            if cell is not None and index not in col_x0:
-                col_x0[index] = float(cell[0])
+    anchors = [
+        (r, c, cell)
+        for r, row in enumerate(rows)
+        for c, cell in enumerate(row.cells)
+        if cell is not None
+    ]
+    if not anchors:
+        return values
+
+    # 격자 경계는 **모든 칸 모서리의 합집합**에서 얻는다. 그 행에 있는 칸들만 보면, 여러 격자
+    # 행에 걸친 칸 때문에 행의 세로 범위가 부풀어 중심점이 엉뚱한 행으로 간다(실측으로 그렇게
+    # 재다가 멀쩡한 채움 80칸을 오류로 오판했다)
+    xs = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[0], cell[2])})
+    ys = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[1], cell[3])})
+    if len(rows) != len(ys) - 1:
+        return values
 
     for r, row in enumerate(rows):
+        if len(row.cells) != len(xs) - 1:
+            continue
+        cy = (ys[r] + ys[r + 1]) / 2
         for c, cell in enumerate(row.cells):
             if cell is not None or c >= len(values[r]) or values[r][c]:
                 continue
 
-            x0 = col_x0.get(c)
-            if x0 is not None and any(
-                row.cells[left] is not None
-                and float(row.cells[left][2]) > x0 + _MERGE_X_TOLERANCE
-                for left in range(c - 1, -1, -1)
-            ):
-                continue  # 왼쪽 칸이 여기까지 뻗었다 — 가로 연장이라 비워 둔다
-
-            for above in range(r - 1, -1, -1):
-                if c < len(rows[above].cells) and rows[above].cells[c] is not None:
-                    if c < len(values[above]):
-                        values[r][c] = values[above][c]
-                    break
+            cx = (xs[c] + xs[c + 1]) / 2
+            for anchor_row, anchor_col, rect in anchors:
+                if not (rect[0] - _GRID_EPS <= cx <= rect[2] + _GRID_EPS):
+                    continue
+                if not (rect[1] - _GRID_EPS <= cy <= rect[3] + _GRID_EPS):
+                    continue
+                # 덮은 칸의 **왼쪽 열**이고 그 칸이 위에 있을 때만 세로 연장이다.
+                # 열이 다르면 가로 연장이므로 비워 둔다
+                if anchor_col == c and anchor_row < r and anchor_col < len(values[anchor_row]):
+                    values[r][c] = values[anchor_row][anchor_col]
+                break
 
     return values
 
