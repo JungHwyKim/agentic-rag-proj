@@ -17,7 +17,8 @@
     `claude_plan_log_written` 마커를 만든다 — "이번 세션에 실제로 기록했다"는 표시다.
 
   Stop
-    설계 논의 표시가 있는데 기록 표시가 없으면 종료코드 2 로 막는다.
+    설계 논의 표시가 있는데 기록이 없으면 종료코드 2 로 막는다. **기록 여부는 두 경로로
+    본다** — 위의 마커, 그리고 세션 시작 이후 `plan_log/` 아래 파일의 mtime 이다.
 
 Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립트로 확인했다 —
 `{"name":"Skill","input":{"skill":"rag-code-review"}}` 형태로 남는다. 즉 tool_name 은
@@ -32,6 +33,14 @@ Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립�
 
 표시를 모델이 직접 파일로 쓰게 하지 않고 훅으로 만드는 이유는 이 장치 전체의 전제와
 같다. 모델에게 시키는 일은 지켜질 때도 있고 아닐 때도 있지만, 훅은 하네스가 돌린다.
+
+**마커만으로는 부족하다는 것이 2026-08-19 에 드러났다.** 기록 마커는 PostToolUse 의
+`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있다. 그래서 `plan_log/` 를
+Bash(python heredoc)로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도 막혔다.
+같은 전제가 여기에도 걸린다 — "기록은 Write/Edit 로 쓰라"고 지시해서 고칠 수는 없다.
+그래서 도구가 아니라 **파일이 실제로 바뀌었는가**를 함께 본다(`_hookutil.wrote_under`).
+비교 기준이 세션 시작 시각이라, git 판정이 못 갈랐던 "지난 세션의 미커밋 기록"은 여전히
+안 통과한다.
 
 무한 루프 방지·탈출구·실패 시 통과 규약은 `_hookutil` 의 설명과 같다. 판단이 서지
 않으면 막지 않는다.
@@ -170,13 +179,30 @@ def _handle_post_tool_use(payload: dict, session_id: str) -> None:
         _hookutil.claim_session(WRITTEN_NS, session_id)
 
 
+# 이번 세션에 기록을 남겼나. 마커가 주 경로이고 mtime 이 도구를 안 가리는 보조 경로다.
+#
+# 마커만 보면 Write/Edit 로 쓴 기록만 세고 **Bash 로 쓴 기록은 통째로 안 보인다.**
+# 그러면 기록을 다 남긴 세션이 막히는데, 그 오탐의 값은 단순한 짜증이 아니다 —
+# 일을 하고도 막히는 검사는 SKIP_PLANLOG=1 을 습관으로 만들어 검사 자체를 죽인다
+def _recorded_this_session(session_id: str, *, trust_mtime: bool) -> bool:
+    if _hookutil.is_marked(WRITTEN_NS, session_id):
+        return True
+
+    if not trust_mtime:
+        return False
+
+    # 판단이 안 서면(None) 마커만 보던 종전 동작으로 돌아간다. 어차피 세션당 한 번만
+    # 막으므로 사용자가 갇히지는 않는다
+    return _hookutil.wrote_under(LOG_PREFIX, session_id) is True
+
+
 # 표시가 있는데 이번 세션에 기록을 안 썼으면 막는다
-def _handle_stop(session_id: str) -> None:
+def _handle_stop(session_id: str, *, trust_mtime: bool) -> None:
     if not _hookutil.is_marked(ACTIVE_NS, session_id):
         # 설계 논의 세션이 아니다
         return
 
-    if _hookutil.is_marked(WRITTEN_NS, session_id):
+    if _recorded_this_session(session_id, trust_mtime=trust_mtime):
         return
 
     if not _hookutil.claim_session(BLOCKED_NS, session_id):
@@ -191,16 +217,22 @@ def main() -> None:
     if payload is None:
         return
 
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        # 세션을 못 가리면 표시도 "한 번만 막기"도 성립하지 않는다
+        return
+
+    # 세션 기준 시각을 남긴다. 이 훅은 UserPromptSubmit 에 matcher 없이 걸려 있어
+    # 세션에서 제일 먼저 도는 훅이고, 그래서 이 값이 곧 세션 시작 시각이 된다.
+    # **SKIP_PLANLOG 보다 먼저 찍는 이유**: 같은 기준을 task_log_check 도 쓰므로
+    # 한쪽 검사를 껐다고 다른 쪽 기준까지 사라지면 안 된다
+    baseline_is_fresh = _hookutil.mark_session_start(session_id)
+
     # 탈출구: 사용자가 의도적으로 기록을 건너뛰고 싶을 때
     if os.environ.get("SKIP_PLANLOG"):
         return
 
     if payload.get("stop_hook_active"):
-        return
-
-    session_id = str(payload.get("session_id") or "").strip()
-    if not session_id:
-        # 세션을 못 가리면 표시도 "한 번만 막기"도 성립하지 않는다
         return
 
     event = str(payload.get("hook_event_name") or "")
@@ -209,7 +241,7 @@ def main() -> None:
     elif event == "PostToolUse":
         _handle_post_tool_use(payload, session_id)
     elif event == "Stop":
-        _handle_stop(session_id)
+        _handle_stop(session_id, trust_mtime=not baseline_is_fresh)
 
 
 if __name__ == "__main__":

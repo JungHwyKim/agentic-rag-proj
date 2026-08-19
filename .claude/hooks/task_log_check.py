@@ -18,6 +18,16 @@ CLAUDE.md 에 "기록을 남겨라"라고 적는 방법과 계층이 다르다. 
 2026-08-17 에 발견했다. 그래서 PostToolUse 로 `task_log/` 쓰기를 직접 잡는다 —
 `plan_log_check.py` 가 Skill 호출을 잡는 것과 같은 수법이다.
 
+**그 마커만으로는 부족하다는 것이 2026-08-19 에 드러났다.** 마커는 PostToolUse 의
+`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있어, `task_log/` 를
+Bash 로 쓴 세션은 기록을 다 남기고도 안 잡힌다. "기록은 Write/Edit 로 쓰라"는 지시로
+고칠 수 없는 것은 위 문단과 같은 이유다. 그래서 도구가 아니라 **파일이 실제로 바뀌었는가**를
+함께 본다(`_hookutil.wrote_under`). 비교 기준이 세션 시작 시각이라 git 판정이 못 갈랐던
+"지난 세션의 미커밋 기록"은 여전히 안 통과한다 — 위 문단의 교훈이 그대로 지켜진다.
+
+일을 하고도 막히는 오탐은 단순한 짜증이 아니다. `SKIP_TASKLOG=1` 을 습관으로 만들어
+검사 자체를 죽이므로, 무력화의 한 형태다.
+
 무엇이 바뀌었는지는 여전히 `git status` 로 본다. 이미 커밋했으면 clean 이라 안 막고,
 코드를 읽기만 한 세션도 안 막는다.
 
@@ -105,14 +115,31 @@ def _handle_post_tool_use(payload: dict, session_id: str) -> None:
     _hookutil.claim_session(WRITTEN_NS, session_id)
 
 
+# 이번 세션에 기록을 남겼나. 마커가 주 경로이고 mtime 이 도구를 안 가리는 보조 경로다.
+#
+# 마커만 보면 Write/Edit 로 쓴 기록만 세고 **Bash 로 쓴 기록은 통째로 안 보인다.**
+# 그러면 기록을 다 남긴 세션이 막히고, 일을 하고도 막히는 검사는 SKIP_TASKLOG=1 을
+# 습관으로 만들어 검사 자체를 죽인다
+def _recorded_this_session(session_id: str, *, trust_mtime: bool) -> bool:
+    if _hookutil.is_marked(WRITTEN_NS, session_id):
+        return True
+
+    if not trust_mtime:
+        return False
+
+    # 판단이 안 서면(None) 마커만 보던 종전 동작으로 돌아간다. 세션당 한 번만 막으므로
+    # 사용자가 갇히지는 않는다
+    return _hookutil.wrote_under(LOG_PREFIX, session_id) is True
+
+
 # 기록 대상을 고쳤는데 이번 세션에 기록을 안 썼으면 막는다
-def _handle_stop(payload: dict, session_id: str) -> None:
+def _handle_stop(payload: dict, session_id: str, *, trust_mtime: bool) -> None:
     # 공식 문서의 Stop 입력 필드 목록에는 없지만, 들어온다면 존중한다.
     # 마커가 주 안전장치이고 이건 덤이다
     if payload.get("stop_hook_active"):
         return
 
-    if _hookutil.is_marked(WRITTEN_NS, session_id):
+    if _recorded_this_session(session_id, trust_mtime=trust_mtime):
         return
 
     paths = _hookutil.changed_paths()
@@ -135,20 +162,25 @@ def main() -> None:
     if payload is None:
         return
 
-    # 탈출구: 사용자가 의도적으로 기록을 건너뛰고 싶을 때
-    if os.environ.get("SKIP_TASKLOG"):
-        return
-
     session_id = str(payload.get("session_id") or "").strip()
     if not session_id:
         # 세션을 못 가리면 표시도 "한 번만 막기"도 성립하지 않는다 = 루프 위험
+        return
+
+    # 세션 기준 시각. 보통은 plan_log_check 가 UserPromptSubmit 에서 이미 찍어둔 것을
+    # 그대로 읽는다 — 이 훅은 Write/Edit 와 Stop 에만 걸려 있어 Bash 만 쓴 세션에서는
+    # Stop 이 첫 이벤트라, 여기서 처음 찍으면 기준으로 쓸 수 없기 때문이다
+    baseline_is_fresh = _hookutil.mark_session_start(session_id)
+
+    # 탈출구: 사용자가 의도적으로 기록을 건너뛰고 싶을 때
+    if os.environ.get("SKIP_TASKLOG"):
         return
 
     event = str(payload.get("hook_event_name") or "")
     if event == "PostToolUse":
         _handle_post_tool_use(payload, session_id)
     elif event == "Stop":
-        _handle_stop(payload, session_id)
+        _handle_stop(payload, session_id, trust_mtime=not baseline_is_fresh)
 
 
 if __name__ == "__main__":

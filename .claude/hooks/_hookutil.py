@@ -141,6 +141,64 @@ def is_marked(namespace: str, session_id: str) -> bool:
     return marker is not None and marker.exists()
 
 
+# 세션이 시작된 시각을 남기는 마커. 그 세션에서 처음 도는 훅이 찍고 나머지는 읽기만 한다.
+#
+# **이것이 필요한 이유는 "누가 썼는가"로 판정하면 구멍이 난다는 것이다.** 기록 훅들은
+# "이번 세션에 기록했는가"를 PostToolUse 의 `tool_input.file_path` 로만 봤는데, 그 필드는
+# Write/Edit 에만 있다. Bash 로 쓴 기록은 **아무리 잘 써도 안 보인다** — 2026-08-19 에
+# plan_log/ 를 python heredoc 으로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도
+# 막혔다. 도구를 Write/Edit 로 쓰라고 지시해서 고칠 수는 없다. 모델에게 시키는 일은
+# 지켜질 때도 있고 아닐 때도 있다는 것이 이 장치 전체의 전제이기 때문이다.
+#
+# 그래서 **도구가 아니라 파일이 실제로 바뀌었는가**를 본다. 그러려면 "언제부터"가 필요하고,
+# 그 기준이 이 마커다. 어느 훅이 먼저 돌든 상관없도록 네임스페이스를 공유한다
+SESSION_START_NS = "claude_session_started"
+
+
+# 세션 시작 표시를 남긴다. 이번 호출이 처음 만든 것이면 True.
+#
+# True 면 **기준 시각으로 쓸 수 없다** — 방금 찍었으니 모든 파일이 그보다 옛것이 된다.
+# 부르는 쪽이 이 값을 보고 mtime 판정을 건너뛴다
+def mark_session_start(session_id: str) -> bool:
+    return claim_session(SESSION_START_NS, session_id)
+
+
+# 세션 시작 시각(epoch). 표시가 없거나 못 읽으면 None
+def session_started_at(session_id: str) -> float | None:
+    marker = _marker_path(SESSION_START_NS, session_id)
+    if marker is None:
+        return None
+    try:
+        return marker.stat().st_mtime
+    except OSError:
+        return None
+
+
+# 세션이 시작된 뒤 <prefix> 아래 파일이 하나라도 새로 쓰였나. 판단이 안 서면 None.
+#
+# **`changed_paths()`(git)로 하지 않는 이유가 이 함수의 요점이다.** git status 는 세션을
+# 구분하지 못해서, 지난 세션이 남긴 미커밋 기록이 이번 세션을 그냥 통과시킨다 —
+# 2026-08-17 에 실제로 그 상태였고(미커밋 3건), 기록이 밀릴수록 검사가 더 헐거워지는
+# 정반대 방향이었다. 세션 시작 시각과 비교하면 그 구멍이 안 생긴다. 커밋은 작업트리의
+# mtime 을 건드리지 않으므로 방금 커밋한 기록도 그대로 잡힌다
+def wrote_under(prefix: str, session_id: str) -> bool | None:
+    started = session_started_at(session_id)
+    if started is None:
+        return None
+
+    root = PROJECT_ROOT / prefix
+    if not root.is_dir():
+        return False
+
+    try:
+        for path in root.rglob("*"):
+            if path.is_file() and path.stat().st_mtime > started:
+                return True
+    except OSError:
+        return None
+    return False
+
+
 # 종료를 막고 사유를 모델에게 넘긴다. 이 함수는 돌아오지 않는다
 def block(reason: str) -> None:
     # Windows 콘솔 기본 인코딩(cp949)으로는 한국어 사유를 못 내보내 UnicodeEncodeError 로
