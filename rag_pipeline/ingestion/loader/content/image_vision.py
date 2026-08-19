@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from typing import Any
 
 from PIL import Image
@@ -86,7 +87,38 @@ def _make_client(api_key: str | None) -> Any | None:
     return OpenAI(api_key=api_key)
 
 
-# 모델 응답 문자열에서 JSON을 꺼낸다. 형식이 어긋나면 전체를 설명으로 취급
+# 응답이 잘렸을 때 값만 건져내기 위한 패턴. 두 벌이 필요하다 —
+# 첫째는 닫는 따옴표까지 온전한 값, 둘째는 값 도중에 끊긴 것(잘림의 마지막 필드)
+def _field_patterns(key: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    body = r'((?:[^"\\]|\\.)*)'
+    return (
+        re.compile(rf'"{key}"\s*:\s*"{body}"'),
+        re.compile(rf'"{key}"\s*:\s*"{body}$'),
+    )
+
+
+# JSON 문자열 이스케이프를 푼다. 끝이 잘려 못 풀면 최소한만 손으로 바꾼다
+def _unescape(raw: str) -> str:
+    try:
+        return json.loads(f'"{raw}"')
+    except json.JSONDecodeError:
+        return raw.replace(r"\n", "\n").replace(r"\"", '"').replace(r"\\", "\\")
+
+
+# 깨진 응답에서 한 필드의 값만 뽑는다. 없으면 빈 문자열
+def _salvage_field(content: str, key: str) -> str:
+    whole, cut = _field_patterns(key)
+    match = whole.search(content) or cut.search(content)
+    return _unescape(match.group(1)).strip() if match else ""
+
+
+# 모델 응답 문자열에서 JSON을 꺼낸다.
+#
+# **파싱 실패 시 전체를 설명으로 쓰면 안 된다.** 예전에는 그렇게 했는데, 응답이
+# max_completion_tokens 에서 잘리면 JSON 이 미완성이라 파싱이 깨지고 `{`·`"description":`
+# 같은 스캐폴딩과 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 판에서 6개 청크,
+# 하나가 3,593자). 그래서 값만 건져내고, 그것도 못하면 스캐폴딩을 걷어낸 나머지를 쓴다.
+# **어떤 경로로도 `{"description":` 이 본문에 남지 않는 것이 이 함수의 계약이다.**
 def _parse_response(content: str) -> dict[str, Any]:
     try:
         parsed = json.loads(content)
@@ -94,7 +126,15 @@ def _parse_response(content: str) -> dict[str, Any]:
             return parsed
     except json.JSONDecodeError:
         pass
-    return {"description": content.strip(), "extracted_text": "", "data_table": None}
+
+    description = _salvage_field(content, "description")
+    extracted = _salvage_field(content, "extracted_text")
+    if description or extracted:
+        return {"description": description, "extracted_text": extracted, "data_table": None}
+
+    # 필드 이름조차 못 찾았다. JSON 흔적을 걷어낸 나머지라도 살린다
+    stripped = re.sub(r'^\s*\{|\}\s*$|"[a-z_]+"\s*:\s*', "", content).strip().strip('",')
+    return {"description": stripped, "extracted_text": "", "data_table": None}
 
 
 # Vision 모델을 호출해 이미지 설명을 얻는다. 실패하면 None (라우터가 OCR로 폴백)
@@ -142,13 +182,21 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
                 }
             ],
             response_format={"type": "json_object"},
-            max_completion_tokens=1500,
+            # 1500 은 실제로 모자랐다 — 표가 촘촘한 화면 캡처에서 응답이 잘려 JSON 이
+            # 미완성으로 돌아왔다(실측 6건). 분포에서 뽑은 값이 아니라 **관측 기반 임시값**이다
+            max_completion_tokens=4000,
         )
     except Exception as exc:  # noqa: BLE001 - 외부 API 장애가 적재를 멈추면 안 된다
         ctx.warn(f"Vision 호출 실패로 OCR로 폴백했습니다: {type(exc).__name__}")
         return None
 
-    content = (response.choices[0].message.content or "").strip()
+    choice = response.choices[0]
+    # 잘린 응답은 파싱이 깨져 본문이 오염된다. 건져내기는 아래가 하지만, 잘렸다는 사실
+    # 자체는 남겨야 한다 — 지금까지 조용히 오염돼 아무도 몰랐다
+    if getattr(choice, "finish_reason", None) == "length":
+        ctx.warn("Vision 응답이 길이 상한에서 잘려 일부만 반영했습니다.")
+
+    content = (choice.message.content or "").strip()
     result = _parse_response(content)
     ctx.vision_calls += 1
     cache.set(key, result)

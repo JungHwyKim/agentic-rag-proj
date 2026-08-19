@@ -114,3 +114,56 @@ def test_undecodable_image_falls_back_quietly(mocker) -> None:
     create.assert_not_called()
     assert any("폴백" in warning for warning in ctx.warnings)
     assert ctx.vision_calls == 0
+
+
+# --- 잘린 응답 ---
+#
+# max_completion_tokens 에서 응답이 잘리면 JSON 이 미완성이라 파싱이 깨진다. 예전 폴백은
+# **문자열 전체를 description 으로** 썼고, 그래서 `{`·`"description":` 같은 스캐폴딩과
+# 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 판에서 6개 청크,
+# 하나가 3,593자). 값만 건져내는 것이 이 절의 계약이다.
+
+_TRUNCATED = (
+    '{\n  "description": "이 이미지는 SiardGui 창을 보여준다.",\n'
+    '  "extracted_text": "File Edit Tools\\nrow000 (50)\\nrow050'
+)
+
+
+# 잘린 JSON 에서 값만 건져내고 스캐폴딩은 남기지 않는다
+def test_truncated_json_is_salvaged() -> None:
+    result = image_vision._parse_response(_TRUNCATED)
+
+    assert result["description"] == "이 이미지는 SiardGui 창을 보여준다."
+    assert result["extracted_text"].startswith("File Edit Tools")
+    # 이스케이프된 개행이 리터럴(백슬래시+n)로 남으면 안 된다. 실제 개행이어야 한다
+    assert "\\n" not in result["extracted_text"]
+    assert "\n" in result["extracted_text"]
+
+
+# 어떤 경로로도 본문에 JSON 스캐폴딩이 남지 않는다
+def test_no_json_scaffolding_reaches_text(mocker) -> None:
+    create = _capturing_client(mocker)
+    create.return_value = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=_TRUNCATED), finish_reason="length"
+            )
+        ]
+    )
+    ctx = _ctx()
+
+    elements = image_vision.handle(_region(_image("PNG")), ctx)
+
+    text = elements[0].text
+    assert '"description"' not in text
+    assert not text.lstrip().startswith("{")
+    # 잘렸다는 사실은 조용히 넘어가지 않는다
+    assert any("잘려" in warning for warning in ctx.warnings)
+
+
+# 필드 이름조차 못 찾으면 JSON 흔적을 걷어낸 나머지라도 쓴다
+def test_unparseable_content_drops_braces() -> None:
+    result = image_vision._parse_response("{ 그냥 깨진 문자열 }")
+
+    assert "{" not in result["description"]
+    assert "그냥 깨진 문자열" in result["description"]

@@ -38,16 +38,70 @@ def _usable_rows(raw: Any) -> list[list[str]] | None:
     return rows
 
 
+# 헤더가 가로로 병합돼 있으면 하위 열이 **이름을 잃는다.** 로더는 "가로 연장은 빈 칸으로
+# 둔다"는 규칙으로 그렇게 두는데, 그 규칙의 근거는 *splitter 가 표를 행 단위로만 쪼갠다*
+# 는 것이라 **데이터 행에만 성립한다.** 헤더 행에서는 옆으로 이어진 이름이 곧 그 열의 이름이다.
+#
+# 실측: 시행령 24쪽 67행 표는 `항목` 이 1~3열에 걸쳐 병합돼 이름 있는 열이 0·1·4·5뿐이었고,
+# 그 헤더가 5조각 전부에 되풀이됐다. 3열은 4/5 조각에서 통째로 비어 파이프만 실려 나갔다.
+#
+# **순서가 중요하다 — 버릴 열을 먼저 고른다.** 채우기를 먼저 하면 헤더가 안 비어 있게 되어
+# 아무 열도 못 버린다.
+#
+# 판정은 **표 전체 기준**이다. 조각마다 따로 버리면 같은 표의 조각들이 서로 다른 열 구성을
+# 갖게 되는데, `test_splitter_real.py:test_split_table_pieces_keep_header` 가 **모든 조각의
+# 헤더가 같아야 한다**를 못 박고 있고 그 계약이 옳다 — 조각 둘이 나란히 검색됐을 때 열이
+# 서로 다르면 같은 표로 안 읽힌다. 그래서 어느 조각에서는 비어 보이는 열이 남을 수 있다
+def normalize_header(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+
+    width = max(len(row) for row in rows)
+    padded = [row + [""] * (width - len(row)) for row in rows]
+    header, *body = padded
+
+    # 1) 원본 헤더가 비어 있고 이 조각의 모든 행에서도 빈 열만 버린다
+    keep = [
+        index
+        for index in range(width)
+        if header[index].strip() or any(row[index].strip() for row in body)
+    ]
+    if not keep:
+        return rows
+
+    trimmed = [[row[index] for index in keep] for row in padded]
+
+    # 2) 남은 헤더의 빈 칸을 왼쪽 이름으로 채운다. 병합된 이름이 그 열의 이름이다
+    filled = list(trimmed[0])
+    last = ""
+    for index, name in enumerate(filled):
+        if name.strip():
+            last = name
+        elif last:
+            filled[index] = last
+    trimmed[0] = filled
+
+    return trimmed
+
+
 # 표를 상한 이하 조각들로 나눈다. 각 조각은 (마크다운, 그 조각의 행 배열)이다.
 # 쪼갤 필요가 없으면 조각 하나, 원본 배열을 못 쓰면 None
 def split_table(
     markdown: str, raw_rows: Any, *, max_chars: int
 ) -> list[tuple[str, list[list[str]]]] | None:
-    if len(markdown) <= max_chars:
-        rows = _usable_rows(raw_rows)
-        return [(markdown, rows if rows is not None else [])]
+    raw = _usable_rows(raw_rows)
+    # 쪼개기 **전에** 한 번 정규화한다. 그래야 모든 조각이 같은 헤더·같은 열 구성을 받는다
+    rows = normalize_header(raw) if raw is not None else None
 
-    rows = _usable_rows(raw_rows)
+    if len(markdown) <= max_chars:
+        if rows is None:
+            return [(markdown, [])]
+        # 안 바뀌었으면 원본 마크다운을 그대로 돌려준다. 무조건 다시 렌더하면 멀쩡한 표의
+        # 텍스트가 공백까지 미묘하게 달라진다 — cleaner 가 쓰는 규약과 같다
+        if rows == raw:
+            return [(markdown, rows)]
+        return [(rows_to_markdown(rows), rows)]
+
     if rows is None:
         return None
 
