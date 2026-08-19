@@ -682,3 +682,17 @@ def png_bytes():
         return buffer.getvalue()
 
     return _make
+
+
+# 포맷을 골라 이미지 바이트를 만든다. Vision 이 포맷별로 다르게 보내는지 볼 때 쓴다 —
+# 실제 문서에는 bmp·jpx 가 들어있는데 합성 픽스처가 PNG 뿐이라 그 경로가 안 밟혔다
+@pytest.fixture
+def image_bytes():
+    def _make(
+        fmt: str = "PNG", width: int = 400, height: int = 200, color: str = "white"
+    ) -> bytes:
+        buffer = io.BytesIO()
+        Image.new("RGB", (width, height), color).save(buffer, format=fmt)
+        return buffer.getvalue()
+
+    return _make

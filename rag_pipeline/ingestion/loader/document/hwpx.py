@@ -535,7 +535,8 @@ class HwpxLoader(BaseDocumentLoader):
                 source_format=self.file_format.value,
                 page=tracker.current(),
                 blob=blob,
-                blob_kind="png",
+                # BinData 엔트리 이름의 확장자가 실제 포맷이다. 한컴은 bmp 도 그대로 담는다
+                blob_kind=Path(entry).suffix.lstrip(".").lower() or "png",
                 metadata={"binary_item": ref, "zip_entry": entry},
             )
         )

@@ -305,7 +305,9 @@ class PdfLoader(BaseDocumentLoader):
                         page=page_no + 1,
                         bbox=bbox,
                         blob=blob,
-                        blob_kind="png",
+                        # PyMuPDF 가 실제 포맷을 준다(jpeg·png·jpx…). "png" 로 굳히면
+                        # 뒤에서 이 값을 믿는 쪽이 거짓을 읽는다
+                        blob_kind=extracted.get("ext") or "png",
                         metadata={"xref": xref},
                     ),
                 )

@@ -7,8 +7,11 @@ OCR이 축 라벨 글자만 나열하는 것과 달리, 그래프가 무엇을 �
 from __future__ import annotations
 
 import base64
+import io
 import json
 from typing import Any
+
+from PIL import Image
 
 from rag_pipeline.ingestion.loader.content.base import (
     ContentRegion,
@@ -34,6 +37,42 @@ _PROMPT = """이 이미지를 검색 가능한 한국어 텍스트로 옮겨라.
 - 수치가 보이면 data_table에 행/열 구조로 옮겨라. 수치가 없으면 data_table은 null로 둬라.
 - 이미지에 글자가 없으면 extracted_text는 빈 문자열로 둬라.
 - 추측하지 마라. 보이는 것만 적어라."""
+
+
+# OpenAI 가 받는 이미지 포맷(PIL format -> data URL 의 MIME 서브타입).
+# 이 밖은 라벨을 뭘 붙이든 BadRequestError 다 — 실측으로 bmp·jpx 가 전부 거절당했다
+_SUPPORTED_FORMATS = {"PNG": "png", "JPEG": "jpeg", "GIF": "gif", "WEBP": "webp"}
+
+# PNG 로 그대로 저장할 수 있는 PIL 모드. CMYK·I;16 은 저장이 막혀 RGB 로 내려야 한다
+_PNG_SAFE_MODES = frozenset({"RGB", "RGBA", "L", "P", "1"})
+
+
+# 보낼 수 있는 (MIME 서브타입, 바이트) 로 정규화한다. 못 열면 None -> 라우터가 OCR 로 폴백
+#
+# 판정을 region.blob_kind 로 하지 않는 이유: 로더들이 그 값에 "png" 를 하드코딩하는데
+# blob 은 문서에 박힌 원본 바이트라 서로 맞지 않는다. 실측으로 픽스처 197개 중 bmp 32개·
+# jpx 4개가 png 라는 이름표를 달고 있었고, 그런 것만 든 문서 셋은 vision_calls=0 이었다
+# (반대로 전부 jpeg 인 문서는 9회 전부 성공했다). 진실은 바이트에만 있다.
+#
+# 지원 포맷을 그냥 통과시키는 이유: 전부 PNG 로 다시 구우면 JPEG 사진이 3배로 부푼다
+# (실측 3.8MB -> 11.1MB, base64 14.7MB 로 OpenAI 20MB 상한에 근접). 이미 되는 것을
+# 굽는 것은 비용과 위험만 얹는다 — 픽스처 197개 중 157개가 이 경로다.
+def _normalize_for_vision(blob: bytes) -> tuple[str, bytes] | None:
+    try:
+        image = Image.open(io.BytesIO(blob))
+        mime = _SUPPORTED_FORMATS.get(image.format or "")
+        if mime is not None:
+            # 헤더만 읽고 원본을 그대로 돌려준다. 디코딩조차 하지 않는다
+            return mime, blob
+
+        image.load()
+        if image.mode not in _PNG_SAFE_MODES:
+            image = image.convert("RGB")
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return "png", buffer.getvalue()
+    except Exception:  # noqa: BLE001 - 깨진 이미지 하나가 적재를 멈추면 안 된다
+        return None
 
 
 # OpenAI 클라이언트를 만든다. 키가 없으면 None
@@ -80,7 +119,13 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
         ctx.warn("OPENAI_API_KEY가 없어 이미지를 OCR로 처리했습니다.")
         return None
 
-    b64 = base64.b64encode(blob).decode("ascii")
+    normalized = _normalize_for_vision(blob)
+    if normalized is None:
+        ctx.warn("이미지 형식을 Vision이 받는 형식으로 바꾸지 못해 OCR로 폴백했습니다.")
+        return None
+
+    mime, payload = normalized
+    b64 = base64.b64encode(payload).decode("ascii")
     try:
         response = client.chat.completions.create(
             model=cfg.vision_model,
@@ -91,7 +136,7 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
                         {"type": "text", "text": _PROMPT},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64}"},
+                            "image_url": {"url": f"data:image/{mime};base64,{b64}"},
                         },
                     ],
                 }
