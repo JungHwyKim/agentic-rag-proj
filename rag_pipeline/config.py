@@ -46,6 +46,13 @@ class ContentRoutingConfig(BaseSettings):
     # 이 크기(px) 미만 이미지는 로고·아이콘·구분선으로 보고 건너뛴다
     min_image_width: int = 100
     min_image_height: int = 100
+    # 쪽 위에 **표시되는** 크기(pt) 기준. 위 픽셀 자[尺]와 서로를 대신하지 못한다 —
+    # 12.8x15.2pt 장식 글리프가 115x127px 로 저장돼 픽셀 필터를 그냥 통과한다(실측).
+    # 20pt 는 "16.7 이하가 전부 OCR 0~1자"에서, 8:1 은 진짜 내용 최대 5.9:1 과 띠 최소
+    # 10.0:1 사이 1.7배 틈에서 나왔다. 두 신호가 각자 다른 것을 잡는다 — 20pt 는 정사각
+    # 글리프를, 비율은 크고 납작한 제목 띠를 잡는다. 근거는 plan_log/이미지-경로.md 2회차
+    min_image_display_pt: float = 20.0
+    max_image_aspect_ratio: float = 8.0
 
     # --- OCR ---
     ocr_lang: str = "kor+eng"

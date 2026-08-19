@@ -199,6 +199,48 @@ def wrote_under(prefix: str, session_id: str) -> bool | None:
     return False
 
 
+# 마커의 mtime. 없거나 못 읽으면 None. 세션 안에서 "마지막으로 ~한 시각"을 담는 데 쓴다
+def marker_mtime(namespace: str, session_id: str) -> float | None:
+    marker = _marker_path(namespace, session_id)
+    if marker is None:
+        return None
+    try:
+        return marker.stat().st_mtime
+    except OSError:
+        return None
+
+
+# 마커를 만들거나 mtime 을 지금으로 갱신한다. 실패해도 조용히 넘어간다
+def touch_marker(namespace: str, session_id: str) -> None:
+    marker = _marker_path(namespace, session_id)
+    if marker is None:
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        return
+
+
+# 기준 시각 이후에 바뀐 파일들의 저장소 기준 경로. 판단이 안 서면 None.
+#
+# `changed_paths()`(git)와 쓰임이 다르다. 저쪽은 "커밋 안 된 것"을 묻고 이쪽은 "이 시각
+# 이후에 손댄 것"을 묻는다. 세션 안에서 방금 무엇을 고쳤는지 보려면 이쪽이어야 한다
+def paths_newer_than(prefixes: tuple[str, ...], since: float) -> list[str] | None:
+    found: list[str] = []
+    try:
+        for prefix in prefixes:
+            root = PROJECT_ROOT / prefix
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*.py"):
+                if path.is_file() and path.stat().st_mtime > since:
+                    found.append(path.relative_to(PROJECT_ROOT).as_posix())
+    except OSError:
+        return None
+    return found
+
+
 # 종료를 막고 사유를 모델에게 넘긴다. 이 함수는 돌아오지 않는다
 def block(reason: str) -> None:
     # Windows 콘솔 기본 인코딩(cp949)으로는 한국어 사유를 못 내보내 UnicodeEncodeError 로

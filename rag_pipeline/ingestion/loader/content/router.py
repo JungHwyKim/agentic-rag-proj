@@ -58,7 +58,7 @@ class ContentRouter:
             ctx.warn("이미지를 열 수 없어 건너뛰었습니다.")
             return []
 
-        decision = classify(image, self.config)
+        decision = classify(image, self.config, bbox=region.bbox)
 
         if decision.route is ImageRoute.SKIP:
             return []
