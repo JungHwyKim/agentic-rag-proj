@@ -22,6 +22,23 @@ def test_paragraphs_and_table_in_order(hwpx_file: Path, offline_config: IngestCo
     assert types == [ElementType.PARAGRAPH, ElementType.PARAGRAPH, ElementType.TABLE]
 
 
+# 병합 셀이 있어도 열이 밀리지 않아야 한다.
+# **되돌리면 값이 왼쪽으로 밀려 열 이름과 값이 틀리게 짝지어진다** — 실측으로 시행령 안내서
+# HWPX 표 173행 중 127행이 그 상태였고, 실행항목이 단계 열에 들어가 있었다.
+# 세로 병합은 값을 되풀이하고(행이 다른 청크로 갈 수 있다) 가로 병합은 비운다(같은 행에 남는다)
+def test_merged_cells_keep_column_alignment(
+    hwpx_merged_cells: Path, offline_config: IngestConfig
+) -> None:
+    document = HwpxLoader(offline_config).load(hwpx_merged_cells)
+    table = next(e for e in document.elements if e.type is ElementType.TABLE)
+
+    assert table.metadata["rows"] == [
+        ["구분", "항목", "담당"],
+        ["구분", "가", "김"],
+        ["구분", "비고 전체", ""],
+    ]
+
+
 # 한국어 텍스트가 깨지지 않아야 한다
 def test_korean_text(hwpx_file: Path, offline_config: IngestConfig) -> None:
     document = HwpxLoader(offline_config).load(hwpx_file)

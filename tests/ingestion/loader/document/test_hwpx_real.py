@@ -108,7 +108,10 @@ def test_extracts_body_without_warnings(path: Path, structure_only_config: Inges
     paragraphs = [e for e in document.elements if e.type is ElementType.PARAGRAPH]
 
     assert len(paragraphs) > 100
-    assert sum(len(e.text) for e in paragraphs) > 5000
+    # 글자수는 **모든 요소**에서 센다. 문단만 세면 표 위주 문서를 파싱 실패로 오인한다 —
+    # 2026 중등 기초학력 계획은 본문 27,431자 중 표가 21,504자(82%)여서 문단만 보면 4,653자다
+    # (실측 2026-08-19). "본문을 뽑았는가" 를 묻는 자리이므로 표도 본문이다
+    assert sum(len(e.text) for e in document.elements) > 5000
     assert document.metadata.warnings == []
 
 

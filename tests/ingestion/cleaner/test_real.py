@@ -25,7 +25,9 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
 AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"
 AI_GUIDE_PDF_CLEANED_ELEMENTS = 202
-AI_GUIDE_PDF_CLEANED_CELLS = 26
+# 2026-08-19 에 26→32 로 늘었다. PDF 병합 셀을 되풀이로 채우면서, 제어문자가 든 칸이
+# 자기 span 만큼 복제됐기 때문이다. 늘어난 6개는 새로 더러워진 칸이 아니라 **같은 칸의 사본**이다
+AI_GUIDE_PDF_CLEANED_CELLS = 32
 
 # 같은 문서를 로더는 HWPX 97쪽 / PDF 28쪽으로 센다(쪽 계산 별건). 그런데도 머리말 제거 개수가
 # 25 로 같은 것이 '걸친 폭' 판정이 쪽 수 오류에 강하다는 증거다 — 등장 횟수 비율이었다면

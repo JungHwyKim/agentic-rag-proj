@@ -31,7 +31,10 @@ DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).
 EXPECTED = {
     AI_GUIDE_PDF: {"elements": 509, "titles": 74, "chunks": 70},
     AI_GUIDE_HWPX: {"elements": 721, "titles": 54, "chunks": 47},
-    DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 45},
+    # chunks 는 2026-08-18 에 45→47 로 늘었다. HWPX 세로 병합 셀을 격자로 펴면서 표가
+    # 길어져 상한에 걸리는 조각이 둘 늘었다. elements·titles 는 그대로다 — 로더가 만드는
+    # 리전 수는 안 변하고 표 **안**이 채워진 것이라, 이 값이 안 움직인 것이 오히려 근거다
+    DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 47},
 }
 
 CAP = 1200

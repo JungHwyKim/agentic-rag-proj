@@ -25,7 +25,13 @@ class ContentRoutingConfig(BaseSettings):
 
     # --- 표 라우팅 ---
     # PDF/이미지의 표를 무엇으로 파싱할지. llamaparse 실패 시 항상 pymupdf로 폴백된다
-    table_pdf_handler: Literal["llamaparse", "pymupdf"] = "llamaparse"
+    # 기본값이 pymupdf 인 이유는 실측이다(2026-08-18, plan_log/표-경로.md 1회차).
+    # 같은 문서를 두 경로로 청킹해 보니 LlamaParse 는 마크다운이 아니라 HTML 을 돌려주고,
+    # 그러면 metadata["rows"] 를 못 얻어 splitter 가 헤더 반복을 못 하고 태그 한가운데를
+    # 글자 단위로 자른다 — 시행령 PDF 표청크가 24→62 로 불고 그중 16개가 여는 태그 없는
+    # 조각이었다. 무과금 pymupdf 쪽이 유효한 마크다운 표에 rows 까지 갖고 있다.
+    # llamaparse 경로는 지우지 않았다. HTML→rows 복원이 붙으면 다시 볼 값이다
+    table_pdf_handler: Literal["llamaparse", "pymupdf"] = "pymupdf"
     # LlamaParse 파싱 티어: fast(규칙기반) < cost_effective < agentic < agentic_plus
     llamaparse_tier: str = "cost_effective"
     llamaparse_version: str = "latest"

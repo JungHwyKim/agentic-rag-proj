@@ -11,6 +11,7 @@ PDF에는 '표'라는 구조가 없다 — 선과 글자의 좌표만 있다. �
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pymupdf
 
@@ -21,6 +22,18 @@ from rag_pipeline.schemas.document import FileFormat
 
 # 표 영역을 잘라낼 때 테두리가 잘리지 않도록 주는 여백(pt)
 _CROP_PADDING = 4.0
+
+# 조각난 표를 되붙일 때 쓰는 두 값. 근거는 PDF 5개 · 표 리전 103개 · 같은 쪽 인접쌍 36개
+# 실측이다(2026-08-19, plan_log/표-경로.md 2회차).
+#
+# 세로 간격: 실제로 조각난 표는 6.8 이었고, 별개 표·별개 상자는 전부 18.8 이상이었다.
+# 2.8배 틈이 있어 이 임계값은 표본 하나에 기대지 않는다. 12 는 그 사이다
+_MERGE_MAX_GAP = 12.0
+# 좌우 끝: 같은 표에서 잘린 조각은 x 가 소수점까지 같다. 반올림 오차만 흡수한다
+_MERGE_X_TOLERANCE = 2.0
+
+# (bbox, rows) — 표 하나. 되붙이기 전후로 같은 모양을 쓴다
+_Table = tuple[tuple[float, ...], list[list[str]]]
 
 
 # 블록 안 span 들의 글자 크기. 제목 승격 판정에만 쓰이고 headings.py 가 걷어낸다.
@@ -45,6 +58,92 @@ def _overlaps(inner: tuple[float, ...], outer: tuple[float, ...], threshold: flo
 
     inner_area = max((ix1 - ix0) * (iy1 - iy0), 1e-6)
     return overlap_area / inner_area >= threshold
+
+
+# 병합에 덮인 칸을 값으로 채운다.
+#
+# PyMuPDF 는 병합에 덮인 자리를 `row.cells[j] is None` 으로 내놓고 `extract()` 는 같은 자리에
+# 빈 문자열을 준다. 그래서 **빈 칸이 "병합에 덮인 자리"인지 "그냥 빈 칸"인지 가를 수 있다** —
+# 이 구분이 없으면 되풀이 자체가 불가능하다.
+#
+# 규칙은 HWPX 와 같다(`hwpx.py:_table_rows`). **세로로 이어진 칸에는 값을 되풀이하고 가로로
+# 이어진 칸은 비운다** — splitter 가 표를 행 단위로만 쪼개므로 아래로 이어진 행은 다른 청크로
+# 갈 수 있지만, 옆으로 이어진 칸은 언제나 같은 행에 남는다.
+#
+# **둘을 가르는 것이 이 함수의 어려운 부분이다.** 실측(PDF 5개·칸 3,503개, 2026-08-19)으로
+# None 칸이 897개(25.6%)이고 그중 위에 앵커가 있는 것이 661개인데, **그 661개 중 226개(34.2%)는
+# 왼쪽 칸이 이 열까지 뻗은 가로 병합이기도 하다.** 위만 보고 되풀이하면 그 226개에 엉뚱한 값이
+# 들어간다. 그래서 가로를 먼저 보고, 가로가 아닐 때만 세로로 채운다.
+def _fill_merged_cells(table: Any) -> list[list[str]]:
+    values = [[("" if cell is None else str(cell)) for cell in row] for row in table.extract()]
+    rows = getattr(table, "rows", None)
+    if not rows or len(rows) != len(values):
+        return values
+
+    # 열의 왼쪽 끝. 그 열에 실제 칸이 있는 아무 행에서 얻는다
+    col_x0: dict[int, float] = {}
+    for row in rows:
+        for index, cell in enumerate(row.cells):
+            if cell is not None and index not in col_x0:
+                col_x0[index] = float(cell[0])
+
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row.cells):
+            if cell is not None or c >= len(values[r]) or values[r][c]:
+                continue
+
+            x0 = col_x0.get(c)
+            if x0 is not None and any(
+                row.cells[left] is not None
+                and float(row.cells[left][2]) > x0 + _MERGE_X_TOLERANCE
+                for left in range(c - 1, -1, -1)
+            ):
+                continue  # 왼쪽 칸이 여기까지 뻗었다 — 가로 연장이라 비워 둔다
+
+            for above in range(r - 1, -1, -1):
+                if c < len(rows[above].cells) and rows[above].cells[c] is not None:
+                    if c < len(values[above]):
+                        values[r][c] = values[above][c]
+                    break
+
+    return values
+
+
+# 두 조각이 원래 한 표였나. 셋을 **모두** 만족해야 한다
+def _is_same_table(a: _Table, b: _Table) -> bool:
+    (ax0, _, ax1, ay1), a_rows = a
+    (bx0, by0, bx1, _), b_rows = b
+
+    if not 0 <= by0 - ay1 < _MERGE_MAX_GAP:
+        return False
+    if abs(ax0 - bx0) > _MERGE_X_TOLERANCE or abs(ax1 - bx1) > _MERGE_X_TOLERANCE:
+        return False
+    return bool(a_rows) and bool(b_rows) and len(a_rows[0]) == len(b_rows[0])
+
+
+# 같은 표가 여러 조각으로 잡힌 것을 되붙인다.
+#
+# PyMuPDF 의 `find_tables()` 가 한 표를 여러 개로 나눠 내놓는 경우가 있다. 그러면 splitter 가
+# **각 조각의 첫 행을 헤더로 되풀이**하므로 실제 열 이름은 첫 조각에만 남고 나머지 조각은
+# 데이터 행이 헤더 자리에 온다 — 시행령 안내서 4쪽의 표 하나가 5조각으로 잡혀 열 이름
+# `단계|실행항목|세부내용 및 방법|담당` 이 첫 조각에만 있었다(실측 2026-08-18).
+#
+# **여기서 붙여야 한다.** LlamaParse 로 올려도 안 고쳐진다 — 핸들러는 리전 하나의 blob 만
+# 보내므로 외부 API 는 애초에 조각 하나밖에 못 본다(실측: 유료 경로에서 같은 표가 10조각).
+def _merge_split_tables(tables: list[_Table]) -> list[_Table]:
+    merged: list[_Table] = []
+
+    for bbox, rows in sorted(tables, key=lambda item: item[0][1]):
+        if merged and _is_same_table(merged[-1], (bbox, rows)):
+            (px0, py0, px1, py1), prev_rows = merged[-1]
+            merged[-1] = (
+                (min(px0, bbox[0]), py0, max(px1, bbox[2]), max(py1, bbox[3])),
+                prev_rows + rows,
+            )
+            continue
+        merged.append((bbox, rows))
+
+    return merged
 
 
 # .pdf 를 읽는 로더
@@ -93,15 +192,18 @@ class PdfLoader(BaseDocumentLoader):
             ctx.warn(f"{page_no + 1}쪽 표 탐지에 실패했습니다: {type(exc).__name__}")
             tables = []
 
+        extracted: list[_Table] = []
         for table in tables:
             bbox = tuple(float(v) for v in table.bbox)
             try:
-                rows = [[("" if c is None else str(c)) for c in row] for row in table.extract()]
+                rows = _fill_merged_cells(table)
             except Exception:  # noqa: BLE001
                 rows = []
             if not any(any(cell.strip() for cell in row) for row in rows):
                 continue
+            extracted.append((bbox, rows))
 
+        for bbox, rows in _merge_split_tables(extracted):
             table_bboxes.append(bbox)
             items.append(
                 (

@@ -341,6 +341,38 @@ def hwpx_file(tmp_path: Path) -> Path:
     return path
 
 
+# 병합 셀이 든 .hwpx. 세로 병합(rowSpan)에 가려진 칸은 tc 로 아예 안 나오므로,
+# cellAddr 를 안 보고 tc 순서대로 담으면 값이 왼쪽으로 밀린다. 가로 병합도 함께 넣어
+# 두 규칙(세로는 되풀이 / 가로는 빈 칸)을 한 표에서 확인한다
+@pytest.fixture
+def hwpx_merged_cells(tmp_path: Path) -> Path:
+    def cell(col: int, row: int, text: str, col_span: int = 1, row_span: int = 1) -> str:
+        return (
+            f'<hp:tc><hp:cellAddr colAddr="{col}" rowAddr="{row}"/>'
+            f'<hp:cellSpan colSpan="{col_span}" rowSpan="{row_span}"/>'
+            f"<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+        )
+
+    rows = (
+        # 첫 칸이 세 행을 덮는다. 아래 두 tr 에는 그 자리의 tc 가 없다
+        f"<hp:tr>{cell(0, 0, '구분', row_span=3)}{cell(1, 0, '항목')}{cell(2, 0, '담당')}</hp:tr>"
+        f"<hp:tr>{cell(1, 1, '가')}{cell(2, 1, '김')}</hp:tr>"
+        f"<hp:tr>{cell(1, 2, '비고 전체', col_span=2)}</hp:tr>"
+    )
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p><hp:run><hp:tbl rowCnt="3" colCnt="3">{rows}</hp:tbl></hp:run></hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "merged.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
 # 표 셀 안에 그림이 든 .hwpx. 셀 안 그림이 누락되지 않는지 확인하는 회귀 픽스처
 @pytest.fixture
 def hwpx_with_image_in_table(tmp_path: Path) -> Path:
