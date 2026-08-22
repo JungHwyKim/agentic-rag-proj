@@ -30,8 +30,14 @@ class ContentRoutingConfig(BaseSettings):
     # 그러면 metadata["rows"] 를 못 얻어 splitter 가 헤더 반복을 못 하고 태그 한가운데를
     # 글자 단위로 자른다 — 시행령 PDF 표청크가 24→62 로 불고 그중 16개가 여는 태그 없는
     # 조각이었다. 무과금 pymupdf 쪽이 유효한 마크다운 표에 rows 까지 갖고 있다.
-    # llamaparse 경로는 지우지 않았다. HTML→rows 복원이 붙으면 다시 볼 값이다
-    table_pdf_handler: Literal["llamaparse", "pymupdf"] = "pymupdf"
+    # llamaparse 경로는 지우지 않았다. HTML→rows 복원이 붙으면 다시 볼 값이다.
+    #
+    # `hybrid` 는 **승급**이다(2026-08-22, plan_log/표-경로.md 11회차). pymupdf 로 뽑되
+    # 빈 칸에 벡터 드로잉이 있는 표만 Vision 으로 올려 **그 빈 칸만** 채운다. 표를 다시
+    # 읽는 것이 아니라 메우는 것이라 병합 셀·되붙이기·쪽 경계 결과가 그대로 남는다.
+    # 신호가 필요한 이유: 체크 표시가 이미지도 텍스트도 아니라 extract() 로는 원리적으로
+    # 못 얻는다(AI가이드 12~17쪽). 기본값이 pymupdf 인 것은 그대로다 — 과금 경로다
+    table_pdf_handler: Literal["llamaparse", "pymupdf", "hybrid"] = "pymupdf"
     # LlamaParse 파싱 티어: fast(규칙기반) < cost_effective < agentic < agentic_plus
     llamaparse_tier: str = "cost_effective"
     llamaparse_version: str = "latest"

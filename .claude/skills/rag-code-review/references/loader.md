@@ -33,7 +33,7 @@ detect_format()  →  get_loader()  →  BaseDocumentLoader.load()
 
 ### 잡아야 할 위반
 
-- `loader/document/` 안에서 `image_ocr` / `image_vision` / `table_llamaparse` / `pytesseract` /
+- `loader/document/` 안에서 `image_ocr` / `image_vision` / `table_llamaparse` / `table_vision` / `pytesseract` /
   `openai` / `llama_cloud` 를 import 하거나 호출한다
 - 로더가 `Element` 를 직접 만들어 반환한다 (핸들러의 일이다)
 - `detect_regions()` 말고 다른 추상 메서드가 늘었다 — 포맷 로더가 져야 할 책임이 늘어난 것이므로,
@@ -73,11 +73,31 @@ splitter 가 청크를 끊을 경계를 얻는다(`splitter.md` 1절). 로더는
 
 ```
 표    : table_llamaparse (blob 있고 table_pdf_handler="llamaparse") → 실패/키없음 → table_native
+표(승급): table_vision (blob 있고 table_pdf_handler="hybrid" 이고 region.mark_cells > 0)
+        → 실패/크기 불일치/채운 것 0 → table_native
 이미지: classify() → SKIP(로고·아이콘 크기 필터) / OCR / Vision → Vision 실패 → classify 가
         이미 돌린 OCR 결과(decision.ocr) 재사용
 ```
 
 - Vision 실패 후 OCR 을 **다시** 돌리는 변경은 이미 낸 비용을 버리는 것이다
+- **OCR 이 Tesseract 예외를 삼키는 것은 `contracts.md` 2절 때문이 아니다.** 그 규약은 유료
+  외부 API 것이고 "내려갈 층이 있어서" 성립하는데, OCR 은 **사슬의 맨 아래**라 아래에 층이
+  없다. 여기서 삼키는 이유는 폴백을 살리기 위해서가 아니라 이미지 하나가 적재 전체를 멈추는
+  것을 막기 위해서다 — 계약 위반이 아니라 **계약 밖 강인화**다. 이걸 근거로 "OCR 도 폴백
+  규약 대상"이라고 일반화하는 지적은 틀렸다. 반대로 `run_ocr()`·`extract_text()` 가
+  `ctx` 를 **선택** 인자로 받는 것도 의도다 — `classify()` 는 `LoadContext` 가 없어 경고를
+  못 남기고, 대신 `Decision.reason` 이 흔적을 남긴다(2026-08-22)
+- **`table_vision` 이 원본 값을 덮으면 Critical 이다.** 이 핸들러의 계약은 *비어 있던 칸만
+  채운다* 하나다. 값이 있던 칸을 모델 응답으로 갈아끼우면 `_fill_merged_cells()` ·
+  `_merge_split_tables()` · `_merge_across_pages()` · `_join_split_cells()` 가 각각 실측으로
+  오검출 0 을 확인한 결과가 조용히 뒤집힌다 — **에러가 안 나서 아무도 모른다**
+- **격자 크기가 다를 때 자리를 맞추려 드는 변경도 Critical 이다.** 열 이름으로 대응시키는
+  안은 HWPX 병합 셀에서 겪은 자리 밀림(373행)과 같은 종류다. 계약은 **통째로 버리고 폴백**이다
+- 승급 트리거(`pdf.py:_mark_cells`)를 종횡비·채움색으로 바꾸는 변경은 근거를 요구한다.
+  면적비를 고른 이유는 그것이 임계값이 아니라 **의미의 경계**이기 때문이다(칸을 통째로 덮으면
+  배경, 일부면 그려진 것). 다른 축은 문서마다 다시 정해야 한다
+- 표 승급이 `max_vision_calls_per_doc` 를 이미지와 **공유**하는지 본다. 표 전용 상한을
+  새로 두면 둘 다 예산이 남았는데 한쪽만 막히는 상황이 생긴다
 - hybrid 이미지 판정(`loader/content/classify.py`)이 무료·로컬 Tesseract 를 **먼저** 돌리는
   순서가 깨졌는지 본다. 이 순서가 유료 Vision 호출을 아낀다. 200페이지 스캔본을 전부 Vision 에
   보내면 감당이 안 된다

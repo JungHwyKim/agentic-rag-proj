@@ -13,9 +13,11 @@ from rag_pipeline.ingestion.loader.content.base import ContentType, LoadContext
 from rag_pipeline.ingestion.loader.document.pdf import (
     _BOUNDARY_SPANS_KEY,
     PdfLoader,
+    _diagonal_lines,
     _fill_merged_cells,
     _merge_split_tables,
     _overlaps,
+    _split_diagonal,
 )
 from rag_pipeline.schemas.document import ElementType
 
@@ -354,3 +356,73 @@ def test_boundary_spans_key_is_dropped(
     regions = loader.detect_regions(pdf_split_cell_file, LoadContext(offline_config.content))
 
     assert all(_BOUNDARY_SPANS_KEY not in r.metadata for r in regions)
+
+
+# --- 대각선으로 갈린 모서리 셀 ---
+#
+# 한글 표는 두 축의 이름을 한 칸에 대각선으로 나눠 적는 관용이 있다. PyMuPDF 는 둘을 한
+# 문자열로 주므로 그대로 두면 0열의 이름이 두 축 이름을 합친 것이 되고, splitter 의 헤더
+# 채우기가 그것을 옆 칸에도 복제한다.
+#
+# **판정을 텍스트 위치로 하면 안 된다.** *오른쪽 위 + 왼쪽 아래* 규칙은 실측(PDF 4개 ·
+# 표 셀 2,606개)으로 47건을 잡는데 그중 41건이 줄바꿈된 평범한 본문이다. 아래 둘째
+# 테스트가 그 규칙이 되살아나는 것을 막는다
+
+
+# 한 칸에 두 축 이름이 대각선으로 들어간 표를 만든다.
+# `diagonal=False` 면 선분만 빼고 글자 배치는 똑같다 — 두 규칙을 가르는 것이 선분뿐임을 보인다
+def _corner_cell_pdf(tmp_path: Path, *, diagonal: bool) -> Path:
+    document = pymupdf.open()
+    page = document.new_page()
+
+    left, top, col_w, row_h = 72.0, 100.0, 140.0, 60.0
+    cols, rows = 2, 2
+    for r in range(rows + 1):
+        y = top + r * row_h
+        page.draw_line((left, y), (left + cols * col_w, y))
+    for c in range(cols + 1):
+        x = left + c * col_w
+        page.draw_line((x, top), (x, top + rows * row_h))
+
+    if diagonal:
+        page.draw_line((left, top), (left + col_w, top + row_h))
+
+    # 오른쪽 위 = 열 축, 왼쪽 아래 = 행 축. 선분 유무와 무관하게 같은 자리다.
+    # **글자를 ASCII 로 둔 것은 이 테스트가 기하만 보기 때문이다** — 한글 폰트 임베드는
+    # conftest 의 비공개 도우미가 필요한데, 그것을 쓰려면 `import conftest` 가 되고
+    # 그 이름은 저장소 전체에서 겹친다(tests/hooks/_escape_hatches.py 참조)
+    page.insert_text((left + 95, top + 20), "AXIS", fontsize=9)
+    page.insert_text((left + 8, top + 50), "ROW", fontsize=9)
+    page.insert_text((left + col_w + 8, top + 20), "COL1", fontsize=9)
+    page.insert_text((left + 8, top + row_h + 20), "R1", fontsize=9)
+    page.insert_text((left + col_w + 8, top + row_h + 20), "V", fontsize=9)
+
+    path = tmp_path / f"corner_{'diag' if diagonal else 'plain'}.pdf"
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 모서리를 잇는 선분이 있으면 두 축 이름을 가른다
+def test_diagonal_corner_cell_is_split(tmp_path: Path) -> None:
+    path = _corner_cell_pdf(tmp_path, diagonal=True)
+    document = pymupdf.open(str(path))
+    page = document[0]
+    table = page.find_tables().tables[0]
+
+    split = _split_diagonal(page, table.rows[0].cells[0], _diagonal_lines(page))
+
+    assert split == ("ROW", "AXIS")
+    document.close()
+
+
+# **선분이 없으면 건드리지 않는다.** 글자 배치가 같아도 그것만으로는 대각선이 아니다 —
+# 실측에서 이 구분을 못 해 오검출 41 을 낸 규칙을 기각한 자리다
+def test_plain_cell_is_not_split(tmp_path: Path) -> None:
+    path = _corner_cell_pdf(tmp_path, diagonal=False)
+    document = pymupdf.open(str(path))
+    page = document[0]
+    table = page.find_tables().tables[0]
+
+    assert _split_diagonal(page, table.rows[0].cells[0], _diagonal_lines(page)) is None
+    document.close()

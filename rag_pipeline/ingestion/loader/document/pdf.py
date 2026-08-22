@@ -37,6 +37,46 @@ _MERGE_X_TOLERANCE = 2.0
 # 흡수하면 되므로 작다 — 크게 잡으면 이웃 칸까지 덮은 것으로 오인한다
 _GRID_EPS = 0.5
 
+# 빈 칸에 있는 벡터 드로잉이 **정보인가 배경 음영인가**를 가르는 자[尺].
+#
+# 이 신호가 필요한 이유는 체크 표시가 이미지도 텍스트도 아니라는 것이다 — AI가이드 PDF
+# 12~17쪽 표는 `page.get_images()` 가 0개를 주고 `get_drawings()` 에서 채움 경로로만
+# 나와서, `extract()` 로는 **원리적으로** 못 얻는다. 그 표의 정보 내용이 사실상 체크 표시
+# 전부라 지금 색인되는 것은 빈 격자다.
+#
+# **"빈 칸에 드로잉이 있는가" 로는 못 가른다** — 그 규칙(plan_log/표-경로.md 9회차 원안)은
+# 실측으로 2026중등 22쪽 한 표에서만 233건을 오검출한다. 그 표는 엑셀 서식이고 드로잉이
+# 전부 열 띠 배경 음영이다(글자 있는 칸에도 똑같이 깔리고 행마다 26칸씩 균일하다).
+#
+# 갈라주는 것은 **셀 대비 면적비**다. 실측(2026-08-22, PDF 4개·히트 306건):
+#
+#     2026중등 22쪽   면적비 1.00  (233건, 편차 0)   ← 셀을 통째로 덮는다 = 배경
+#     AI가이드 12~17쪽 면적비 0.08~0.10 (73건)        ← 셀 일부를 차지한다 = 그려진 것
+#
+# **0.10 과 1.00 사이에 값이 하나도 없다.** 그리고 이것은 관측값에서 고른 임계값이 아니라
+# 의미의 경계다 — 칸을 통째로 덮으면 정의상 배경이고, 일부만 차지하면 그 자리에 그려진
+# 무엇이다. 8회차의 "한글 유무는 임계값이 아니라 이분법"과 같은 종류라 분포의 틈을 고르는
+# 순서를 밟을 필요가 없다
+_MARK_AREA_RATIO = 0.5
+
+# 드로잉이 그 칸의 것인지 볼 때 쓰는 비율. 칸 밖으로 걸친 선·테두리를 걸러낸다
+_MARK_INSIDE_RATIO = 0.5
+
+# 선·테두리를 도형에서 가르는 최소 변 길이(pt). 이보다 얇으면 획이다
+_MARK_MIN_SIDE = 2.0
+
+# 대각선으로 갈린 모서리 셀을 찾을 때 모서리와의 거리 여유(pt).
+#
+# **텍스트 위치로 판정하면 안 된다.** *오른쪽 위 조각 + 왼쪽 아래 조각* 규칙은 실측
+# (2026-08-22, PDF 4개·표 셀 2,606개)으로 47건을 잡는데 **그중 41건이 오검출**이다 —
+# 줄바꿈된 본문에서 둘째 줄이 짧으면 전부 걸린다. 같은 표본에서 **셀의 좌상↔우하 모서리를
+# 잇는 stroke 선분**은 6건이고 전부 참이다(AI가이드 12~17쪽, 오검출 0·미검출 0).
+# 8회차가 쪽 넘김에서 헤더 반복안을 오검출 4로 버린 것과 같은 형태다.
+#
+# 2.0 은 `_MERGE_X_TOLERANCE` 와 같은 값이지만 **같은 질문이 아니라서 따로 둔다** —
+# 저쪽은 "두 조각의 좌우 끝이 같은가"이고 이쪽은 "선분이 이 칸의 모서리에 닿는가"다
+_DIAGONAL_EPS = 2.0
+
 # 쪽을 가로지르는 표를 이을 때 "사이에 본문이 끼었는가"를 가르는 자[尺].
 #
 # 실측(PDF 5개 · 쪽을 가로지르는 인접 표 쌍 11개, 2026-08-20, plan_log/표-경로.md 8회차)으로
@@ -138,6 +178,159 @@ def _fill_merged_cells(table: Any) -> list[list[str]]:
                 break
 
     return values
+
+
+# 좌상↔우하 모서리를 잇는 선분들. 대각선으로 갈린 셀을 찾는 데 쓴다
+def _diagonal_lines(page: pymupdf.Page) -> list[tuple[Any, Any]]:
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 신호 하나 때문에 페이지를 막지 않는다
+        return []
+
+    lines: list[tuple[Any, Any]] = []
+    for item in drawings:
+        if item.get("type") != "s":
+            continue
+        for shape in item.get("items", ()):
+            if shape[0] != "l":
+                continue
+            lines.append((shape[1], shape[2]))
+    return lines
+
+
+# 이 칸이 대각선으로 갈려 있나. 갈렸으면 (왼쪽아래 글, 오른쪽위 글), 아니면 None.
+#
+# 한글 표에서 이 모양은 **두 축의 이름을 한 칸에 적는 관용**이다 — 왼쪽 아래가 행 축,
+# 오른쪽 위가 열 축이다. PyMuPDF 는 둘을 한 문자열로 주므로 그대로 두면 0열의 이름이
+# 열 이름 자리에 두 축 이름이 함께 들어가고, splitter 의 헤더 채우기가 그것을 옆 칸에도 복제한다
+def _split_diagonal(page: pymupdf.Page, cell: Any, lines: list[tuple[Any, Any]]) -> tuple[str, str] | None:
+    x0, y0, x1, y1 = (float(v) for v in cell)
+    for start, end in lines:
+        left, right = sorted([(start.x, start.y), (end.x, end.y)])
+        if abs(left[0] - x0) > _DIAGONAL_EPS or abs(left[1] - y0) > _DIAGONAL_EPS:
+            continue
+        if abs(right[0] - x1) > _DIAGONAL_EPS or abs(right[1] - y1) > _DIAGONAL_EPS:
+            continue
+        break
+    else:
+        return None
+
+    rect = pymupdf.Rect(x0, y0, x1, y1)
+    try:
+        blocks = page.get_text("dict", clip=rect)["blocks"]
+    except Exception:  # noqa: BLE001
+        return None
+
+    spans = [
+        (span["text"].strip(), span["bbox"])
+        for block in blocks
+        for line in block.get("lines", ())
+        for span in line["spans"]
+        if span["text"].strip()
+    ]
+    if len(spans) != 2:
+        # 조각이 둘이 아니면 어느 쪽이 어느 축인지 못 가른다. 건드리지 않는다
+        return None
+
+    # 오른쪽 위가 열 축, 왼쪽 아래가 행 축이다
+    spans.sort(key=lambda item: item[1][0])
+    (row_axis, row_box), (col_axis, col_box) = spans
+    if not (row_box[1] > col_box[1]):
+        return None
+    return row_axis, col_axis
+
+
+# 빈 칸을 **부분적으로** 덮는 드로잉이 있는 칸 수. 표를 Vision 으로 올릴지 판정하는 신호다.
+#
+# 세는 것은 `row.cells` 의 실제 셀 사각형이다. `_fill_merged_cells` 의 격자가 아니라 —
+# 저쪽은 병합에 덮인 자리를 채우려고 격자를 펴지만, 여기서는 "이 칸에 무엇이 그려졌나"를
+# 묻는 것이라 실제 칸 하나가 판정 단위다.
+#
+# 판정이 두 겹인 이유: 면적비만 보면 표 테두리 선이 걸린다(칸보다 훨씬 작다). 그래서
+# 드로잉이 그 칸 **안에** 있는지를 먼저 보고(`_MARK_INSIDE_RATIO`), 얇은 획은 아예 뺀다
+def _mark_cells(table: Any, drawings: list[Any]) -> list[tuple[int, int]]:
+    if not drawings:
+        return []
+
+    rows = getattr(table, "rows", None)
+    if not rows:
+        return []
+
+    try:
+        values = table.extract()
+    except Exception:  # noqa: BLE001 - 신호 하나 때문에 페이지를 막지 않는다
+        return []
+
+    marked: list[tuple[int, int]] = []
+    for r, row in enumerate(rows):
+        if r >= len(values):
+            break
+        for c, cell in enumerate(row.cells):
+            if cell is None or c >= len(values[r]):
+                continue
+            if (values[r][c] or "").strip():
+                continue
+
+            rect = pymupdf.Rect(cell)
+            area = rect.get_area()
+            if area <= 0:
+                continue
+
+            for shape in drawings:
+                overlap = shape & rect
+                if overlap.is_empty:
+                    continue
+                shape_area = shape.get_area()
+                if shape_area <= 0:
+                    continue
+                if overlap.get_area() / shape_area < _MARK_INSIDE_RATIO:
+                    continue
+                if shape_area / area >= _MARK_AREA_RATIO:
+                    # 칸을 통째로 덮는다 = 배경 음영. 정보가 아니다
+                    continue
+                marked.append((r, c))
+                break
+
+    return marked
+
+
+# 그 쪽에서 표 안의 표시로 볼 만한 채움 도형들. 얇은 획(테두리·구분선)은 뺀다
+def _mark_shapes(page: pymupdf.Page) -> list[Any]:
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 신호 하나 때문에 페이지를 막지 않는다
+        return []
+
+    shapes: list[Any] = []
+    for item in drawings:
+        if item.get("type") != "f":
+            continue
+        rect = item.get("rect")
+        if rect is None or rect.width < _MARK_MIN_SIDE or rect.height < _MARK_MIN_SIDE:
+            continue
+        shapes.append(rect)
+    return shapes
+
+
+# 되붙인 표에서의 표시 자리. `_spans_within` 과 같은 이유로 필요하다 — 되붙이기가
+# `(bbox, rows)` 만 다뤄 표 객체를 잃는다.
+#
+# **행 번호를 조각마다 밀어 준다.** `_merge_split_tables()` 가 조각을 위에서 아래로
+# `prev_rows + rows` 로 잇기 때문에, 둘째 조각의 0행은 되붙인 표에서 첫 조각의 행 수만큼
+# 아래다. 안 밀면 자리가 통째로 어긋난 채 채워진다
+def _marks_within(
+    bbox: tuple[float, ...], raw: list[tuple[tuple[float, ...], int, list[tuple[int, int]]]]
+) -> list[tuple[int, int]]:
+    inside = sorted(
+        (item for item in raw if bbox[1] - _GRID_EPS <= item[0][1] and item[0][3] <= bbox[3] + _GRID_EPS),
+        key=lambda item: item[0][1],
+    )
+    marks: list[tuple[int, int]] = []
+    offset = 0
+    for _rect, row_count, positions in inside:
+        marks.extend((r + offset, c) for r, c in positions)
+        offset += row_count
+    return marks
 
 
 # 표 리전이 잠깐 지고 다니는 사설 키. 쪽 경계에서 갈린 셀을 판정할 때만 쓰고
@@ -388,6 +581,14 @@ def _absorb(tail: ContentRegion, head: ContentRegion, tail_spans: list[int] | No
     if tail_rows and head_rows:
         _carry_merge_anchor(tail_rows[-1], head_rows)
 
+    # 표시 자리도 함께 잇는다. 뒤 조각의 행 번호는 앞 조각의 행 수만큼 밀리고,
+    # 반복 헤더를 버렸으면 한 행 더 당겨진다 — 안 맞추면 메우기가 엉뚱한 칸을 채운다
+    dropped = len(head.rows) - len(head_rows) if head.rows else 0
+    tail.mark_cells = list(tail.mark_cells) + [
+        (r - dropped + len(tail_rows), c)
+        for r, c in head.mark_cells
+        if r - dropped >= 0
+    ]
     tail.rows = tail_rows + head_rows
     # 쪽을 가로지르는 표는 단일 쪽 크롭으로 표현할 수 없다. 남겨 두면 유료 경로가
     # **조각 하나만 보낸 결과를 표 전체인 줄 안다** — 없으면 라우터가 table_native 로 간다
@@ -494,6 +695,11 @@ class PdfLoader(BaseDocumentLoader):
         extracted: list[_Table] = []
         # 같은 쪽 되붙이기가 표 객체를 잃으므로, 경계 span 을 되찾을 수 있게 원본을 남겨 둔다
         raw_spans: list[tuple[tuple[float, ...], tuple[list[list[int]], list[int]]]] = []
+        # 승급 신호도 같은 이유로 조각 단위로 재어 둔다
+        raw_marks: list[tuple[tuple[float, ...], int, list[tuple[int, int]]]] = []
+        shapes = _mark_shapes(page) if tables else []
+        diagonals = _diagonal_lines(page) if tables else []
+        column_axis = ""
         for table in tables:
             bbox = tuple(float(v) for v in table.bbox)
             try:
@@ -502,14 +708,25 @@ class PdfLoader(BaseDocumentLoader):
                 rows = []
             if not any(any(cell.strip() for cell in row) for row in rows):
                 continue
+            # 대각선으로 갈린 모서리 셀은 두 축의 이름을 함께 담고 있다. 행 축 이름만
+            # 그 칸에 남기고 열 축 이름은 격자 밖(metadata)으로 뺀다 — 평평한 격자에
+            # '열 전체를 가리키는 이름' 이 앉을 자리가 없다
+            head = table.rows[0].cells[0] if table.rows and table.rows[0].cells else None
+            if head is not None and rows and rows[0]:
+                split = _split_diagonal(page, head, diagonals)
+                if split is not None:
+                    rows[0][0], column_axis = split
             extracted.append((bbox, rows))
             spans = _boundary_spans(table)
             if spans is not None:
                 raw_spans.append((bbox, spans))
+            raw_marks.append((bbox, len(rows), _mark_cells(table, shapes)))
 
         for bbox, rows in _merge_split_tables(extracted):
             table_bboxes.append(bbox)
-            metadata = {}
+            metadata: dict[str, Any] = {}
+            if column_axis:
+                metadata["column_axis"] = column_axis
             merged_spans = _spans_within(bbox, raw_spans)
             if merged_spans is not None:
                 metadata[_BOUNDARY_SPANS_KEY] = merged_spans
@@ -524,9 +741,10 @@ class PdfLoader(BaseDocumentLoader):
                         page=page_no + 1,
                         bbox=bbox,  # type: ignore[arg-type]
                         rows=rows,
-                        # LlamaParse에 보낼 표 영역만 잘라낸 단일 페이지 PDF
+                        # 외부 표 핸들러에 보낼 표 영역만 잘라낸 단일 페이지 PDF
                         blob=self._crop_pdf(document, page_no, bbox),
                         blob_kind="pdf",
+                        mark_cells=_marks_within(bbox, raw_marks),
                         metadata=metadata,
                     ),
                 )

@@ -37,6 +37,17 @@ class ContentRegion:
     blob: bytes | None = None
     # blob의 종류를 알려준다 ("pdf" | "png")
     blob_kind: str | None = None
+    # TABLE(PDF): 빈 칸을 **부분적으로** 덮는 드로잉이 있는 칸의 (행, 열) 자리.
+    # 표를 Vision 으로 올릴지 판정하는 신호이자, 모델이 놓친 칸을 메우는 근거다.
+    #
+    # **개수가 아니라 자리인 이유**: 실측(2026-08-22, 유료 3회)으로 Vision 이 자리를
+    # 실행마다 다르게 잡았다(65/68/70 of 73, 틀리는 쪽이 매번 옮겨 다녔다). 반면 기하는
+    # 오검출 0 이다. 개수만 실어 나르면 "몇 개 부족한지"만 알고 "어디가 비었는지"를 모른다.
+    #
+    # 로더가 재고 라우터·핸들러가 읽는다 — `metadata` 사설 키를 못 쓰는 이유가 여기 있다.
+    # 그 방식(`pdf.py:_BOUNDARY_SPANS_KEY`)은 `detect_regions()` 가 끝에서 지우는데,
+    # 그건 판정이 로더 안에서 끝나기 때문이다. 이 값은 그 뒤에 읽힌다
+    mark_cells: list[tuple[int, int]] = field(default_factory=list)
     # 요소에 함께 실어보낼 부가정보 (heading_level, sheet_name 등)
     metadata: dict[str, Any] = field(default_factory=dict)
 

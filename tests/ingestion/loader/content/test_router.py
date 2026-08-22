@@ -8,7 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from rag_pipeline.config import ContentRoutingConfig
-from rag_pipeline.ingestion.loader.content import image_vision, table_llamaparse
+from rag_pipeline.ingestion.loader.content import image_vision, table_llamaparse, table_vision
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
 from rag_pipeline.ingestion.loader.content.router import ContentRouter
 from rag_pipeline.schemas.document import ElementType
@@ -333,3 +333,65 @@ def test_unknown_content_type() -> None:
     )
 
     assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+
+
+# --- 승급(hybrid) 경로 ---
+#
+# 여기서 보는 것은 **언제 올리지 않는가**다. 트리거가 실측으로 오검출 0 이어도,
+# 라우터가 신호를 안 보고 올리면 그 실측이 아무 의미가 없다
+
+
+# 신호가 없는 표는 hybrid 여도 올리지 않는다. 표 94개 중 88개가 이 경로다
+def test_hybrid_without_marks_stays_native(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 0
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+    assert ctx.vision_calls == 0
+
+
+# blob 이 없으면 신호가 있어도 못 올린다. 쪽을 가로지르는 표가 여기로 빠진다
+def test_hybrid_without_blob_stays_native(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=False)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+
+
+# 기본값(pymupdf)에서는 신호가 있어도 안 올린다. 과금 경로는 켜야 돈다
+def test_default_handler_never_escalates(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="pymupdf")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+
+
+# 승급이 실패하면 로컬 추출로 내려간다. 빈 리스트 규약이 여기서 발화한다
+def test_hybrid_falls_back_when_escalation_fails(mocker) -> None:
+    mocker.patch.object(table_vision, "handle", return_value=[])
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    assert elements[0].metadata["table_source"] == "native"

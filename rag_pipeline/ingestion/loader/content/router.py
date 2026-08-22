@@ -13,6 +13,7 @@ from rag_pipeline.ingestion.loader.content import (
     image_vision,
     table_llamaparse,
     table_native,
+    table_vision,
     text_native,
 )
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
@@ -35,15 +36,27 @@ class ContentRouter:
             return self._route_image(region, ctx)
         return []
 
-    # 표: 네이티브 구조가 있으면 그대로, PDF/이미지 출처면 LlamaParse 시도 후 로컬 폴백
+    # 표: 네이티브 구조가 있으면 그대로, PDF/이미지 출처면 외부 API 시도 후 로컬 폴백.
+    #
+    # **`hybrid` 는 신호가 있을 때만 올린다.** 이미지 쪽 `image_handler="hybrid"` 와 같은
+    # 모양이고 이유도 같다 — 무료 로컬을 기본으로 두고, 무료로는 못 얻는 것이 실제로
+    # 있을 때만 과금한다. 그 신호가 `mark_cells` 이고 로더가 잰다(`pdf.py:_mark_cells`).
+    # 켜 두어도 이 코퍼스에서 올라가는 표는 94개 중 6개다
     def _route_table(self, region: ContentRegion, ctx: LoadContext) -> list[Element]:
-        use_llamaparse = self.config.table_pdf_handler == "llamaparse" and region.blob is not None
+        handler = self.config.table_pdf_handler
+        has_blob = region.blob is not None
 
-        if use_llamaparse:
+        if handler == "llamaparse" and has_blob:
             elements = table_llamaparse.handle(region, ctx)
             if elements:
                 return elements
             # LlamaParse가 실패했거나 키가 없다 -> 로컬 추출 결과로 내려간다
+
+        if handler == "hybrid" and has_blob and region.mark_cells:
+            elements = table_vision.handle(region, ctx)
+            if elements:
+                return elements
+            # 승급이 실패했거나 채울 것이 없었다 -> 로컬 추출 결과가 이미 정답이다
 
         return table_native.handle(region, ctx)
 
