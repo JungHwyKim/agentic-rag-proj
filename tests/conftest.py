@@ -200,6 +200,129 @@ def pdf_with_table_file(tmp_path: Path) -> Path:
     return path
 
 
+# 쪽을 가로지르는 표 픽스처가 쓰는 열 이름. 1쪽과 2쪽이 **같은 헤더**를 갖는 것이 요점이다
+_CROSSING_HEADER = ["구분", "항목", "내용"]
+
+
+# 괘선 표 하나를 그린다. 좌우 끝이 소수점까지 같아야 쪽 넘김 판정이 발화하므로
+# 두 쪽 모두 같은 left/col_w 로 그린다
+def _draw_ruled_table(
+    page, top: float, cells: list[list[str]], left: float = 72.0, col_w: float = 140.0
+) -> None:
+    row_h = 28.0
+    cols, rows = len(cells[0]), len(cells)
+    for r in range(rows + 1):
+        y = top + r * row_h
+        page.draw_line((left, y), (left + cols * col_w, y))
+    for c in range(cols + 1):
+        x = left + c * col_w
+        page.draw_line((x, top), (x, top + rows * row_h))
+    for r, row in enumerate(cells):
+        for c, value in enumerate(row):
+            if value:
+                _write_korean(page, (left + c * col_w + 8, top + r * row_h + 19), value, size=11)
+
+
+# 2쪽에 걸친 같은 모양의 표 둘을 그린다. `separator` 를 주면 2쪽 표 위에 한글 본문이 놓인다
+def _build_two_page_table_pdf(path: Path, separator: str | None) -> Path:
+    document = pymupdf.open()
+
+    first = document.new_page()
+    _draw_ruled_table(
+        first,
+        560.0,
+        [_CROSSING_HEADER, ["가 영역", "첫째 항목", "첫째 내용"], ["가 영역", "둘째 항목", "둘째 내용"]],
+    )
+    # 쪽 번호는 한글이 없어 '사이에 낀 본문'으로 세이지 않는다. 실파일에서 참 연속 4건
+    # 사이에 있던 것이 정확히 이것뿐이라, 이 줄이 있어야 규칙이 제대로 검증된다
+    _write_korean(first, (280.0, 800.0), "- 1 -", size=10)
+
+    second = document.new_page()
+    if separator is not None:
+        _write_korean(second, (72.0, 90.0), separator, size=12)
+    _draw_ruled_table(
+        second,
+        120.0,
+        [_CROSSING_HEADER, ["", "셋째 항목", "셋째 내용"], ["나 영역", "넷째 항목", "넷째 내용"]],
+    )
+
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 쪽 경계가 셀 하나를 가로질러 글자가 갈린 2쪽짜리 .pdf.
+#
+# 두 축을 한 픽스처에 담는다.
+#   1열 — 2쪽에서 **세 행을 덮는 병합 셀**. 갈린 셀이라 이어져야 한다
+#   2열 — 값이 같지만 **병합이 아니다**. 이어지면 안 된다.
+#          실측으로 값 반복만 보는 규칙이 여기서 오검출을 냈다(`구분` 열의 `필수`/`필수`)
+#
+# 병합은 **가로 괘선을 안 그어서** 만든다. find_tables 가 선으로 격자를 잡기 때문이다
+@pytest.fixture
+def pdf_split_cell_file(tmp_path: Path) -> Path:
+    document = pymupdf.open()
+    header = ["구분", "항목", "비고"]
+    left, col_w, row_h = 72.0, 140.0, 28.0
+
+    def frame(page, top: float, rows: int, skip_inner: set[tuple[int, int]]) -> None:
+        for r in range(rows + 1):
+            y = top + r * row_h
+            for c in range(3):
+                if (r, c) in skip_inner:
+                    continue
+                page.draw_line((left + c * col_w, y), (left + (c + 1) * col_w, y))
+        for c in range(4):
+            x = left + c * col_w
+            page.draw_line((x, top), (x, top + rows * row_h))
+
+    def write(page, top: float, r: int, c: int, text: str) -> None:
+        _write_korean(page, (left + c * col_w + 8, top + r * row_h + 19), text, size=11)
+
+    first = document.new_page()
+    for c, text in enumerate(header):
+        write(first, 560.0, 0, c, text)
+    write(first, 560.0, 1, 0, "가 구분")
+    write(first, 560.0, 1, 1, "앞조각")
+    write(first, 560.0, 1, 2, "필수")
+    frame(first, 560.0, 2, skip_inner=set())
+    _write_korean(first, (280.0, 800.0), "- 1 -", size=10)
+
+    second = document.new_page()
+    for c, text in enumerate(header):
+        write(second, 120.0, 0, c, text)
+    write(second, 120.0, 1, 0, "나 구분")
+    write(second, 120.0, 1, 1, "뒷조각")     # 1~3행을 덮는 병합 셀의 값
+    write(second, 120.0, 1, 2, "필수")
+    write(second, 120.0, 2, 0, "다 구분")
+    write(second, 120.0, 2, 2, "필수")
+    write(second, 120.0, 3, 0, "라 구분")
+    write(second, 120.0, 3, 2, "선택")
+    # 1열의 2·3행 위 가로선을 안 그어 세 행을 덮는 병합 셀을 만든다
+    frame(second, 120.0, 4, skip_inner={(2, 1), (3, 1)})
+
+    path = tmp_path / "split_cell.pdf"
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 쪽을 가로지르는 표가 든 2쪽짜리 .pdf.
+# 2쪽 표는 1쪽 헤더를 되풀이하고 첫 데이터 행의 첫 열이 비어 있다 —
+# 되붙이기 · 반복 헤더 제거 · 세로 병합 앵커 이어받기를 한 번에 본다
+@pytest.fixture
+def pdf_page_crossing_table_file(tmp_path: Path) -> Path:
+    return _build_two_page_table_pdf(tmp_path / "crossing.pdf", separator=None)
+
+
+# 위와 같은 모양이되 2쪽 표 위에 한글 본문이 있는 .pdf.
+# 실제 문서에서 쪽마다 같은 헤더를 되풀이하는 **별개 표**가 이 모양이다
+# (AI가이드 12~17쪽의 `원칙 1`~`원칙 5`). 헤더만 보면 하나로 뭉개진다
+@pytest.fixture
+def pdf_separate_tables_file(tmp_path: Path) -> Path:
+    return _build_two_page_table_pdf(tmp_path / "separate.pdf", separator="2. 다음 절 제목입니다.")
+
+
 # 큰 제목 한 줄과 작은 본문 여러 줄이 든 .pdf. 제목 승격 검증용.
 # 본문 크기는 최빈값으로 정해지므로 본문 줄이 제목보다 많아야 한다
 @pytest.fixture

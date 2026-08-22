@@ -23,17 +23,17 @@ from rag_pipeline.schemas.document import ElementType
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 
 AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
-AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"
+# 2026-08-20 에 실데이터에서 뺐다 — 깨진 도형·표가 많다고 사용자가 판단했고
+# 변환본을 다시 올리기로 했다. 상수는 그때 되살릴 자리를 남겨 둔 것이다
+AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"  # noqa: F841 - 재도입 예정
 DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).hwpx"
 
 # 사람이 결과를 눈으로 확인한 값이다. 요소 -> 청크로 얼마나 뭉쳐지는지가 이 단계의 핵심이라
 # 양쪽을 함께 잠근다. 승격된 제목 수가 곧 섹션 경계 수다
 EXPECTED = {
     AI_GUIDE_PDF: {"elements": 509, "titles": 74, "chunks": 70},
-    AI_GUIDE_HWPX: {"elements": 721, "titles": 54, "chunks": 47},
-    # chunks 는 2026-08-18 에 45→47 로 늘었다. HWPX 세로 병합 셀을 격자로 펴면서 표가
-    # 길어져 상한에 걸리는 조각이 둘 늘었다. elements·titles 는 그대로다 — 로더가 만드는
-    # 리전 수는 안 변하고 표 **안**이 채워진 것이라, 이 값이 안 움직인 것이 오히려 근거다
+    # AI가이드 HWPX 는 2026-08-20 에 뺐다(위 상수 주석 참고). 그때 잠겨 있던 값은
+    # elements 721 / titles 54 / chunks 47 이고, 변환본이 오면 다시 재서 넣는다
     DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 47},
 }
 

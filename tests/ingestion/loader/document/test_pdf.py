@@ -9,7 +9,9 @@ import pymupdf
 
 from rag_pipeline.config import ContentRoutingConfig, IngestConfig
 from rag_pipeline.ingestion.loader.content import table_llamaparse
+from rag_pipeline.ingestion.loader.content.base import ContentType, LoadContext
 from rag_pipeline.ingestion.loader.document.pdf import (
+    _BOUNDARY_SPANS_KEY,
     PdfLoader,
     _fill_merged_cells,
     _merge_split_tables,
@@ -257,3 +259,98 @@ def test_fill_merged_cells_keeps_plain_empty_cells() -> None:
     )
 
     assert filled == [["A", ""], ["B", ""]]
+
+
+# 쪽을 가로지르는 표는 리전 하나로 합쳐지고 되풀이된 헤더는 버려져야 한다.
+# 사이에 있는 쪽 번호("- 1 -")는 한글이 없어 병합을 막지 않는다
+def test_page_crossing_table_merged(
+    pdf_page_crossing_table_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_page_crossing_table_file)
+    tables = [e for e in document.elements if e.type is ElementType.TABLE]
+
+    assert len(tables) == 1
+    rows = tables[0].metadata["rows"]
+    # 1쪽 3행 + 2쪽 3행 - 되풀이된 헤더 1행
+    assert len(rows) == 5
+    assert [cell.strip() for cell in rows[0]] == ["구분", "항목", "내용"]
+    assert [row[1].strip() for row in rows[1:]] == ["첫째 항목", "둘째 항목", "셋째 항목", "넷째 항목"]
+    # 끝 쪽은 HWPX 와 같은 키로 남긴다 — splitter 가 Chunk.page_end 로 나른다
+    assert tables[0].metadata["page_end"] == 2
+
+
+# 쪽 경계에서 끊긴 세로 병합은 앞 쪽 마지막 행에서 이어받되, 값이 나오면 멈춰야 한다.
+# 멈추지 않으면 "같은 열 위에 값이 있으면 채운다"로 되돌아가 안 덮어야 할 칸을 덮는다
+def test_page_crossing_carries_merge_anchor(
+    pdf_page_crossing_table_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_page_crossing_table_file)
+    rows = next(e for e in document.elements if e.type is ElementType.TABLE).metadata["rows"]
+
+    # 2쪽 첫 데이터 행의 빈 칸이 1쪽 마지막 행 값으로 채워진다
+    assert rows[3][0].strip() == "가 영역"
+    # 값이 있던 칸은 덮이지 않는다
+    assert rows[4][0].strip() == "나 영역"
+
+
+# 이어 붙인 표는 blob 을 잃어야 한다. 쪽을 가로지르는 표는 단일 쪽 크롭으로 표현할 수 없어,
+# 남겨 두면 유료 경로가 조각 하나만 보낸 결과를 표 전체인 줄 안다
+def test_page_crossing_table_drops_blob(
+    pdf_page_crossing_table_file: Path, offline_config: IngestConfig
+) -> None:
+    loader = PdfLoader(offline_config)
+    regions = loader.detect_regions(pdf_page_crossing_table_file, LoadContext(offline_config.content))
+    tables = [r for r in regions if r.content_type is ContentType.TABLE]
+
+    assert len(tables) == 1
+    assert tables[0].blob is None
+
+
+# 헤더가 똑같이 되풀이돼도 **사이에 한글 본문이 있으면** 별개 표다.
+# 이 테스트가 없으면 규칙이 '헤더 반복'으로 퇴화해도 아무도 모른다 —
+# 실측으로 그 규칙은 쪽을 가로지르는 인접 쌍 11개에서 오검출 4건을 냈다
+def test_separate_tables_with_repeated_header_not_merged(
+    pdf_separate_tables_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_separate_tables_file)
+    tables = [e for e in document.elements if e.type is ElementType.TABLE]
+
+    assert len(tables) == 2
+    assert all(len(e.metadata["rows"]) == 3 for e in tables)
+    assert all(e.metadata.get("page_end") is None for e in tables)
+
+
+# 쪽 경계가 셀 하나를 가로지르면 두 조각을 이어야 한다.
+# 실측(시행령 24~25쪽): `업무정보` + `(4)` 가 갈려 `(4)` 만 남은 행은 몇 번째인지 알 수 없다
+def test_split_cell_is_joined(pdf_split_cell_file: Path, offline_config: IngestConfig) -> None:
+    document = PdfLoader(offline_config).load(pdf_split_cell_file)
+    tables = [e for e in document.elements if e.type is ElementType.TABLE]
+
+    assert len(tables) == 1
+    rows = tables[0].metadata["rows"]
+    joined = "앞조각\n뒷조각"
+    # 두 조각이 덮던 행 **전부** — 앞 쪽 마지막 행과 다음 쪽 병합 셀이 덮던 세 행
+    assert [row[1] for row in rows[1:]] == [joined, joined, joined, joined]
+
+
+# 값이 같아도 **병합이 아니면** 이으면 안 된다.
+# 이 테스트가 없으면 판정이 '값 반복'으로 퇴화해도 안 걸린다 — 실측으로 그 규칙은 쪽 경계
+# 열 쌍 10개에서 오검출 2건을 냈다(`구분` 열의 `선택`/`선택`, `필수`/`필수`)
+def test_repeated_values_are_not_joined(
+    pdf_split_cell_file: Path, offline_config: IngestConfig
+) -> None:
+    document = PdfLoader(offline_config).load(pdf_split_cell_file)
+    rows = next(e for e in document.elements if e.type is ElementType.TABLE).metadata["rows"]
+
+    assert [row[2] for row in rows[1:]] == ["필수", "필수", "필수", "선택"]
+
+
+# 경계 span 을 나르는 사설 키는 병합이 끝나면 사라져야 한다.
+# 남으면 공개 스키마(ParsedDocument)로 새어 나간다
+def test_boundary_spans_key_is_dropped(
+    pdf_split_cell_file: Path, offline_config: IngestConfig
+) -> None:
+    loader = PdfLoader(offline_config)
+    regions = loader.detect_regions(pdf_split_cell_file, LoadContext(offline_config.content))
+
+    assert all(_BOUNDARY_SPANS_KEY not in r.metadata for r in regions)

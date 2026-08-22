@@ -127,7 +127,6 @@ def test_cleaning_is_idempotent(structure_only_config: IngestConfig) -> None:
     "name",
     [
         "2025년 학교기록물 관리 지침.hwpx",
-        AI_GUIDE_HWPX,
         "시행령 개정안 안내서(정보시스템의무사항알림).hwpx",
     ],
 )
@@ -157,7 +156,12 @@ def test_documents_without_headers_lose_nothing(
 
 
 # 같은 문서를 HWPX 97쪽 / PDF 28쪽으로 세는데도 제거 개수가 25 로 같아야 한다.
-# 이게 '걸친 폭' 판정을 고른 이유이고, 등장 횟수 비율로는 성립하지 않는 성질이다
+# 이게 '걸친 폭' 판정을 고른 이유이고, 등장 횟수 비율로는 성립하지 않는 성질이다.
+#
+# **AI가이드 HWPX 는 2026-08-20 에 실데이터에서 뺐는데 이 테스트에만 남겼다.** 뺀 사유가
+# '깨진 도형·표' 인데 이 테스트는 도형도 표도 안 쓴다 — 쪽 첫 요소의 텍스트만 본다.
+# 그리고 실측으로 **다른 세 문서 짝(학교기록물·2026중등·시행령)은 두 포맷 모두 머리말 제거
+# 0건**이라, 이 짝을 빼면 '걸친 폭' 판정을 검증할 자[尺]가 저장소에서 사라진다
 @pytest.mark.parametrize("name", [AI_GUIDE_HWPX, AI_GUIDE_PDF])
 def test_running_header_removed_in_both_formats(
     name: str, structure_only_config: IngestConfig
