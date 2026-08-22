@@ -1,17 +1,11 @@
-"""콘텐츠 유형(텍스트/표/이미지)별 처리 핸들러 — 2차 라우팅."""
+"""콘텐츠 유형(텍스트/표/이미지)별 처리 핸들러 — 2차 라우팅.
 
-from rag_pipeline.ingestion.loader.content.base import (
-    ContentRegion,
-    ContentType,
-    LoadContext,
-    rows_to_markdown,
-)
-from rag_pipeline.ingestion.loader.content.router import ContentRouter
+**패키지 레벨 재수출을 두지 않는다.** 소비자는 예외 없이 `.base` · `.router` 를 직접 짚고
+있어서(2026-08-22 감사: 패키지 경로로 다섯 이름을 가져가는 곳 0곳) 재수출이 아무 일도 하지
+않았다. 게다가 그것이 순환 고리를 만들었다 — 이 파일이 `.router` 를 부르고 `.router` 가 다시
+`from ...content import image_ocr, ...` 로 부분 초기화된 패키지를 되짚었다. 서브모듈 폴백
+덕에 돌고는 있었지만 얻는 것 없이 짊어진 취약성이라 걷어냈다.
 
-__all__ = [
-    "ContentRegion",
-    "ContentRouter",
-    "ContentType",
-    "LoadContext",
-    "rows_to_markdown",
-]
+`router.py` 의 `from ...content import image_ocr, ...` 는 **서브모듈 import** 라 이 파일이
+비어도 그대로 동작한다.
+"""

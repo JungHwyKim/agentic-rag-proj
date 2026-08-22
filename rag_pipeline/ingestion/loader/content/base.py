@@ -7,10 +7,9 @@ import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from rag_pipeline.config import ContentRoutingConfig
-from rag_pipeline.schemas.document import Element
 
 
 # 문서 안에서 발견되는 콘텐츠의 종류. 어떤 핸들러로 보낼지를 결정한다
@@ -65,11 +64,6 @@ class LoadContext:
     def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
-
-
-# 콘텐츠 리전 하나를 Element 목록으로 변환하는 핸들러 인터페이스
-class ContentHandler(Protocol):
-    def handle(self, region: ContentRegion, ctx: LoadContext) -> list[Element]: ...
 
 
 # 셀 안의 파이프·개행이 마크다운 표를 깨뜨리지 않도록 이스케이프

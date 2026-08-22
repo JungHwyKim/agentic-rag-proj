@@ -2,6 +2,13 @@
 
 OCR이 축 라벨 글자만 나열하는 것과 달리, 그래프가 무엇을 보여주는지와
 표에 담긴 수치까지 검색 가능한 문장으로 옮긴다.
+
+**응답을 해석하는 구간도 `try` 안에 둔다.** 호출만 감싸면 `choices` 가 비었을 때
+`IndexError` 가 `handle()` 밖으로 새고, 그러면 라우터의 OCR 폴백이 발동할 기회 자체가 없다 —
+실측으로 재현했다(2026-08-22, `choices=[]` 가짜 응답: 예외가 `route()` 밖까지 나가고
+`vision_calls` 는 0인데 호출은 이미 과금됐다). `table_llamaparse` 가 2026-08-18 에 같은
+모양으로 적재 전체를 멈춘 적이 있고, 그 수정이 이 파일에는 안 퍼져 있었다. 호출 카운터는
+해석보다 **먼저** 올린다.
 """
 
 from __future__ import annotations
@@ -190,15 +197,22 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
         ctx.warn(f"Vision 호출 실패로 OCR로 폴백했습니다: {type(exc).__name__}")
         return None
 
-    choice = response.choices[0]
-    # 잘린 응답은 파싱이 깨져 본문이 오염된다. 건져내기는 아래가 하지만, 잘렸다는 사실
-    # 자체는 남겨야 한다 — 지금까지 조용히 오염돼 아무도 몰랐다
-    if getattr(choice, "finish_reason", None) == "length":
-        ctx.warn("Vision 응답이 길이 상한에서 잘려 일부만 반영했습니다.")
-
-    content = (choice.message.content or "").strip()
-    result = _parse_response(content)
+    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다
     ctx.vision_calls += 1
+
+    try:
+        choice = response.choices[0]
+        # 잘린 응답은 파싱이 깨져 본문이 오염된다. 건져내기는 아래가 하지만, 잘렸다는 사실
+        # 자체는 남겨야 한다 — 지금까지 조용히 오염돼 아무도 몰랐다
+        if getattr(choice, "finish_reason", None) == "length":
+            ctx.warn("Vision 응답이 길이 상한에서 잘려 일부만 반영했습니다.")
+
+        content = (choice.message.content or "").strip()
+        result = _parse_response(content)
+    except Exception as exc:  # noqa: BLE001 - 응답 모양이 바뀌어도 폴백으로 내려가야 한다
+        ctx.warn(f"Vision 응답을 해석하지 못해 OCR로 폴백했습니다: {type(exc).__name__}")
+        return None
+
     cache.set(key, result)
     return result
 

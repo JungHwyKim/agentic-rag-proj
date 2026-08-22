@@ -40,8 +40,17 @@
 
 비용 가시성은 `LoadContext` 의 카운터가 `DocumentMetadata` 로 노출되는 경로 하나뿐이다.
 
-**(a) 카운터는 호출이 나간 뒤에 올린다** — `image_vision.py` 의 `_call_vision()`,
-`table_llamaparse.py` 의 `_parse_blob()`
+**(a) 카운터는 호출이 나간 뒤에 올린다** — `table_llamaparse.py` 의 `_parse_blob()`,
+`table_vision.py` 와 `image_vision.py` 의 `_call_vision()`
+
+**이 절이 지목하던 예시가 실제로는 규약을 어기고 있었다**(2026-08-22 감사에서 발견). 오래
+`image_vision.py:_call_vision()` 을 (a)의 모범으로 이름까지 대며 인용했는데, 그 함수는 카운터를
+**해석 뒤**에 올리고 해석부를 `try` 밖에 두고 있었다 — `choices=[]` 하나로 `IndexError` 가
+`handle()` 밖까지 새고 과금 1인데 장부가 0이 됐다(실행으로 재현). 2026-08-18 에
+`table_llamaparse` 를 고친 수정이 형제 파일로 안 퍼진 것이다. 지금은 셋 다 맞다.
+
+**교훈은 예시를 바꾸는 것이 아니다** — 외부 API 핸들러가 여럿이면 **리뷰 때 나란히 대조한다.**
+reference 가 예시로 든 함수라고 검사에서 빼지 않는다. 문서가 코드보다 늦게 낡는다.
 
 가르는 기준은 **과금이 됐는가**이지 우리가 그 응답을 잘 썼는가가 아니다. 그래서
 `_parse_blob()` 은 `parse()` 가 돌아온 직후, **응답을 해석하기 전에** 올린다. 해석이 실패해도
