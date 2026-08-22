@@ -58,7 +58,11 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 ## 아직 설계되지 않은 것 — 규칙을 만들지 않는다
 
 - **`top_k` 기본값과 relevance threshold 는 근거가 없다.** 지금 `search(top_k=5)` 의 5는
-  임시값이고, 근거는 정답 질의 세트가 생겨야 나온다(`plan_log/평가-세트.md`).
+  임시값이다. **2026-08-22 에 정답 질의 세트가 생겼고**(`evaluation/qa_set.jsonl`, 60건,
+  사람 검수 완료) **dense baseline 도 쟀다**(`hit@10` 0.483 · `MRR` 0.253 —
+  `verify_log/2026-08-22-검색평가-세트.md`). 근거를 잴 수 있으므로 `top_k` 수치를 지적하는
+  대신 *"무엇으로 정했나"* 를 묻는다. 다만 **비교 1~6번은 아직 하나도 안 돌았다** —
+  hybrid·리랭커·포맷이 전부 미구현이거나 미측정이라 지금 값들은 여전히 임시값이다.
   수치를 지적하지 않는다
 - **metadata 필터 검색은 일부러 안 만들었다.** `search()` 에 `filters` 인자가 없는 것은
   누락이 아니다 — 쓸 만한 필터 축이 `document_id` 뿐이고 **`page` 는 못 쓴다**(같은 문서를
