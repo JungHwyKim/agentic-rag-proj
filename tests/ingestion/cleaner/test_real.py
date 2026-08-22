@@ -25,7 +25,9 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
 AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"
 AI_GUIDE_PDF_CLEANED_ELEMENTS = 202
-AI_GUIDE_PDF_CLEANED_CELLS = 26
+# 2026-08-19 에 26→32 로 늘었다. PDF 병합 셀을 되풀이로 채우면서, 제어문자가 든 칸이
+# 자기 span 만큼 복제됐기 때문이다. 늘어난 6개는 새로 더러워진 칸이 아니라 **같은 칸의 사본**이다
+AI_GUIDE_PDF_CLEANED_CELLS = 32
 
 # 같은 문서를 로더는 HWPX 97쪽 / PDF 28쪽으로 센다(쪽 계산 별건). 그런데도 머리말 제거 개수가
 # 25 로 같은 것이 '걸친 폭' 판정이 쪽 수 오류에 강하다는 증거다 — 등장 횟수 비율이었다면
@@ -125,7 +127,6 @@ def test_cleaning_is_idempotent(structure_only_config: IngestConfig) -> None:
     "name",
     [
         "2025년 학교기록물 관리 지침.hwpx",
-        AI_GUIDE_HWPX,
         "시행령 개정안 안내서(정보시스템의무사항알림).hwpx",
     ],
 )
@@ -155,7 +156,12 @@ def test_documents_without_headers_lose_nothing(
 
 
 # 같은 문서를 HWPX 97쪽 / PDF 28쪽으로 세는데도 제거 개수가 25 로 같아야 한다.
-# 이게 '걸친 폭' 판정을 고른 이유이고, 등장 횟수 비율로는 성립하지 않는 성질이다
+# 이게 '걸친 폭' 판정을 고른 이유이고, 등장 횟수 비율로는 성립하지 않는 성질이다.
+#
+# **AI가이드 HWPX 는 2026-08-20 에 실데이터에서 뺐는데 이 테스트에만 남겼다.** 뺀 사유가
+# '깨진 도형·표' 인데 이 테스트는 도형도 표도 안 쓴다 — 쪽 첫 요소의 텍스트만 본다.
+# 그리고 실측으로 **다른 세 문서 짝(학교기록물·2026중등·시행령)은 두 포맷 모두 머리말 제거
+# 0건**이라, 이 짝을 빼면 '걸친 폭' 판정을 검증할 자[尺]가 저장소에서 사라진다
 @pytest.mark.parametrize("name", [AI_GUIDE_HWPX, AI_GUIDE_PDF])
 def test_running_header_removed_in_both_formats(
     name: str, structure_only_config: IngestConfig

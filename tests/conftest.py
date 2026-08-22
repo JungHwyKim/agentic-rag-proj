@@ -18,7 +18,12 @@ from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.util import Inches
 
-from rag_pipeline.config import ContentRoutingConfig, IngestConfig
+from rag_pipeline.config import (
+    ContentRoutingConfig,
+    EmbeddingConfig,
+    IndexingConfig,
+    IngestConfig,
+)
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
 _KOREAN_FONTS = [
@@ -41,7 +46,7 @@ def _korean_font(size: int = 48) -> ImageFont.FreeTypeFont | None:
 
 # 외부 API를 절대 호출하지 않는 설정. 단위 테스트 기본값
 @pytest.fixture
-def offline_config() -> IngestConfig:
+def offline_config(tmp_path: Path) -> IngestConfig:
     config = IngestConfig()
     object.__setattr__(
         config,
@@ -53,6 +58,23 @@ def offline_config() -> IngestConfig:
             image_handler="ocr",
             cache_enabled=False,
         ),
+    )
+    # 임베딩은 ingest() 밖에 있어 이 픽스처로 호출될 일이 없다. 그래도 덮어쓰는 이유는
+    # EmbeddingConfig() 가 .env 를 읽기 때문이다 — 개발자 머신의 실제 키가 픽스처로 새면
+    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다)
+    object.__setattr__(
+        config,
+        "_embedding",
+        EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
+    )
+    # 색인도 같은 이유로 덮어쓴다. 여기서 막는 것은 키가 아니라 **저장 위치**다 —
+    # IndexingConfig() 의 기본 qdrant_path 가 PROJECT_ROOT/.qdrant 라, 안 덮으면 테스트가
+    # 개발자의 실제 색인을 건드리고 테스트끼리도 서로의 상태를 물려받는다.
+    # qdrant 로컬 모드는 이 경로에 배타 잠금을 걸어 병렬 실행도 막힌다
+    object.__setattr__(
+        config,
+        "_indexing",
+        IndexingConfig(qdrant_path=tmp_path / "qdrant"),
     )
     return config
 
@@ -178,6 +200,184 @@ def pdf_with_table_file(tmp_path: Path) -> Path:
     return path
 
 
+# 쪽을 가로지르는 표 픽스처가 쓰는 열 이름. 1쪽과 2쪽이 **같은 헤더**를 갖는 것이 요점이다
+_CROSSING_HEADER = ["구분", "항목", "내용"]
+
+
+# 괘선 표 하나를 그린다. 좌우 끝이 소수점까지 같아야 쪽 넘김 판정이 발화하므로
+# 두 쪽 모두 같은 left/col_w 로 그린다
+def _draw_ruled_table(
+    page, top: float, cells: list[list[str]], left: float = 72.0, col_w: float = 140.0
+) -> None:
+    row_h = 28.0
+    cols, rows = len(cells[0]), len(cells)
+    for r in range(rows + 1):
+        y = top + r * row_h
+        page.draw_line((left, y), (left + cols * col_w, y))
+    for c in range(cols + 1):
+        x = left + c * col_w
+        page.draw_line((x, top), (x, top + rows * row_h))
+    for r, row in enumerate(cells):
+        for c, value in enumerate(row):
+            if value:
+                _write_korean(page, (left + c * col_w + 8, top + r * row_h + 19), value, size=11)
+
+
+# 2쪽에 걸친 같은 모양의 표 둘을 그린다. `separator` 를 주면 2쪽 표 위에 한글 본문이 놓인다
+def _build_two_page_table_pdf(path: Path, separator: str | None) -> Path:
+    document = pymupdf.open()
+
+    first = document.new_page()
+    _draw_ruled_table(
+        first,
+        560.0,
+        [_CROSSING_HEADER, ["가 영역", "첫째 항목", "첫째 내용"], ["가 영역", "둘째 항목", "둘째 내용"]],
+    )
+    # 쪽 번호는 한글이 없어 '사이에 낀 본문'으로 세이지 않는다. 실파일에서 참 연속 4건
+    # 사이에 있던 것이 정확히 이것뿐이라, 이 줄이 있어야 규칙이 제대로 검증된다
+    _write_korean(first, (280.0, 800.0), "- 1 -", size=10)
+
+    second = document.new_page()
+    if separator is not None:
+        _write_korean(second, (72.0, 90.0), separator, size=12)
+    _draw_ruled_table(
+        second,
+        120.0,
+        [_CROSSING_HEADER, ["", "셋째 항목", "셋째 내용"], ["나 영역", "넷째 항목", "넷째 내용"]],
+    )
+
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 쪽 경계가 셀 하나를 가로질러 글자가 갈린 2쪽짜리 .pdf.
+#
+# 두 축을 한 픽스처에 담는다.
+#   1열 — 2쪽에서 **세 행을 덮는 병합 셀**. 갈린 셀이라 이어져야 한다
+#   2열 — 값이 같지만 **병합이 아니다**. 이어지면 안 된다.
+#          실측으로 값 반복만 보는 규칙이 여기서 오검출을 냈다(`구분` 열의 `필수`/`필수`)
+#
+# 병합은 **가로 괘선을 안 그어서** 만든다. find_tables 가 선으로 격자를 잡기 때문이다
+@pytest.fixture
+def pdf_split_cell_file(tmp_path: Path) -> Path:
+    document = pymupdf.open()
+    header = ["구분", "항목", "비고"]
+    left, col_w, row_h = 72.0, 140.0, 28.0
+
+    def frame(page, top: float, rows: int, skip_inner: set[tuple[int, int]]) -> None:
+        for r in range(rows + 1):
+            y = top + r * row_h
+            for c in range(3):
+                if (r, c) in skip_inner:
+                    continue
+                page.draw_line((left + c * col_w, y), (left + (c + 1) * col_w, y))
+        for c in range(4):
+            x = left + c * col_w
+            page.draw_line((x, top), (x, top + rows * row_h))
+
+    def write(page, top: float, r: int, c: int, text: str) -> None:
+        _write_korean(page, (left + c * col_w + 8, top + r * row_h + 19), text, size=11)
+
+    first = document.new_page()
+    for c, text in enumerate(header):
+        write(first, 560.0, 0, c, text)
+    write(first, 560.0, 1, 0, "가 구분")
+    write(first, 560.0, 1, 1, "앞조각")
+    write(first, 560.0, 1, 2, "필수")
+    frame(first, 560.0, 2, skip_inner=set())
+    _write_korean(first, (280.0, 800.0), "- 1 -", size=10)
+
+    second = document.new_page()
+    for c, text in enumerate(header):
+        write(second, 120.0, 0, c, text)
+    write(second, 120.0, 1, 0, "나 구분")
+    write(second, 120.0, 1, 1, "뒷조각")     # 1~3행을 덮는 병합 셀의 값
+    write(second, 120.0, 1, 2, "필수")
+    write(second, 120.0, 2, 0, "다 구분")
+    write(second, 120.0, 2, 2, "필수")
+    write(second, 120.0, 3, 0, "라 구분")
+    write(second, 120.0, 3, 2, "선택")
+    # 1열의 2·3행 위 가로선을 안 그어 세 행을 덮는 병합 셀을 만든다
+    frame(second, 120.0, 4, skip_inner={(2, 1), (3, 1)})
+
+    path = tmp_path / "split_cell.pdf"
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 쪽을 가로지르는 표가 든 2쪽짜리 .pdf.
+# 2쪽 표는 1쪽 헤더를 되풀이하고 첫 데이터 행의 첫 열이 비어 있다 —
+# 되붙이기 · 반복 헤더 제거 · 세로 병합 앵커 이어받기를 한 번에 본다
+@pytest.fixture
+def pdf_page_crossing_table_file(tmp_path: Path) -> Path:
+    return _build_two_page_table_pdf(tmp_path / "crossing.pdf", separator=None)
+
+
+# 위와 같은 모양이되 2쪽 표 위에 한글 본문이 있는 .pdf.
+# 실제 문서에서 쪽마다 같은 헤더를 되풀이하는 **별개 표**가 이 모양이다
+# (AI가이드 12~17쪽의 `원칙 1`~`원칙 5`). 헤더만 보면 하나로 뭉개진다
+@pytest.fixture
+def pdf_separate_tables_file(tmp_path: Path) -> Path:
+    return _build_two_page_table_pdf(tmp_path / "separate.pdf", separator="2. 다음 절 제목입니다.")
+
+
+# 큰 제목 한 줄과 작은 본문 여러 줄이 든 .pdf. 제목 승격 검증용.
+# 본문 크기는 최빈값으로 정해지므로 본문 줄이 제목보다 많아야 한다
+@pytest.fixture
+def pdf_with_heading_file(tmp_path: Path) -> Path:
+    document = pymupdf.open()
+    page = document.new_page()
+
+    _write_korean(page, (72, 90), "1. 지원 대상", size=22)
+    for index, line in enumerate(
+        ["중소기업이 해당한다.", "스타트업도 해당한다.", "연구기관도 포함한다."]
+    ):
+        _write_korean(page, (72, 140 + index * 24), line, size=10)
+
+    path = tmp_path / "heading.pdf"
+    document.save(str(path))
+    document.close()
+    return path
+
+
+# 글자 크기가 다른 문단들이 든 .hwpx. header.xml 의 charPr 를 실제 한컴 파일처럼 넣는다.
+# '강조' 문단은 본문 크기와 큰 크기를 섞어, 큰 글씨가 제목이 아니라 강조인 경우를 만든다
+@pytest.fixture
+def hwpx_with_heading(tmp_path: Path) -> Path:
+    header = """<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:charProperties>
+      <hh:charPr id="0" height="1000"/>
+      <hh:charPr id="1" height="1600"/>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"""
+
+    def run(text: str, char_pr: str) -> str:
+        return f'<hp:run charPrIDRef="{char_pr}"><hp:t>{text}</hp:t></hp:run>'
+
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p>{run("□ 개요", "1")}</hp:p>
+  <hp:p>{run("첫 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("두 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("세 번째 본문입니다.", "0")}</hp:p>
+  <hp:p>{run("작성 ", "0")}{run("홍길동", "1")}{run(" 수석", "0")}</hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "heading.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/header.xml", header)
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
 # cp949로 저장한 텍스트 파일. 한국어 인코딩 자동 감지 검증용
 @pytest.fixture
 def cp949_text_file(tmp_path: Path) -> Path:
@@ -257,6 +457,38 @@ def hwpx_file(tmp_path: Path) -> Path:
 </hs:sec>"""
 
     path = tmp_path / "sample.hwpx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/hwp+zip")
+        zf.writestr("Contents/content.hpf", "<package/>")
+        zf.writestr("Contents/section0.xml", section)
+    return path
+
+
+# 병합 셀이 든 .hwpx. 세로 병합(rowSpan)에 가려진 칸은 tc 로 아예 안 나오므로,
+# cellAddr 를 안 보고 tc 순서대로 담으면 값이 왼쪽으로 밀린다. 가로 병합도 함께 넣어
+# 두 규칙(세로는 되풀이 / 가로는 빈 칸)을 한 표에서 확인한다
+@pytest.fixture
+def hwpx_merged_cells(tmp_path: Path) -> Path:
+    def cell(col: int, row: int, text: str, col_span: int = 1, row_span: int = 1) -> str:
+        return (
+            f'<hp:tc><hp:cellAddr colAddr="{col}" rowAddr="{row}"/>'
+            f'<hp:cellSpan colSpan="{col_span}" rowSpan="{row_span}"/>'
+            f"<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+        )
+
+    rows = (
+        # 첫 칸이 세 행을 덮는다. 아래 두 tr 에는 그 자리의 tc 가 없다
+        f"<hp:tr>{cell(0, 0, '구분', row_span=3)}{cell(1, 0, '항목')}{cell(2, 0, '담당')}</hp:tr>"
+        f"<hp:tr>{cell(1, 1, '가')}{cell(2, 1, '김')}</hp:tr>"
+        f"<hp:tr>{cell(1, 2, '비고 전체', col_span=2)}</hp:tr>"
+    )
+    section = f"""<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:p><hp:run><hp:tbl rowCnt="3" colCnt="3">{rows}</hp:tbl></hp:run></hp:p>
+</hs:sec>"""
+
+    path = tmp_path / "merged.hwpx"
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("mimetype", "application/hwp+zip")
         zf.writestr("Contents/content.hpf", "<package/>")
@@ -570,6 +802,20 @@ def png_bytes():
     def _make(width: int = 400, height: int = 200, color: str = "white") -> bytes:
         buffer = io.BytesIO()
         Image.new("RGB", (width, height), color).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    return _make
+
+
+# 포맷을 골라 이미지 바이트를 만든다. Vision 이 포맷별로 다르게 보내는지 볼 때 쓴다 —
+# 실제 문서에는 bmp·jpx 가 들어있는데 합성 픽스처가 PNG 뿐이라 그 경로가 안 밟혔다
+@pytest.fixture
+def image_bytes():
+    def _make(
+        fmt: str = "PNG", width: int = 400, height: int = 200, color: str = "white"
+    ) -> bytes:
+        buffer = io.BytesIO()
+        Image.new("RGB", (width, height), color).save(buffer, format=fmt)
         return buffer.getvalue()
 
     return _make

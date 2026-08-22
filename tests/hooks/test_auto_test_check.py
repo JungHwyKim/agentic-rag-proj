@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
+import _hookutil
 import auto_test_check
 import pytest
 
@@ -79,7 +81,7 @@ def test_editing_a_test_file_runs_that_file():
     [
         "CLAUDE.md",
         "plan_log/하네스-확장.md",
-        "task_log/phase1.txt",
+        "task_log/phase1.md",
         "regression/baseline.json",
         ".claude/skills/rag-code-review/SKILL.md",
     ],
@@ -147,6 +149,19 @@ def test_unmapped_by_design_entries_exist():
         assert (PROJECT_ROOT / item).exists(), f"UNMAPPED_BY_DESIGN 에 없는 경로가 있다: {item}"
 
 
+# ---- 종료코드 판정 ----
+
+
+# pytest 종료코드 5 는 "수집된 테스트가 없음"이지 실패가 아니다. 실패로 보면
+# integration 전용 파일을 고칠 때마다 훅이 막는다 — addopts 가 전부 deselect 해서 5가 난다
+def test_no_tests_collected_is_not_a_failure():
+    assert 5 in auto_test_check._OK_RETURNCODES
+    assert 0 in auto_test_check._OK_RETURNCODES
+    # 진짜 실패(1)와 사용 오류(4)는 통과시키면 안 된다
+    assert 1 not in auto_test_check._OK_RETURNCODES
+    assert 4 not in auto_test_check._OK_RETURNCODES
+
+
 # ---- 루프 방지 ----
 
 
@@ -191,3 +206,51 @@ def test_skip_env_disables_everything(monkeypatch):
     auto_test_check.main()
 
     assert called == []
+
+
+# --- file_path 가 없는 도구(Bash)로 고친 경우 ---
+#
+# 기록 훅이 2026-08-19 에 겪은 것과 같은 구멍인데 **방향이 반대다.** 저쪽은 오탐(막힘)이라
+# 눈에 띄었지만 여기는 조용히 아무 검사도 안 돈다. auto mode 에서는 Bash 편집이 기본이다.
+
+
+# Bash 로 소스를 고치면 tool_input 에 file_path 가 없다. 그래도 영역을 찾아야 한다
+def test_bash_edit_is_mapped_by_filesystem(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".git").mkdir()
+    stage = tmp_path / "rag_pipeline" / "ingestion" / "cleaner"
+    stage.mkdir(parents=True)
+    monkeypatch.setattr(_hookutil, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(auto_test_check, "PROJECT_ROOT", tmp_path)
+
+    session = "sess-bash-edit"
+    _hookutil.mark_session_start(session)
+    time.sleep(0.01)
+    (stage / "characters.py").write_text("# 고쳤다\n", encoding="utf-8")
+
+    targets = auto_test_check._targets_for_call({"tool_input": {"command": "sed -i ..."}}, session)
+
+    assert targets == [auto_test_check.test_target_for("rag_pipeline/ingestion/cleaner/x.py")]
+
+
+# 아무것도 안 고쳤으면 돌릴 것이 없다. Bash 호출마다 테스트가 돌면 안 된다
+def test_bash_call_without_edit_runs_nothing(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "rag_pipeline").mkdir()
+    monkeypatch.setattr(_hookutil, "PROJECT_ROOT", tmp_path)
+
+    session = "sess-bash-noop"
+    _hookutil.mark_session_start(session)
+
+    assert auto_test_check._targets_for_call({"tool_input": {"command": "git status"}}, session) == []
+
+
+# file_path 가 있으면 종전대로 그것 하나만 본다. 파일시스템을 훑지 않는다
+def test_write_edit_still_uses_file_path(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(_hookutil, "PROJECT_ROOT", tmp_path)
+
+    payload = {"tool_input": {"file_path": "rag_pipeline/ingestion/cleaner/characters.py"}}
+
+    assert auto_test_check._targets_for_call(payload, "sess-write") == [
+        auto_test_check.test_target_for("rag_pipeline/ingestion/cleaner/characters.py")
+    ]

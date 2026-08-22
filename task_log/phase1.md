@@ -1,18 +1,18 @@
-1단계 완료했습니다.
+# 1단계 완료했습니다.
 
-환경설정
+## 환경설정
 
 - uv + Python 3.11.9 가상환경, requirements.txt / requirements.lock
 - 53개 패키지 (초안의 98개에서 축소 — 아래 설명)
 - Tesseract 5.5.0 + 한국어 연동 확인
 
-검증 결과
+## 검증 결과
 
-ruff:    All checks passed
-pytest:  106 passed (API 키 없이 전부 통과)
-E2E:     docx/xlsx/png 업로드 정상, .exe·미확인 바이너리 415 거부
+- ruff: All checks passed
+- pytest: 106 passed (API 키 없이 전부 통과)
+- E2E: docx/xlsx/png 업로드 정상, .exe·미확인 바이너리 415 거부
 
-작업 중 발견해서 고친 것
+## 작업 중 발견해서 고친 것
 
 1. llama-parse가 이중으로 deprecated — llama-parse → llama-cloud-services(2026-05-01 유지보수 종료, 이미 지남) → llama-cloud>=1.0. 죽은 패키지 대신 현행 SDK로 교체했고, 덕분에 불필요하게 딸려오던 llama-index-core·sqlalchemy·nltk·numpy·networkx 등 45개가 빠졌습니다.
 
@@ -26,14 +26,19 @@ E2E:     docx/xlsx/png 업로드 정상, .exe·미확인 바이너리 415 거부
 
 6. .env.example에 실제 API 키 — 커밋되는 템플릿 파일이라 키가 저장소에 올라갑니다. .env(gitignore 대상)로 옮기고 템플릿은 비웠습니다.
 
-남은 것 두 가지
+## 남은 것 두 가지
 
 .hwpx 실제 샘플이 필요합니다. 지금 테스트는 코드로 만든 합성 파일이라 실제 한컴 산출물과 구조가 다를 수 있습니다. 표와 문단이 있는 파일 하나를 tests/fixtures/에 넣어주시면 검증하겠습니다.
 
 유료 API 실호출은 안 했습니다. .env에 실제 키가 있어서 표 있는 PDF나 차트 이미지를 올리면 과금됩니다. 허락 없이 크레딧을 쓰지 않으려고 외부 호출이 없는 경로로만 확인했습니다. 직접 확인하시려면:
+
+```powershell
 .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 # http://127.0.0.1:8000/docs 에서 표 있는 PDF 업로드
+```
 
 검증 끝나면 다음은 cleaner/입니다.
 
+```
 claude --resume 6a7e4432-c1c7-4524-b91a-4d98205e09e5
+```

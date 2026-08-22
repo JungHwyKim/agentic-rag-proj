@@ -11,19 +11,36 @@
     때문이다. **표시는 여기서 만들지 않는다** — 오탐으로 엉뚱한 세션이 막히면 짜증나지만,
     리마인더는 오탐이어도 한 줄 무시하면 끝이라 비용이 비대칭이다.
 
-  PostToolUse (matcher: Skill)
+  PostToolUse (matcher: Skill|Write|Edit)
     plan-log 스킬이 호출되면 `.git/claude_plan_log_active/<session_id>` 마커를 만든다.
-    "이 세션은 설계 논의 세션"이라는 표시다.
+    "이 세션은 설계 논의 세션"이라는 표시다. `plan_log/` 아래에 쓰면 별도로
+    `claude_plan_log_written` 마커를 만든다 — "이번 세션에 실제로 기록했다"는 표시다.
 
   Stop
-    마커가 있는데 `plan_log/` 에 변경이 없으면 종료코드 2 로 막는다.
+    설계 논의 표시가 있는데 기록이 없으면 종료코드 2 로 막는다. **기록 여부는 두 경로로
+    본다** — 위의 마커, 그리고 세션 시작 이후 `plan_log/` 아래 파일의 mtime 이다.
 
 Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립트로 확인했다 —
 `{"name":"Skill","input":{"skill":"rag-code-review"}}` 형태로 남는다. 즉 tool_name 은
 "Skill", 스킬명은 tool_input.skill 이다.
 
+**기록 여부를 `git status` 로 보지 않는 이유.** 처음에는 `plan_log/` 에 변경이 하나라도
+있으면 통과시켰는데, 그 판정은 세션을 구분하지 못한다. 지난 세션이 남긴 미커밋 기록이
+작업트리에 있으면 이번 세션이 한 줄도 안 써도 통과한다. 2026-08-17 에 실제로 그 상태를
+발견했다 — `plan_log/` 에 미커밋 3건이 쌓여 검사가 통째로 무력화돼 있었다. 기록이 밀릴수록
+검사가 더 헐거워지니 방향이 정반대다. 표시를 만드는 수법이 이미 여기 있었으므로 그대로
+한 칸 더 쓴다.
+
 표시를 모델이 직접 파일로 쓰게 하지 않고 훅으로 만드는 이유는 이 장치 전체의 전제와
 같다. 모델에게 시키는 일은 지켜질 때도 있고 아닐 때도 있지만, 훅은 하네스가 돌린다.
+
+**마커만으로는 부족하다는 것이 2026-08-19 에 드러났다.** 기록 마커는 PostToolUse 의
+`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있다. 그래서 `plan_log/` 를
+Bash(python heredoc)로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도 막혔다.
+같은 전제가 여기에도 걸린다 — "기록은 Write/Edit 로 쓰라"고 지시해서 고칠 수는 없다.
+그래서 도구가 아니라 **파일이 실제로 바뀌었는가**를 함께 본다(`_hookutil.wrote_under`).
+비교 기준이 세션 시작 시각이라, git 판정이 못 갈랐던 "지난 세션의 미커밋 기록"은 여전히
+안 통과한다.
 
 무한 루프 방지·탈출구·실패 시 통과 규약은 `_hookutil` 의 설명과 같다. 판단이 서지
 않으면 막지 않는다.
@@ -44,6 +61,9 @@ LOG_PREFIX = "plan_log/"
 
 # 설계 논의 세션 표시
 ACTIVE_NS = "claude_plan_log_active"
+
+# 이번 세션에 실제로 기록을 썼다는 표시
+WRITTEN_NS = "claude_plan_log_written"
 
 # 세션당 한 번만 막기 위한 표시
 BLOCKED_NS = "claude_plan_log_blocked"
@@ -105,6 +125,15 @@ def _is_plan_log_skill(payload: dict) -> bool:
     return name.rsplit(":", 1)[-1] == SKILL_NAME
 
 
+# 이번 도구 호출이 plan_log/ 아래에 쓴 것인가
+def _wrote_plan_log(payload: dict) -> bool:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    rel = _hookutil.relative_to_root(str(tool_input.get("file_path") or ""))
+    return rel is not None and rel.startswith(LOG_PREFIX)
+
+
 # 설계 질문으로 보이면 스킬을 쓰라는 한 줄을 주입한다. 절대 막지 않는다
 def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
     # 이 분기에서 종료코드 2 는 다른 이벤트와 뜻이 완전히 다르다. Stop 에서는 "멈추지 말고
@@ -113,10 +142,10 @@ def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
     # 어떤 예외도 밖으로 내보내지 않는다. 리마인더 한 줄을 못 내는 것과 사용자가 쓴 글이
     # 사라지는 것은 비교가 안 된다
     try:
-        # 필드명은 user_input 이다. prompt 가 아니다 — 틀리면 늘 빈 값이라 아무 경고 없이
-        # 영영 안 걸린다
-        text = payload.get("user_input")
-        if not isinstance(text, str) or not text.strip():
+        # 필드명을 하나로 못 박지 않는다 — 실제로 오는 것은 `prompt` 인데 `user_input`
+        # 하나만 읽다 게이트가 영영 안 열렸다. 근거는 _hookutil.prompt_text 에 있다
+        text = _hookutil.prompt_text(payload)
+        if not text:
             return
 
         if not any(p in text for p in _DESIGN_PHRASES):
@@ -140,23 +169,40 @@ def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
         return
 
 
-# 설계 논의 세션이라고 표시한다. 이미 표시돼 있으면 그대로 둔다
+# 두 가지를 표시한다 — 설계 논의 세션인가, 이번 세션에 기록을 썼는가.
+# 한 이벤트에서 둘 다 볼 수 있으므로 tool_name 으로 가르지 않고 양쪽을 그냥 확인한다
 def _handle_post_tool_use(payload: dict, session_id: str) -> None:
     if _is_plan_log_skill(payload):
         _hookutil.claim_session(ACTIVE_NS, session_id)
 
+    if _wrote_plan_log(payload):
+        _hookutil.claim_session(WRITTEN_NS, session_id)
 
-# 표시가 있는데 기록이 없으면 막는다
-def _handle_stop(session_id: str) -> None:
+
+# 이번 세션에 기록을 남겼나. 마커가 주 경로이고 mtime 이 도구를 안 가리는 보조 경로다.
+#
+# 마커만 보면 Write/Edit 로 쓴 기록만 세고 **Bash 로 쓴 기록은 통째로 안 보인다.**
+# 그러면 기록을 다 남긴 세션이 막히는데, 그 오탐의 값은 단순한 짜증이 아니다 —
+# 일을 하고도 막히는 검사는 SKIP_PLANLOG=1 을 습관으로 만들어 검사 자체를 죽인다
+def _recorded_this_session(session_id: str, *, trust_mtime: bool) -> bool:
+    if _hookutil.is_marked(WRITTEN_NS, session_id):
+        return True
+
+    if not trust_mtime:
+        return False
+
+    # 판단이 안 서면(None) 마커만 보던 종전 동작으로 돌아간다. 어차피 세션당 한 번만
+    # 막으므로 사용자가 갇히지는 않는다
+    return _hookutil.wrote_under(LOG_PREFIX, session_id) is True
+
+
+# 표시가 있는데 이번 세션에 기록을 안 썼으면 막는다
+def _handle_stop(session_id: str, *, trust_mtime: bool) -> None:
     if not _hookutil.is_marked(ACTIVE_NS, session_id):
         # 설계 논의 세션이 아니다
         return
 
-    paths = _hookutil.changed_paths()
-    if paths is None:
-        return
-
-    if any(p.startswith(LOG_PREFIX) for p in paths):
+    if _recorded_this_session(session_id, trust_mtime=trust_mtime):
         return
 
     if not _hookutil.claim_session(BLOCKED_NS, session_id):
@@ -171,16 +217,22 @@ def main() -> None:
     if payload is None:
         return
 
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        # 세션을 못 가리면 표시도 "한 번만 막기"도 성립하지 않는다
+        return
+
+    # 세션 기준 시각을 남긴다. 이 훅은 UserPromptSubmit 에 matcher 없이 걸려 있어
+    # 세션에서 제일 먼저 도는 훅이고, 그래서 이 값이 곧 세션 시작 시각이 된다.
+    # **SKIP_PLANLOG 보다 먼저 찍는 이유**: 같은 기준을 task_log_check 도 쓰므로
+    # 한쪽 검사를 껐다고 다른 쪽 기준까지 사라지면 안 된다
+    baseline_is_fresh = _hookutil.mark_session_start(session_id)
+
     # 탈출구: 사용자가 의도적으로 기록을 건너뛰고 싶을 때
     if os.environ.get("SKIP_PLANLOG"):
         return
 
     if payload.get("stop_hook_active"):
-        return
-
-    session_id = str(payload.get("session_id") or "").strip()
-    if not session_id:
-        # 세션을 못 가리면 표시도 "한 번만 막기"도 성립하지 않는다
         return
 
     event = str(payload.get("hook_event_name") or "")
@@ -189,7 +241,7 @@ def main() -> None:
     elif event == "PostToolUse":
         _handle_post_tool_use(payload, session_id)
     elif event == "Stop":
-        _handle_stop(session_id)
+        _handle_stop(session_id, trust_mtime=not baseline_is_fresh)
 
 
 if __name__ == "__main__":

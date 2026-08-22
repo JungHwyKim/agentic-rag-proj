@@ -7,10 +7,9 @@ import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from rag_pipeline.config import ContentRoutingConfig
-from rag_pipeline.schemas.document import Element
 
 
 # 문서 안에서 발견되는 콘텐츠의 종류. 어떤 핸들러로 보낼지를 결정한다
@@ -37,6 +36,27 @@ class ContentRegion:
     blob: bytes | None = None
     # blob의 종류를 알려준다 ("pdf" | "png")
     blob_kind: str | None = None
+    # TABLE(PDF): 빈 칸을 **부분적으로** 덮는 드로잉이 있는 칸의 (행, 열) 자리.
+    # 표를 Vision 으로 올릴지 판정하는 신호이자, 모델이 놓친 칸을 메우는 근거다.
+    #
+    # **개수가 아니라 자리인 이유**: 실측(2026-08-22, 유료 3회)으로 Vision 이 자리를
+    # 실행마다 다르게 잡았다(65/68/70 of 73, 틀리는 쪽이 매번 옮겨 다녔다). 반면 기하는
+    # 오검출 0 이다. 개수만 실어 나르면 "몇 개 부족한지"만 알고 "어디가 비었는지"를 모른다.
+    #
+    # 로더가 재고 라우터·핸들러가 읽는다 — `metadata` 사설 키를 못 쓰는 이유가 여기 있다.
+    # 그 방식(`pdf.py:_BOUNDARY_SPANS_KEY`)은 `detect_regions()` 가 끝에서 지우는데,
+    # 그건 판정이 로더 안에서 끝나기 때문이다. 이 값은 그 뒤에 읽힌다
+    mark_cells: list[tuple[int, int]] = field(default_factory=list)
+    # TABLE(PDF): 그 표시들의 **모양 서명**. 같은 벡터 경로면 같은 글자로 본다.
+    #
+    # Vision 은 "그게 무슨 기호인가" 하나만 더해주는데, 실측(2026-08-22)으로 AI가이드 PDF
+    # 의 표시 칸 74개가 **서명 1종**이었다. 그래서 서명당 한 번만 부르고 나머지 표는 기억한
+    # 기호로 메운다(표 6개 → 호출 1회). 문서당 flat 1회가 아닌 이유는 그것이 재본 적 없는
+    # 가정이기 때문이다 — 서명이 둘인 문서는 알아서 두 번 문다.
+    #
+    # **리전 안 표시가 전부 한 종류일 때만 채운다.** 섞여 있으면 빈 문자열이고 그 리전은
+    # 늘 부른다 — 어느 기호를 재사용할지 알 수 없다
+    mark_signature: str = ""
     # 요소에 함께 실어보낼 부가정보 (heading_level, sheet_name 등)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -49,16 +69,14 @@ class LoadContext:
     llamaparse_calls: int = 0
     ocr_applied: bool = False
     warnings: list[str] = field(default_factory=list)
+    # 표시 모양 서명 -> 그 모양이 뜻하는 글자. 문서 안에서 Vision 호출을 재사용하는 자리다.
+    # **기호를 실제로 얻었을 때만 넣는다** — 실패·거절한 서명을 넣으면 남은 표가 전부 죽는다
+    mark_symbols: dict[str, str] = field(default_factory=dict)
 
     # 중복 경고가 쌓이지 않도록 같은 메시지는 한 번만 기록
     def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
-
-
-# 콘텐츠 리전 하나를 Element 목록으로 변환하는 핸들러 인터페이스
-class ContentHandler(Protocol):
-    def handle(self, region: ContentRegion, ctx: LoadContext) -> list[Element]: ...
 
 
 # 셀 안의 파이프·개행이 마크다운 표를 깨뜨리지 않도록 이스케이프

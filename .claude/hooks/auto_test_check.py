@@ -35,7 +35,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import _hookutil
 
@@ -48,11 +47,21 @@ MAX_OUTPUT_CHARS = 4000
 SCOPED_TIMEOUT_SEC = 90
 FULL_TIMEOUT_SEC = 540
 
+# 통과로 볼 pytest 종료코드. 0 은 전부 성공이고 **5 는 "수집된 테스트가 없음"** 이다.
+# 5 를 실패로 보면 integration 전용 파일(test_*_integration.py)을 고칠 때마다 훅이 막는다 —
+# addopts = "-m 'not integration'" 이 그 파일의 테스트를 전부 deselect 해서 5가 나온다.
+# 돌 것이 없는 것은 실패가 아니고, 진짜 실패는 1로 온다
+_OK_RETURNCODES = (0, 5)
+
 # Stop 게이트가 세션당 한 번만 막게 하는 마커 이름
 GATE_NS = "claude_autotest_gate"
 
 # 이 아래 .py 가 바뀌면 전체 게이트 대상으로 본다
-SOURCE_PREFIXES = ("rag_pipeline/", "backend/", ".claude/hooks/")
+SOURCE_PREFIXES = ("rag_pipeline/", "backend/", ".claude/hooks/", "evaluation/")
+
+# 영역 테스트를 마지막으로 돌린 시각을 담는 마커. mtime 을 갱신해 쓴다.
+# file_path 가 없는 도구(Bash 등)로 고쳤을 때 "그 뒤로 무엇이 바뀌었나"의 기준이 된다
+CHECKED_NS = "claude_autotest_checked"
 
 # 경로 -> 테스트 대상. **최장 접두사가 이긴다** (loader/document 가 loader 보다 먼저).
 # 새 파이프라인 단계를 만들면 여기 한 줄을 추가한다. 잊으면 그 단계만 자동 테스트가 한 번도
@@ -62,9 +71,15 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/loader/content/", "tests/ingestion/loader/content"),
     ("rag_pipeline/ingestion/loader/", "tests/ingestion/loader"),
     ("rag_pipeline/ingestion/cleaner/", "tests/ingestion/cleaner"),
+    ("rag_pipeline/ingestion/splitter/", "tests/ingestion/splitter"),
+    ("rag_pipeline/ingestion/embedding/", "tests/ingestion/embedding"),
+    ("rag_pipeline/ingestion/indexing/", "tests/ingestion/indexing"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
+    # 평가 하네스. rag_pipeline 이 아니라 **그것을 재는 자**라 최상위에 있다.
+    # 여기가 조용히 깨지면 검색 품질 수치가 전부 못 믿을 값이 된다
+    ("evaluation/", "tests/evaluation"),
 )
 
 # **일부러 매핑하지 않는 것.** 여기 있는 경로는 전 영역에 영향을 주므로 부분 실행이
@@ -79,24 +94,9 @@ UNMAPPED_BY_DESIGN: tuple[str, ...] = (
 )
 
 
-# 절대·상대 경로를 저장소 기준 posix 경로로 바꾼다. 저장소 밖이면 None
-def _relative_to_root(raw: str) -> str | None:
-    if not raw:
-        return None
-    try:
-        path = Path(raw)
-        if not path.is_absolute():
-            path = PROJECT_ROOT / path
-        rel = path.resolve().relative_to(PROJECT_ROOT.resolve())
-    except (OSError, ValueError):
-        # 저장소 밖 경로(예: 스크래치패드)는 우리가 볼 것이 아니다
-        return None
-    return rel.as_posix()
-
-
 # 이 경로를 고쳤을 때 돌릴 테스트 대상. 없으면 None (조용히 통과)
 def test_target_for(raw_path: str) -> str | None:
-    rel = _relative_to_root(raw_path)
+    rel = _hookutil.relative_to_root(raw_path)
     if rel is None or not rel.endswith(".py"):
         return None
 
@@ -153,26 +153,54 @@ def _run_pytest(args: list[str], *, timeout: int) -> tuple[bool, str]:
     output = (proc.stdout + proc.stderr).strip()
     if len(output) > MAX_OUTPUT_CHARS:
         output = output[:MAX_OUTPUT_CHARS] + "\n... (출력 생략)"
-    return proc.returncode == 0, output
+    return proc.returncode in _OK_RETURNCODES, output
+
+
+# 이번 호출로 돌려야 할 테스트 대상.
+#
+# Write/Edit 는 `tool_input.file_path` 가 있어 그것 하나만 보면 된다. **Bash 로 고치면 그
+# 필드가 없어 아무 테스트도 안 돌던 것이 이 함수가 생긴 이유다.** 기록 훅이 2026-08-19 에
+# 겪은 것과 같은 구멍인데 방향이 반대다 — 저쪽은 오탐(막힘)이라 눈에 띄었지만 이쪽은
+# **조용히 아무 검사도 안 돈다.** auto mode 에서는 Bash 편집이 기본이라 상시화된다.
+#
+# file_path 가 없으면 파일 쪽에서 본다. 기준은 "마지막으로 영역 테스트를 돌린 시각"이고,
+# 그것이 없으면 세션 시작 시각이다
+def _targets_for_call(payload: dict, session_id: str) -> list[str]:
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict) and str(tool_input.get("file_path") or ""):
+        target = test_target_for(str(tool_input["file_path"]))
+        return [target] if target is not None else []
+
+    since = _hookutil.marker_mtime(CHECKED_NS, session_id)
+    if since is None:
+        since = _hookutil.session_started_at(session_id)
+    if since is None:
+        return []
+
+    changed = _hookutil.paths_newer_than(SOURCE_PREFIXES, since)
+    if changed is None:
+        return []
+
+    targets = {t for path in changed if (t := test_target_for(path)) is not None}
+    return sorted(targets)
 
 
 # PostToolUse — 고친 파일의 영역 테스트만 돌린다. 사용자를 막지 않고 모델에게 되먹인다
-def _handle_post_tool_use(payload: dict) -> None:
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
+def _handle_post_tool_use(payload: dict, session_id: str) -> None:
+    targets = [t for t in _targets_for_call(payload, session_id) if (PROJECT_ROOT / t).exists()]
+    if not targets:
+        # 매핑이 없거나 대상이 아직 없다. 새 단계를 만드는 중일 수 있으니 막지 않는다
         return
 
-    target = test_target_for(str(tool_input.get("file_path") or ""))
-    if target is None:
-        return
+    # 돌리기 **전에** 기준 시각을 갱신한다. 테스트가 도는 동안 들어온 다음 호출이 같은
+    # 변경을 또 잡으면 같은 테스트를 반복해서 돌린다
+    _hookutil.touch_marker(CHECKED_NS, session_id)
 
-    if not (PROJECT_ROOT / target).exists():
-        # 매핑은 있는데 대상이 없다. 새 단계를 만드는 중일 수 있으니 막지 않는다
-        return
-
-    ok, output = _run_pytest([target], timeout=SCOPED_TIMEOUT_SEC)
+    ok, output = _run_pytest(targets, timeout=SCOPED_TIMEOUT_SEC)
     if ok:
         return
+
+    target = ", ".join(targets)
 
     # PostToolUse 에서 종료코드 2 는 도구를 되돌리는 게 아니다(이미 실행됐다).
     # stderr 가 모델에게 전달돼 방금 만든 실패를 바로 고치게 한다
@@ -231,9 +259,16 @@ def main() -> None:
     if os.environ.get("SKIP_AUTOTEST"):
         return
 
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return
+
+    # 세션 기준 시각. 보통 plan_log_check 가 UserPromptSubmit 에서 이미 찍어둔 것을 읽는다
+    _hookutil.mark_session_start(session_id)
+
     event = str(payload.get("hook_event_name") or "")
     if event == "PostToolUse":
-        _handle_post_tool_use(payload)
+        _handle_post_tool_use(payload, session_id)
     elif event == "Stop":
         _handle_stop(payload)
 

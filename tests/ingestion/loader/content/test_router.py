@@ -8,7 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from rag_pipeline.config import ContentRoutingConfig
-from rag_pipeline.ingestion.loader.content import image_vision, table_llamaparse
+from rag_pipeline.ingestion.loader.content import image_vision, table_llamaparse, table_vision
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
 from rag_pipeline.ingestion.loader.content.router import ContentRouter
 from rag_pipeline.schemas.document import ElementType
@@ -19,6 +19,9 @@ def _online_config(**overrides) -> ContentRoutingConfig:
     defaults = {
         "openai_api_key": "test-key",
         "llama_cloud_api_key": "test-key",
+        # 기본값이 pymupdf 로 바뀌었으므로(2026-08-18) 여기서 명시한다.
+        # 이 파일의 주제가 LlamaParse 경로라 설정에 기대지 않고 못 박는 것이 맞다
+        "table_pdf_handler": "llamaparse",
         "cache_enabled": False,
     }
     defaults.update(overrides)
@@ -51,13 +54,31 @@ def test_native_table_skips_llamaparse(mocker) -> None:
     assert ctx.llamaparse_calls == 0
 
 
-# PDF 표는 LlamaParse로 가고 결과 마크다운을 그대로 쓴다
-def test_pdf_table_uses_llamaparse(mocker) -> None:
-    fake_result = SimpleNamespace(markdown="| A | B |\n| --- | --- |\n| 1 | 2 |")
-    fake_client = SimpleNamespace(
-        parsing=SimpleNamespace(parse=mocker.Mock(return_value=fake_result))
+# 실제 응답 모양을 흉내낸다. `markdown` 은 문자열이 아니라 pages 를 담은 객체이고
+# 성공한 페이지에만 markdown 이, 실패한 페이지에는 error 가 들어온다.
+# **이 모양이 이 파일의 핵심이다** — 예전 가짜는 문자열이라 코드와 똑같이 틀린 채 통과했다
+def _fake_parse_result(*pages: object) -> SimpleNamespace:
+    return SimpleNamespace(markdown=SimpleNamespace(pages=list(pages)))
+
+
+# 파싱에 성공한 페이지 하나
+def _ok_page(markdown: str, page_number: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(markdown=markdown, page_number=page_number, success=True)
+
+
+# LlamaParse 클라이언트를 가짜로 갈아끼운다. 이음새는 모듈 레벨 _make_client 다
+def _patch_client(mocker, *, result=None, side_effect=None) -> None:
+    parse = mocker.Mock(return_value=result, side_effect=side_effect)
+    mocker.patch.object(
+        table_llamaparse,
+        "_make_client",
+        return_value=SimpleNamespace(parsing=SimpleNamespace(parse=parse)),
     )
-    mocker.patch.object(table_llamaparse, "_make_client", return_value=fake_client)
+
+
+# PDF 표는 LlamaParse로 가고 pages 안의 마크다운을 꺼내 쓴다
+def test_pdf_table_uses_llamaparse(mocker) -> None:
+    _patch_client(mocker, result=_fake_parse_result(_ok_page("| A | B |\n| --- | --- |\n| 1 | 2 |")))
 
     config = _online_config()
     ctx = LoadContext(config=config)
@@ -66,6 +87,44 @@ def test_pdf_table_uses_llamaparse(mocker) -> None:
 
     assert elements[0].metadata["table_source"] == "llamaparse"
     assert "| 1 | 2 |" in elements[0].text
+    assert ctx.llamaparse_calls == 1
+
+
+# 표가 여러 장에 걸쳐 오면 성공한 페이지만 순서대로 이어 붙인다
+def test_llamaparse_joins_pages_and_skips_failed(mocker) -> None:
+    failed = SimpleNamespace(error="rate limited", page_number=2, success=False)
+    _patch_client(
+        mocker,
+        result=_fake_parse_result(_ok_page("| A |\n| --- |"), failed, _ok_page("| B |", 3)),
+    )
+
+    config = _online_config()
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    assert elements[0].text == "| A |\n| --- |\n\n| B |"
+    assert ctx.llamaparse_calls == 1
+
+
+# 응답 모양이 예상과 다르면 예외를 밖으로 내보내지 않고 로컬 추출로 내려간다.
+# 이 규약이 깨지면 라우터의 폴백이 발동할 기회 자체가 없어 적재 전체가 멈춘다
+def test_llamaparse_bad_response_shape_falls_back(mocker) -> None:
+    class Exploding:
+        @property
+        def pages(self):
+            raise TypeError("모양이 바뀌었다")
+
+    _patch_client(mocker, result=SimpleNamespace(markdown=Exploding()))
+
+    config = _online_config()
+    ctx = LoadContext(config=config)
+
+    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+
+    assert elements[0].metadata["table_source"] == "native"
+    assert any("폴백" in w for w in ctx.warnings)
+    # 호출은 이미 나갔으므로 과금 카운터는 올라가 있어야 한다
     assert ctx.llamaparse_calls == 1
 
 
@@ -274,3 +333,65 @@ def test_unknown_content_type() -> None:
     )
 
     assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+
+
+# --- 승급(hybrid) 경로 ---
+#
+# 여기서 보는 것은 **언제 올리지 않는가**다. 트리거가 실측으로 오검출 0 이어도,
+# 라우터가 신호를 안 보고 올리면 그 실측이 아무 의미가 없다
+
+
+# 신호가 없는 표는 hybrid 여도 올리지 않는다. 표 94개 중 88개가 이 경로다
+def test_hybrid_without_marks_stays_native(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 0
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+    assert ctx.vision_calls == 0
+
+
+# blob 이 없으면 신호가 있어도 못 올린다. 쪽을 가로지르는 표가 여기로 빠진다
+def test_hybrid_without_blob_stays_native(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=False)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+
+
+# 기본값(pymupdf)에서는 신호가 있어도 안 올린다. 과금 경로는 켜야 돈다
+def test_default_handler_never_escalates(mocker) -> None:
+    spy = mocker.patch.object(table_vision, "_make_client")
+    config = _online_config(table_pdf_handler="pymupdf")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    spy.assert_not_called()
+    assert elements[0].metadata["table_source"] == "native"
+
+
+# 승급이 실패하면 로컬 추출로 내려간다. 빈 리스트 규약이 여기서 발화한다
+def test_hybrid_falls_back_when_escalation_fails(mocker) -> None:
+    mocker.patch.object(table_vision, "handle", return_value=[])
+    config = _online_config(table_pdf_handler="hybrid")
+    ctx = LoadContext(config=config)
+    region = _table_region(with_blob=True)
+    region.mark_cells = 5
+
+    elements = ContentRouter(config).route(region, ctx)
+
+    assert elements[0].metadata["table_source"] == "native"

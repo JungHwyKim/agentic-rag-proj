@@ -24,7 +24,10 @@ from rag_pipeline.schemas.document import ElementType, FileFormat
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 # 문서별 테스트에서 쓰는 파일명 조각
-AI_GUIDE = "신뢰가능_AI"
+# 도형 안 텍스트(hp:drawText) 검증용. **원래 AI가이드였는데 2026-08-20 에 그 문서를
+# 실데이터에서 빼면서 옮겼다** — 깨진 도형·표가 많다고 사용자가 판단했다.
+# 이 문서에도 drawText 가 22개 있어 같은 경로가 그대로 검증된다(AI가이드는 376개였다)
+BASIC_PLAN = "기초학력"
 SCHOOL_GUIDE = "학교기록물"
 # 이 둘은 이름이 겹친다(원본 이름이 가로쪽 판 이름의 접두사다). _find 가 정확 이름으로
 # 갈라내야 하므로 조각이 아니라 파일명 전체를 적는다
@@ -108,7 +111,10 @@ def test_extracts_body_without_warnings(path: Path, structure_only_config: Inges
     paragraphs = [e for e in document.elements if e.type is ElementType.PARAGRAPH]
 
     assert len(paragraphs) > 100
-    assert sum(len(e.text) for e in paragraphs) > 5000
+    # 글자수는 **모든 요소**에서 센다. 문단만 세면 표 위주 문서를 파싱 실패로 오인한다 —
+    # 2026 중등 기초학력 계획은 본문 27,431자 중 표가 21,504자(82%)여서 문단만 보면 4,653자다
+    # (실측 2026-08-19). "본문을 뽑았는가" 를 묻는 자리이므로 표도 본문이다
+    assert sum(len(e.text) for e in document.elements) > 5000
     assert document.metadata.warnings == []
 
 
@@ -146,16 +152,17 @@ def test_embedded_images_extracted(path: Path, structure_only_config: IngestConf
 # ---------------------------------------------------------------- 문서별 검증
 
 
-# 정부 보고서는 상당량의 텍스트가 도형 안 hp:drawText 에 들어있다
-def test_ai_guide_captures_text_inside_shapes(structure_only_config: IngestConfig) -> None:
-    document = ingest(_find(AI_GUIDE), config=structure_only_config)
+# 정부 보고서는 상당량의 텍스트가 도형 안 hp:drawText 에 들어있다.
+# 아래 두 문구는 이 문서에서 **drawText 안에만** 있다(실측: 안 2회 / 밖 0회) —
+# 도형을 안 훑으면 목차와 장 제목이 통째로 사라진다
+def test_shapes_carry_section_headings(structure_only_config: IngestConfig) -> None:
+    document = ingest(_find(BASIC_PLAN), config=structure_only_config)
 
-    assert "OECD" in document.full_text
-    assert "공공기관" in document.full_text
+    assert "다각적 현장 지원 방안" in document.full_text
+    assert "기대효과" in document.full_text
 
 
-# 표가 많은 문서에서 표 구조가 제대로 복원되어야 한다.
-# 앞선 AI 가이드 문서에는 표가 하나도 없어 이 경로가 검증되지 않았다
+# 표가 많은 문서에서 표 구조가 제대로 복원되어야 한다
 def test_school_guide_parses_tables(structure_only_config: IngestConfig) -> None:
     loader = HwpxLoader(structure_only_config)
     regions = loader.detect_regions(

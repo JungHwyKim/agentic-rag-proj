@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _escape_hatches import ESCAPE_HATCHES
 
 # tests/hooks/conftest.py -> 프로젝트 루트
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -56,3 +57,25 @@ def git_repo(tmp_path: Path) -> Path:
 def marker_root(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
+
+
+
+# 훅 테스트가 개발자 환경의 탈출구를 물려받지 않게 한다.
+#
+# 훅은 전부 `main()` 첫머리에서 자기 탈출구를 보고 **즉시 반환**한다. 그 변수가 켜진 채로
+# 테스트를 돌리면 검사 대상이 아예 안 돌고, 결과가 두 갈래로 갈린다 — 마커나 출력을
+# 단정하는 테스트는 실패하고(실측 2026-08-22: SKIP_PLANINTERVIEW=1 에서 13개,
+# ALLOW_PAID_TESTS=1 에서 2개), "아무것도 안 낸다"를 단정하는 테스트는 **조용히 통과한다.**
+# 뒤쪽이 더 나쁘다 — 이 저장소가 훅마다 두려워한 "검사가 있는 줄 알았는데 없는" 그 상태다.
+#
+# 탈출구를 켜는 것은 정상 사용이다(면담을 건너뛰는 세션 등). 그 사용자에게 저장소가 빨갛게
+# 보이면 SKIP_*=1 이 더 굳어지므로, 고칠 곳은 훅이 아니라 테스트 격리다.
+#
+# **프로세스 안에서 지우는 것이 요점이다.** `monkeypatch.delenv` 가 `os.environ` 을 고치고
+# `subprocess.run` 은 그것을 물려받으므로, 훅을 실제 프로세스로 돌리는 테스트까지 함께
+# 덮인다(paid 쪽 둘이 그렇다). 탈출구 자체를 재는 테스트는 본문에서 `setenv` 로 다시
+# 켜는데, 픽스처가 먼저 도므로 순서가 맞다
+@pytest.fixture(autouse=True)
+def _clear_escape_hatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ESCAPE_HATCHES:
+        monkeypatch.delenv(name, raising=False)

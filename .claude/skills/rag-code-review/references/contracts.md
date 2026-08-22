@@ -22,7 +22,16 @@
 참고 구현은 `loader/content/table_llamaparse.py` 다 — `except Exception:  # noqa: BLE001`
 로 삼키고, `ctx.warn()` 으로 알린 뒤 `[]` 를 돌려준다.
 
+**계약의 경계는 `handle()` 이지 API 호출 한 줄이 아니다.** `try` 로 호출만 감싸고 **응답을
+해석하는 구간을 밖에 두면 규약이 깨진다** — 실제로 그 상태였다(2026-08-18). 호출은 성공하고
+`result.markdown` 을 문자열로 알고 `.strip()` 을 부른 곳에서 `AttributeError` 가 나
+`handle()` 밖으로 새었고, `table_native` 폴백이 발동할 기회 자체가 없어 `ingest()` 전체가
+멈췄다. 응답에서 값을 꺼내는 코드는 **SDK 가 바뀌면 틀리는 코드**라 호출만큼 위험하다.
+
 - 예외가 밖으로 나간다 → **Critical.** 키 없는 환경에서 적재 전체가 죽고 기본 테스트가 깨진다
+- 응답 해석부(`getattr`·인덱싱·형변환)가 `try` 밖에 있다 → **Critical.** 같은 결과가 된다
+- 실패 사유를 한 문구로 뭉갠다 → "호출 실패"와 "응답 해석 실패"는 대응이 다르다. 앞은
+  장애·키·네트워크이고 뒤는 **SDK 변경이라 코드를 고쳐야 한다**
 - `except Exception` 에 `# noqa: BLE001` 과 이유 주석이 없다
 - 실패했는데 `ctx.warn()` 이 없다 → 사용자는 결과가 왜 엉성한지 알 길이 없다
 - 폴백으로 내려가면서 이미 계산한 결과를 버리고 다시 계산한다
@@ -31,43 +40,65 @@
 
 비용 가시성은 `LoadContext` 의 카운터가 `DocumentMetadata` 로 노출되는 경로 하나뿐이다.
 
-**(a) 카운터는 호출이 성공한 뒤에 올린다** — `image_vision.py:108`, `table_llamaparse.py:62`
+**(a) 카운터는 호출이 나간 뒤에 올린다** — `table_llamaparse.py` 의 `_parse_blob()`,
+`table_vision.py` 와 `image_vision.py` 의 `_call_vision()`
+
+**이 절이 지목하던 예시가 실제로는 규약을 어기고 있었다**(2026-08-22 감사에서 발견). 오래
+`image_vision.py:_call_vision()` 을 (a)의 모범으로 이름까지 대며 인용했는데, 그 함수는 카운터를
+**해석 뒤**에 올리고 해석부를 `try` 밖에 두고 있었다 — `choices=[]` 하나로 `IndexError` 가
+`handle()` 밖까지 새고 과금 1인데 장부가 0이 됐다(실행으로 재현). 2026-08-18 에
+`table_llamaparse` 를 고친 수정이 형제 파일로 안 퍼진 것이다. 지금은 셋 다 맞다.
+
+**교훈은 예시를 바꾸는 것이 아니다** — 외부 API 핸들러가 여럿이면 **리뷰 때 나란히 대조한다.**
+reference 가 예시로 든 함수라고 검사에서 빼지 않는다. 문서가 코드보다 늦게 낡는다.
+
+가르는 기준은 **과금이 됐는가**이지 우리가 그 응답을 잘 썼는가가 아니다. 그래서
+`_parse_blob()` 은 `parse()` 가 돌아온 직후, **응답을 해석하기 전에** 올린다. 해석이 실패해도
+그 호출은 이미 과금됐다 — 뒤로 미루면 이번처럼 해석이 전부 실패할 때 **돈은 나갔는데 장부가
+0** 이 된다(2026-08-18 실측). 되돌리지 말 것.
 
 - 실제로 호출했는데 카운터를 안 올린다 → **Critical.** 비용이 보이지 않는다
-- 호출이 **실패**했는데 올린다 → 과금 안 된 걸 셌다
+- 호출 자체가 **실패**(예외)했는데 올린다 → 과금 안 된 걸 셌다
+- 응답 해석 실패를 이유로 카운터를 안 올린다 → 위와 반대 방향의 같은 오류다
 
-**(b) 상한 검사를 우회하지 않는다** — `image_vision.py:71` 이 `max_vision_calls_per_doc`
-(`config.py:39`, 기본 30)을 검사한다. 새 외부 API 단계에도 같은 보호가 필요하다.
+**(b) 상한 검사를 우회하지 않는다** — `image_vision.py` 의 `_call_vision()` 이
+`ContentRoutingConfig.max_vision_calls_per_doc`(기본 30)을 검사한다.
+새 외부 API 단계에도 같은 보호가 필요하다.
 
 **(c) 캐시 키 salt 에 결과를 바꾸는 설정을 전부 넣는다.** 모델명·티어·버전이 빠지면 설정을
 바꿔도 옛 결과가 나온다.
 
 ```python
-content_hash(blob, salt=f"vision:{cfg.vision_model}")            # image_vision.py:65
-content_hash(blob, salt=f"llamaparse:{tier}:{version}")          # table_llamaparse.py:35
+content_hash(blob, salt=f"vision:{cfg.vision_model}")       # image_vision.py 의 _call_vision()
+content_hash(blob, salt=f"llamaparse:{tier}:{version}")     # table_llamaparse.py 의 _parse_blob()
 ```
 
 `ResultCache` 를 안 거치고 외부 API 를 부르면 재업로드마다 재과금된다.
 
-**기계장치가 loader 안에 있다는 점을 본다.** `LoadContext`(`loader/content/base.py:46`),
-`content_hash`(`:92`), `ResultCache`(`:100`) 는 전부 loader 패키지 소속이다. 새 단계가 외부 API
+**기계장치가 loader 안에 있다는 점을 본다.** `LoadContext` · `content_hash()` · `ResultCache`
+는 셋 다 `loader/content/base.py` 에 있고, 따라서 loader 패키지 소속이다. 새 단계가 외부 API
 비용을 쓴다면 이걸 **재사용·일반화**했는지 확인한다. 따로 복제했으면 비용 가시성이 두 곳으로
 갈라지므로 지적한다.
 
 ## 4. 예외 → HTTP 매핑
 
-`rag_pipeline/exceptions.py` 에 예외를 추가하면 `backend/app/main.py:21` 의
-`_STATUS_BY_EXCEPTION` 에도 넣어야 한다. **빼먹으면 사용자가 500 을 본다**(`main.py:34`).
+`rag_pipeline/exceptions.py` 에 예외를 추가하면 `backend/app/main.py` 의
+`_STATUS_BY_EXCEPTION` 에도 넣어야 한다. **빼먹으면 사용자가 500 을 본다** —
+`_status_for()` 가 표에서 못 찾으면 500 을 기본값으로 돌려준다.
 
-`isinstance` 로 위에서부터 훑으므로(`main.py:31-33`) **하위 클래스를 상위 클래스보다 먼저**
-넣어야 한다. 순서가 틀리면 조용히 엉뚱한 상태코드가 나간다.
+그 `_status_for()` 가 `isinstance` 로 표를 위에서부터 훑으므로 **하위 클래스를 상위 클래스보다
+먼저** 넣어야 한다. 순서가 틀리면 조용히 엉뚱한 상태코드가 나간다.
 
-모든 예외는 `RagPipelineError`(`exceptions.py:7`) 를 상속하고 한국어 `user_message` 를 갖는다.
+모든 예외는 `RagPipelineError`(`exceptions.py`) 를 상속하고 한국어 `user_message` 를 갖는다.
 
 ## 5. 코드 컨벤션
 
 - **모든 class/def 위에 한 줄 한국어 설명 주석.** 예외 없다
 - 모듈 docstring 에는 *왜* 그렇게 했는지를 적는다. 실측 수치는 근거와 함께
+- **각 단계 `__init__.py` docstring 끝에 "이 단계의 규약이 어디 있나" 색인 절이 있다.**
+  CLAUDE.md 가 단계별 상세를 안 갖고 여기를 가리키므로(2026-08-22), **하위 모듈을 새로
+  만들거나 규약을 옮겼는데 색인에 안 넣으면 포인터가 끊긴다.** 끊겨도 에러가 안 나므로
+  리뷰에서 본다 — `cleaner`·`splitter`·`embedding`·`indexing` 넷 다 이 형태다
 - 모든 모듈 상단에 `from __future__ import annotations`
 - ruff: line-length 100, `E,F,I,UP,B,SIM` 선택, E501 무시
 
@@ -80,7 +111,7 @@ content_hash(blob, salt=f"llamaparse:{tier}:{version}")          # table_llamapa
   (`mocker.patch.object(image_vision, "_make_client", return_value=fake)`).
   **인라인화하거나 클래스 메서드로 옮기면 외부 API 테스트가 전부 깨진다 → Critical**
 - lazy 프로퍼티는 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 로
-  덮어쓴다 — `tests/conftest.py:44` 의 `offline_config` 가 그 형태다
+  덮어쓴다 — `tests/conftest.py` 의 `offline_config` 픽스처가 그 형태다
 - **폴백 경로 테스트가 있는지 본다.** 성공 경로만 있으면 폴백이 죽어도 아무도 모른다.
   이 저장소에서 제일 자주 빠지는 테스트다
 - 샘플 파일은 코드로 생성한다. 바이너리를 저장소에 커밋하지 않는 방침이므로 새 픽스처도 그래야 한다

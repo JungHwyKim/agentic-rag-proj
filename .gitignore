@@ -22,6 +22,9 @@ tests/fixtures/
 data/
 uploads/
 .cache/
+# qdrant 로컬 파일 모드의 저장 경로(IndexingConfig.qdrant_path 기본값).
+# 벡터 DB 바이너리라 커밋하면 안 되고, 임베딩 모델을 바꾸면 내용도 통째로 달라진다
+.qdrant/
 
 # 에디터
 .vscode/

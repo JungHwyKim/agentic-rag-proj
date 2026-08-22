@@ -41,6 +41,7 @@ from lxml import etree
 
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, ContentType, LoadContext
 from rag_pipeline.ingestion.loader.document.base import BaseDocumentLoader
+from rag_pipeline.ingestion.loader.document.headings import FONT_SIZES_KEY
 from rag_pipeline.schemas.document import ElementType, FileFormat
 
 # Contents/section0.xml, section1.xml ... 순서대로 읽어야 문서 순서가 맞는다
@@ -61,14 +62,97 @@ def _text_of(element: etree._Element) -> str:
     return "".join(parts).strip()
 
 
-# 표 요소를 2차원 셀 배열로 복원한다
+# Contents/header.xml 의 hh:charPr 에서 {id: 글자높이} 표를 만든다.
+# HWPX 는 글자 크기를 문단이 아니라 run 마다 charPrIDRef 로 가리키므로 이 표가 있어야
+# 문단의 글자 크기를 알 수 있다. header.xml 이 없거나 깨지면 빈 표를 돌려주고,
+# 그러면 제목 승격이 조용히 꺼진다(승격은 크기를 아는 문서에서만 하는 것이 맞다)
+def _charpr_heights(zf: zipfile.ZipFile) -> dict[str, int]:
+    try:
+        root = etree.fromstring(zf.read("Contents/header.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}
+
+    heights: dict[str, int] = {}
+    for char_pr in root.iter("{*}charPr"):
+        identifier = char_pr.get("id")
+        height = _int_attr(char_pr, "height", 0)
+        if identifier is not None and height > 0:
+            heights[identifier] = height
+    return heights
+
+
+# 요소 아래 run 들의 글자 높이 목록. 글자가 없는 run 은 뺀다 —
+# 빈 run 의 크기가 섞이면 '문단 전체가 본문보다 큰가' 판정이 흔들린다
+def _run_sizes(element: etree._Element, heights: dict[str, int]) -> list[int]:
+    if not heights:
+        return []
+
+    sizes: list[int] = []
+    for run in element.iter("{*}run"):
+        text = "".join(t.text or "" for t in run.iter("{*}t"))
+        if not text.strip():
+            continue
+        height = heights.get(run.get("charPrIDRef", ""))
+        if height:
+            sizes.append(height)
+    return sizes
+
+
+# 표의 셀 텍스트를 문서 순서 그대로. 격자로 펴기 전의 **실제 tc 개수**가 필요한 곳에 쓴다
+def _table_anchor_cells(table: etree._Element) -> list[str]:
+    return [_text_of(tc) for tr in table.findall("{*}tr") for tc in tr.findall("{*}tc")]
+
+
+# 표 요소를 2차원 셀 배열로 복원한다.
+#
+# **병합된 칸은 격자에서 자리를 차지하지만 tc 로는 한 번만 나온다.** hp:cellAddr 를 안 보고
+# tc 를 나온 순서대로 담으면 가려진 칸만큼 값이 왼쪽으로 밀린다 — 실측으로 시행령 안내서
+# HWPX 표 173행 중 127행(73%)이 그 상태였고, `지침확인`(실행항목)이 `단계` 열에 들어가 있었다.
+# 열 이름과 값이 틀리게 짝지어진 채 색인되므로 검색이 틀린 근거를 내놓는다.
+#
+# **세로로 이어진 칸에는 값을 되풀이하고 가로로 이어진 칸은 비운다.** splitter 가 표를 **행
+# 단위로만** 쪼개기 때문이다 — 아래로 이어진 행은 다른 청크로 갈 수 있어 제 값을 들고 있어야
+# 하지만, 옆으로 이어진 칸은 언제나 같은 행에 남으므로 되풀이해봐야 한 줄 안에서 같은 말이
+# 두 번 나올 뿐이다.
+#
+# **직계 tr/tc 만 본다.** 중첩 표의 텍스트는 그것을 담은 칸의 `_text_of()` 에 이미 들어 있고
+# (`iter` 로 훑는다), 예전처럼 `iter` 로 셀까지 훑으면 같은 내용이 두 번 들어간다.
 def _table_rows(table: etree._Element) -> list[list[str]]:
-    rows: list[list[str]] = []
-    for tr in table.iter("{*}tr"):
-        cells = [_text_of(tc) for tc in tr.iter("{*}tc")]
-        if cells:
-            rows.append(cells)
-    return rows
+    grid: dict[tuple[int, int], str] = {}
+    max_row = -1
+    max_col = -1
+
+    for row_index, tr in enumerate(table.findall("{*}tr")):
+        for tc in tr.findall("{*}tc"):
+            addr = tc.find("{*}cellAddr")
+            if addr is None:
+                continue
+            row = _int_attr(addr, "rowAddr", row_index)
+            col = _int_attr(addr, "colAddr", -1)
+            if row < 0 or col < 0:
+                continue
+
+            span = tc.find("{*}cellSpan")
+            row_span = max(_int_attr(span, "rowSpan", 1), 1)
+            col_span = max(_int_attr(span, "colSpan", 1), 1)
+            text = _text_of(tc)
+
+            for r in range(row, row + row_span):
+                for c in range(col, col + col_span):
+                    grid[(r, c)] = text if c == col else ""
+                    max_row = max(max_row, r)
+                    max_col = max(max_col, c)
+
+    if not grid:
+        # cellAddr 가 없는 문서. 예전처럼 tc 순서를 그대로 쓴다
+        rows: list[list[str]] = []
+        for tr in table.findall("{*}tr"):
+            cells = [_text_of(tc) for tc in tr.findall("{*}tc")]
+            if cells:
+                rows.append(cells)
+        return rows
+
+    return [[grid.get((r, c), "") for c in range(max_col + 1)] for r in range(max_row + 1)]
 
 
 # 내용이 든 칸이 이 개수 이하면 표 모양을 빌린 제목·안내 상자로 본다
@@ -146,15 +230,25 @@ def _table_height(table: etree._Element) -> int:
 # (실측: 시행령 개정안 안내서의 표 27개 중 실데이터 표는 내용 칸이 최소 9개였고
 #  상자는 최대 2개였다. 그 사이가 비어 있어 이 기준으로 깨끗하게 갈린다)
 # 그림이 든 상자는 캡션-그림 배치라서 표로 남겨야 둘의 관계가 유지된다
-def _is_layout_box(table: etree._Element, rows: list[list[str]]) -> bool:
+# 세는 것은 `_table_rows()` 의 격자가 아니라 **실제 tc 목록**이다. 격자는 병합된 칸을 여러
+# 칸으로 펴므로, 그걸 세면 9칸·2칸이라는 임계값의 뜻이 조용히 달라진다 — 실제로 격자를
+# 세도록 뒀더니 시행령 안내서의 제목 상자 4개가 강등되지 않아 표가 9개에서 13개로 늘었다
+def _is_layout_box(table: etree._Element, cells: list[str]) -> bool:
     if table.find(".//{*}pic") is not None:
         return False
 
-    total = sum(len(row) for row in rows)
+    # 표를 담은 상자도 남긴다. 강등하면 안쪽 표가 문단 텍스트로 뭉개져 구조가 통째로 사라진다
+    # — 그림이 든 상자를 남기는 것과 같은 이유다. 예전에는 `iter` 로 중첩 칸까지 세는 바람에
+    # 칸 수 상한(9)에 걸려 우연히 남아 있었고, 직계 칸만 세도록 바꾸자 학교기록물 지침의
+    # 표 3개가 문단으로 내려갔다
+    if table.find(".//{*}tbl") is not None:
+        return False
+
+    total = len(cells)
     if not 0 < total <= _LAYOUT_BOX_MAX_CELLS:
         return False
 
-    filled = sum(1 for row in rows for cell in row if cell.strip())
+    filled = sum(1 for cell in cells if cell.strip())
     return 0 < filled <= _LAYOUT_BOX_MAX_FILLED
 
 
@@ -250,6 +344,8 @@ class HwpxLoader(BaseDocumentLoader):
         super().__init__(config)
         # detect_regions 가 계산한 쪽 수. extract_metadata 가 재파싱 없이 가져다 쓴다
         self._page_count: int | None = None
+        # {charPr id: 글자높이}. _walk 의 인자를 8개로 늘리는 대신 파싱 동안만 여기 둔다
+        self._charpr: dict[str, int] = {}
 
     # 섹션 XML을 순서대로 파싱해 문단·표·그림 리전을 만든다
     def detect_regions(self, path: Path, ctx: LoadContext) -> list[ContentRegion]:
@@ -264,6 +360,7 @@ class HwpxLoader(BaseDocumentLoader):
                     return []
 
                 binaries = _binary_map(zf)
+                self._charpr = _charpr_heights(zf)
                 tracker = _PageTracker()
                 for name in sections:
                     root = etree.fromstring(zf.read(name))
@@ -310,11 +407,14 @@ class HwpxLoader(BaseDocumentLoader):
 
         if name == "tbl":
             rows = _table_rows(element)
-            text = " ".join(cell for row in rows for cell in row if cell).strip()
+            # 강등 판정과 문단 텍스트는 격자가 아니라 실제 tc 목록에서 얻는다.
+            # 격자는 병합된 칸을 되풀이하므로 여기 쓰면 같은 말이 여러 번 들어간다
+            cells = _table_anchor_cells(element)
+            text = " ".join(cell for cell in cells if cell).strip()
             # 이 표가 만들어낼 리전들의 시작 위치. 쪽 소비를 계산한 뒤 page_end 를 채운다
             region_start = len(regions)
 
-            if _is_layout_box(element, rows):
+            if _is_layout_box(element, cells):
                 # 표가 아니라 제목 상자다. 본문 문단으로 내려보내 마크다운 표에 갇히지 않게 한다
                 if text:
                     regions.append(
@@ -326,8 +426,10 @@ class HwpxLoader(BaseDocumentLoader):
                             text=text,
                             metadata={
                                 "element_type": ElementType.PARAGRAPH,
-                                # 원래 표였다는 사실. cleaner 가 제목으로 승격할지 판단한다
+                                # 원래 표였다는 사실. 한글이 표로 그린 제목 상자라
+                                # promote_headings 가 글자 크기를 보고 제목으로 올릴 수 있다
                                 "layout_table": True,
+                                FONT_SIZES_KEY: _run_sizes(element, self._charpr),
                             },
                         )
                     )
@@ -385,7 +487,10 @@ class HwpxLoader(BaseDocumentLoader):
                         source_format=self.file_format.value,
                         page=tracker.current(),
                         text=text,
-                        metadata={"element_type": ElementType.PARAGRAPH},
+                        metadata={
+                            "element_type": ElementType.PARAGRAPH,
+                            FONT_SIZES_KEY: _run_sizes(element, self._charpr),
+                        },
                     )
                 )
                 counter[0] += 1
@@ -430,7 +535,8 @@ class HwpxLoader(BaseDocumentLoader):
                 source_format=self.file_format.value,
                 page=tracker.current(),
                 blob=blob,
-                blob_kind="png",
+                # BinData 엔트리 이름의 확장자가 실제 포맷이다. 한컴은 bmp 도 그대로 담는다
+                blob_kind=Path(entry).suffix.lstrip(".").lower() or "png",
                 metadata={"binary_item": ref, "zip_entry": entry},
             )
         )

@@ -14,6 +14,7 @@ from pathlib import Path
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.ingestion.loader.content.base import ContentRegion, LoadContext
 from rag_pipeline.ingestion.loader.content.router import ContentRouter, route_all
+from rag_pipeline.ingestion.loader.document.headings import promote_headings
 from rag_pipeline.schemas.document import DocumentMetadata, FileFormat, ParsedDocument
 
 
@@ -41,6 +42,9 @@ class BaseDocumentLoader(ABC):
 
         ctx = LoadContext(config=self.config.content)
         regions = self.detect_regions(path, ctx)
+        # 제목 승격은 detect_regions() 밖이다. 리전 수·타입을 바꾸지 않으므로 회귀 기준선
+        # (regression/baseline.json)이 흔들리지 않는다 — 이유는 headings.py 참고
+        promote_headings(regions, enabled=self.config.detect_headings)
         elements = route_all(regions, ctx, self.router)
         extra = self.extract_metadata(path)
 

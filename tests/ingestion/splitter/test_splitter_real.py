@@ -1,0 +1,145 @@
+"""실제 문서로 청킹을 검증하는 회귀 테스트.
+
+합성 문서로는 "이 단계가 왜 자르기가 아니라 병합인가"를 보여줄 수 없다. 요소 자수 중앙값이
+15~40자이고 1200자를 넘는 텍스트 요소가 한 개도 없다는 사실이 이 설계의 근거이자 안전
+근거이므로, 실제 문서에서 잠근다.
+
+tests/fixtures/ 에 실제 파일이 있을 때만 돌고 없으면 조용히 건너뛴다.
+
+설정은 전부 명시해서 넘긴다. 개발자의 .env 가 상한이나 승격 여부를 덮으면 기대값이 흔들린다.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from rag_pipeline.config import ContentRoutingConfig, IngestConfig, SplitterConfig
+from rag_pipeline.ingestion.pipeline import ingest
+from rag_pipeline.ingestion.splitter import split
+from rag_pipeline.schemas.document import ElementType
+
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+
+AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
+# 2026-08-20 에 실데이터에서 뺐다 — 깨진 도형·표가 많다고 사용자가 판단했고
+# 변환본을 다시 올리기로 했다. 상수는 그때 되살릴 자리를 남겨 둔 것이다
+AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"  # noqa: F841 - 재도입 예정
+DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).hwpx"
+
+# 사람이 결과를 눈으로 확인한 값이다. 요소 -> 청크로 얼마나 뭉쳐지는지가 이 단계의 핵심이라
+# 양쪽을 함께 잠근다. 승격된 제목 수가 곧 섹션 경계 수다
+EXPECTED = {
+    AI_GUIDE_PDF: {"elements": 509, "titles": 74, "chunks": 70},
+    # AI가이드 HWPX 는 2026-08-20 에 뺐다(위 상수 주석 참고). 그때 잠겨 있던 값은
+    # elements 721 / titles 54 / chunks 47 이고, 변환본이 오면 다시 재서 넣는다
+    DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 47},
+}
+
+CAP = 1200
+
+
+# 그림을 건너뛰고 표도 로컬로만 파싱하는 설정. 외부 API 를 절대 부르지 않는다
+@pytest.fixture
+def offline_ingest_config() -> IngestConfig:
+    config = IngestConfig(detect_headings=True)
+    object.__setattr__(
+        config,
+        "_content",
+        ContentRoutingConfig(
+            openai_api_key=None,
+            llama_cloud_api_key=None,
+            table_pdf_handler="pymupdf",
+            image_handler="skip",
+            cache_enabled=False,
+        ),
+    )
+    return config
+
+
+# 기대값을 잰 그대로의 청킹 설정
+@pytest.fixture
+def splitter_config() -> SplitterConfig:
+    return SplitterConfig(
+        max_chunk_chars=CAP, chunk_overlap_chars=150, include_heading_in_text=True
+    )
+
+
+# 파일이 있으면 파싱해서 돌려주고, 없으면 건너뛴다
+def _chunks(name: str, ingest_config: IngestConfig, splitter_config: SplitterConfig):
+    path = FIXTURES / name
+    if not path.is_file():
+        pytest.skip(f"{name} 이(가) 없어 건너뜁니다.")
+    document = ingest(path, config=ingest_config)
+    return document, split(document, splitter_config)
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_element_and_chunk_counts(
+    name: str, offline_ingest_config: IngestConfig, splitter_config: SplitterConfig
+) -> None:
+    document, chunks = _chunks(name, offline_ingest_config, splitter_config)
+    titles = [e for e in document.elements if e.type is ElementType.TITLE]
+
+    assert len(document.elements) == EXPECTED[name]["elements"]
+    assert len(titles) == EXPECTED[name]["titles"]
+    assert len(chunks) == EXPECTED[name]["chunks"]
+
+
+# 상한은 제목 머리를 붙인 **뒤에도** 지켜져야 한다. 붙이고 나서 넘기면 상한이 거짓이 된다
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_no_chunk_exceeds_cap(
+    name: str, offline_ingest_config: IngestConfig, splitter_config: SplitterConfig
+) -> None:
+    _, chunks = _chunks(name, offline_ingest_config, splitter_config)
+
+    assert [c.chunk_index for c in chunks if len(c.text) > CAP] == []
+
+
+# 병합이 실제로 일어났는지 본다. 요소를 그대로 청크로 만들면 PDF 는 절반이 20자 미만이다
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_merging_removes_tiny_chunks(
+    name: str, offline_ingest_config: IngestConfig, splitter_config: SplitterConfig
+) -> None:
+    document, chunks = _chunks(name, offline_ingest_config, splitter_config)
+
+    tiny = [c for c in chunks if len(c.text) < 100]
+    assert len(chunks) < len(document.elements) / 3
+    assert len(tiny) <= len(chunks) // 10
+
+
+# 재적재마다 id 가 바뀌면 색인이 중복된다
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_chunk_ids_are_stable_and_unique(
+    name: str, offline_ingest_config: IngestConfig, splitter_config: SplitterConfig
+) -> None:
+    document, chunks = _chunks(name, offline_ingest_config, splitter_config)
+    again = split(document, splitter_config)
+
+    assert [c.chunk_id for c in chunks] == [c.chunk_id for c in again]
+    assert len({c.chunk_id for c in chunks}) == len(chunks)
+
+
+# 쪼갠 표 조각은 모두 헤더 행을 갖고 있어야 한다. 행 하나만 검색됐을 때 열 이름이 없으면
+# 숫자만 남아 의미를 복원할 수 없다
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_split_table_pieces_keep_header(
+    name: str, offline_ingest_config: IngestConfig, splitter_config: SplitterConfig
+) -> None:
+    _, chunks = _chunks(name, offline_ingest_config, splitter_config)
+
+    # 같은 원본 표에서 나온 조각들끼리 모은다
+    by_source: dict[int, list] = {}
+    for chunk in chunks:
+        if chunk.type.value == "table" and chunk.metadata.get("part_count"):
+            by_source.setdefault(chunk.element_orders[0], []).append(chunk)
+
+    if not by_source:
+        pytest.skip(f"{name} 에는 쪼개진 표가 없습니다.")
+
+    for pieces in by_source.values():
+        headers = {tuple(c.metadata["rows"][0]) for c in pieces}
+        # 조각이 몇 개로 갈리든 헤더 행은 하나여야 한다
+        assert len(headers) == 1
+        assert all(len(c.metadata["rows"]) >= 2 for c in pieces)
