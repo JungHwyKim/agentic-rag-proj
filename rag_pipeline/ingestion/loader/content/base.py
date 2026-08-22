@@ -47,6 +47,16 @@ class ContentRegion:
     # 그 방식(`pdf.py:_BOUNDARY_SPANS_KEY`)은 `detect_regions()` 가 끝에서 지우는데,
     # 그건 판정이 로더 안에서 끝나기 때문이다. 이 값은 그 뒤에 읽힌다
     mark_cells: list[tuple[int, int]] = field(default_factory=list)
+    # TABLE(PDF): 그 표시들의 **모양 서명**. 같은 벡터 경로면 같은 글자로 본다.
+    #
+    # Vision 은 "그게 무슨 기호인가" 하나만 더해주는데, 실측(2026-08-22)으로 AI가이드 PDF
+    # 의 표시 칸 74개가 **서명 1종**이었다. 그래서 서명당 한 번만 부르고 나머지 표는 기억한
+    # 기호로 메운다(표 6개 → 호출 1회). 문서당 flat 1회가 아닌 이유는 그것이 재본 적 없는
+    # 가정이기 때문이다 — 서명이 둘인 문서는 알아서 두 번 문다.
+    #
+    # **리전 안 표시가 전부 한 종류일 때만 채운다.** 섞여 있으면 빈 문자열이고 그 리전은
+    # 늘 부른다 — 어느 기호를 재사용할지 알 수 없다
+    mark_signature: str = ""
     # 요소에 함께 실어보낼 부가정보 (heading_level, sheet_name 등)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -59,6 +69,9 @@ class LoadContext:
     llamaparse_calls: int = 0
     ocr_applied: bool = False
     warnings: list[str] = field(default_factory=list)
+    # 표시 모양 서명 -> 그 모양이 뜻하는 글자. 문서 안에서 Vision 호출을 재사용하는 자리다.
+    # **기호를 실제로 얻었을 때만 넣는다** — 실패·거절한 서명을 넣으면 남은 표가 전부 죽는다
+    mark_symbols: dict[str, str] = field(default_factory=dict)
 
     # 중복 경고가 쌓이지 않도록 같은 메시지는 한 번만 기록
     def warn(self, message: str) -> None:

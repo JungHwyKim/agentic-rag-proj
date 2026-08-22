@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 from collections import Counter
+from hashlib import sha256
 from typing import Any
 
 import pymupdf
@@ -182,14 +183,21 @@ def _call_vision(
     # 결정론적이다(같은 실측에서 6/6 일치). 격자를 넣는 것도 필수다: 프롬프트에 그것이
     # 실려 나가므로 `rows` 가 바뀌면 다른 질문인데, 안 넣으면 옛 답이 돌아온다 —
     # 대각선 셀 수정으로 `rows[0][0]` 이 바뀐 것이 정확히 그 경우다.
-    # 해상도는 PNG 에 이미 반영돼 있어 salt 에 따로 안 넣는다
+    # 해상도는 PNG 에 이미 반영돼 있어 salt 에 따로 안 넣는다.
+    #
+    # **프롬프트 본문도 넣는다**(2026-08-22, 14회차). 규칙 문구만 고쳐도 옛 답이 돌아오는데
+    # 에러가 안 나는 구멍이었다 — 해상도·격자에 이어 **같은 형태의 셋째**다. 13회차가 미룬
+    # 이유(*"지금 고치면 다음 유료 실행이 6회를 새로 문다"*)는 서명당 1회로 줄면서 사라졌다
     png = _render(region.blob or b"", region.blob_kind or "")
     if png is None:
         ctx.warn("표 영역을 이미지로 굽지 못해 로컬 추출로 폴백했습니다.")
         return None
 
     grid = json.dumps(rows, ensure_ascii=False)
-    key = content_hash(png + grid.encode("utf-8"), salt=f"table_vision:{cfg.vision_model}")
+    prompt_id = sha256(_PROMPT.encode("utf-8")).hexdigest()[:12]
+    key = content_hash(
+        png + grid.encode("utf-8"), salt=f"table_vision:{cfg.vision_model}:{prompt_id}"
+    )
 
     # 재시도는 캐시를 안 읽는다. 같은 키를 읽으면 방금 받은 그 응답이 돌아온다
     if use_cache:
@@ -273,10 +281,13 @@ def _call_vision(
 # (65/68/70 of 73, 틀리는 쪽이 매번 옮겨 다녔다) 해상도를 올려도 없어지지 않았다.
 # 반면 기하는 오검출 0 · 미검출 0 이다(`pdf.py:_MARK_AREA_RATIO`).
 #
-# **기호는 지어내지 않는다** — 그 응답이 실제로 쓴 것 중 최빈값을 쓴다. 모델이 한 칸도
-# 못 채웠으면 무엇을 넣을지 알 수 없으므로 아무것도 안 한다. 이것이 *"문서에 없는 글자를
-# 만들지 않는다"* 를 지키는 선이다(6회차가 `항목 2`·`항목 3` 번호 붙이기를 기각한 잣대)
-def _fill_from_geometry(rows: list[list[str]], marks: list[tuple[int, int]]) -> int:
+# **기호는 지어내지 않는다** — 이 문서에서 **같은 모양의 표시가 실제로 무엇이었는지**(기억된
+# 기호)를 먼저 쓰고, 없으면 그 응답이 실제로 쓴 것 중 최빈값을 쓴다. 둘 다 없으면 무엇을
+# 넣을지 알 수 없으므로 아무것도 안 한다. 이것이 *"문서에 없는 글자를 만들지 않는다"* 를
+# 지키는 선이다(6회차가 `항목 2`·`항목 3` 번호 붙이기를 기각한 잣대)
+def _fill_from_geometry(
+    rows: list[list[str]], marks: list[tuple[int, int]], known: str = ""
+) -> int:
     missing = [
         (r, c)
         for r, c in marks
@@ -285,17 +296,24 @@ def _fill_from_geometry(rows: list[list[str]], marks: list[tuple[int, int]]) -> 
     if not missing:
         return 0
 
-    written = [cell for row in rows for cell in row if cell.strip()]
-    symbols = Counter(
-        cell for cell in written if len(cell) <= 2 and not cell.isalnum()
-    )
-    if not symbols:
+    symbol = known or _symbol_of(rows)
+    if not symbol:
         return 0
 
-    symbol = symbols.most_common(1)[0][0]
     for r, c in missing:
         rows[r][c] = symbol
     return len(missing)
+
+
+# 그 표가 실제로 쓴 표시 기호 — 짧고 영숫자가 아닌 칸의 최빈값이다. 없으면 빈 문자열
+def _symbol_of(rows: list[list[str]]) -> str:
+    symbols = Counter(
+        cell
+        for row in rows
+        for cell in row
+        if cell.strip() and len(cell) <= 2 and not cell.isalnum()
+    )
+    return symbols.most_common(1)[0][0] if symbols else ""
 
 
 # 한 번 부르고 겹쳐 본 결과. 실패하면 None
@@ -329,20 +347,37 @@ def handle(region: ContentRegion, ctx: LoadContext) -> list[Element]:
     if not region.blob or not rows:
         return []
 
-    best = _attempt(region, rows, ctx, use_cache=True)
     expected = len(region.mark_cells)
+    known = ctx.mark_symbols.get(region.mark_signature, "") if region.mark_signature else ""
+    reused = False
 
-    if best is None or best[1] < expected:
-        again = _attempt(region, rows, ctx, use_cache=False)
-        if again is not None and (best is None or again[1] > best[1]):
-            best = again
+    if known and expected:
+        # **자리는 기하가 알고 모자란 것은 기호뿐인데 그것을 이미 안다 — 부를 이유가 없다.**
+        # 실측(2026-08-22)으로 AI가이드 PDF 의 표시 74칸이 서명 1종이라 표 6개가 호출 1회가
+        # 된다. 값이 있던 칸은 어차피 안 바뀌므로 이 경로가 잃는 것이 없다
+        filled_rows = [list(row) for row in rows]
+        filled = _fill_from_geometry(filled_rows, region.mark_cells, known)
+        reused = True
+    else:
+        best = _attempt(region, rows, ctx, use_cache=True)
 
-    if best is None:
-        return []
+        if best is None or best[1] < expected:
+            again = _attempt(region, rows, ctx, use_cache=False)
+            if again is not None and (best is None or again[1] > best[1]):
+                best = again
 
-    filled_rows, filled = best
-    # 모델이 놓친 자리를 기하로 메운다. 자리는 이미 알고 있고 모자란 것은 **기호**뿐이다
-    filled += _fill_from_geometry(filled_rows, region.mark_cells)
+        if best is None:
+            return []
+
+        filled_rows, filled = best
+        # 모델이 놓친 자리를 기하로 메운다. 자리는 이미 알고 있고 모자란 것은 **기호**뿐이다
+        filled += _fill_from_geometry(filled_rows, region.mark_cells, known)
+
+        # **기호를 실제로 얻었을 때만 기억한다.** 실패·거절한 서명을 기억하면 그 문서의
+        # 남은 표가 전부 빈 기호로 죽는다
+        symbol = _symbol_of(filled_rows) if filled else ""
+        if region.mark_signature and symbol:
+            ctx.mark_symbols[region.mark_signature] = symbol
 
     if not filled:
         # 채운 것이 없으면 `table_native` 와 결과가 같다. 같은 것을 두 이름으로 내지 않는다
@@ -366,6 +401,9 @@ def handle(region: ContentRegion, ctx: LoadContext) -> list[Element]:
     # 개수만으로는 부족을 못 알아챈다. 기하가 센 기대값을 나란히 남긴다 —
     # cleaner 가 `removed_elements` 옆에 `removed_texts` 를 남긴 것과 같은 판단이다
     metadata["vision_expected_cells"] = expected
+    # 이 표는 호출 없이 같은 모양의 기호를 물려받았다. 산출에서 갈라 볼 수 있어야 한다
+    if reused:
+        metadata["vision_symbol_reused"] = True
     if region.bbox is not None:
         metadata["bbox"] = list(region.bbox)
 

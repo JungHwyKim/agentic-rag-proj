@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 from rag_pipeline.config import ContentRoutingConfig, IngestConfig
+from rag_pipeline.ingestion.loader.content.base import LoadContext
+from rag_pipeline.ingestion.loader.document.pdf import PdfLoader
 from rag_pipeline.ingestion.pipeline import ingest
 from rag_pipeline.schemas.document import ElementType
 
@@ -31,6 +33,17 @@ DECREE_SPAN_TABLE_PAGES = (24, 25)
 # 안 갈린 형제 셀이 `업무정보\n(3)` 이므로 이어 붙인 모양도 같아야 한다
 DECREE_SPLIT_CELL = "업무정보\n(4)"
 DECREE_SPLIT_CELL_ROWS = range(32, 36)
+
+# AI가이드 PDF 12~17쪽 표. 체크 표시가 벡터 드로잉이라 `extract()` 로는 원리적으로 못 얻는다
+AI_GUIDE = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드"
+# 기하가 잡는 표시 자리 수. 73 이던 것이 격자 구멍까지 넓히며 17쪽에서 하나 늘었다
+AI_GUIDE_MARK_CELLS = 74
+# 그 74칸이 전부 **같은 벡터 경로**다. Vision 을 서명당 한 번만 부르는 근거다
+AI_GUIDE_MARK_SIGNATURES = 1
+# 17쪽 표의 행 라벨. 표 bbox 안(y=229.7)인데 `find_tables()` 가 그 자리에 셀 사각형을 안 내
+# 어느 청크에도 안 실리던 것이다(plan_log/표-경로.md 9회차 미결, 14회차에서 닫힘)
+AI_GUIDE_LOST_ROW_LABEL = "책임성"
+AI_GUIDE_LOST_LABEL_PAGE = 17
 
 
 # 파일명 전체로 실제 파일 하나를 찾는다. 없으면 테스트를 건너뛴다
@@ -91,3 +104,42 @@ def test_decree_merge_anchor_carries_across_pages(structure_only_config: IngestC
     rows = _span_table(structure_only_config)
 
     assert all(row[0].strip() for row in rows[1:]), "쪽을 넘긴 뒤 첫 열이 비었다"
+
+
+# --- 격자 구멍 (AI가이드 12~17쪽) ---
+#
+# 합성 픽스처는 "규칙이 도는가"에 답하지만, **`find_tables()` 가 실제로 셀 사각형을 빠뜨린다**
+# 는 것은 실파일만 보여준다. 아래 둘이 그 자리를 잠근다
+
+
+# 표시 자리는 기하가 무과금으로 정확히 안다. 격자 구멍까지 넓혀 73 → 74 다
+def test_ai_guide_mark_cells_include_grid_hole(structure_only_config: IngestConfig) -> None:
+    path = _find(AI_GUIDE)
+    ctx = LoadContext(config=structure_only_config.content)
+    regions = PdfLoader(structure_only_config).detect_regions(path, ctx)
+
+    marks = sum(len(region.mark_cells) for region in regions)
+    signatures = {region.mark_signature for region in regions if region.mark_signature}
+
+    assert marks == AI_GUIDE_MARK_CELLS
+    # 서명이 하나라는 것이 "서명당 한 번"이 이 문서에서 호출 1회가 되는 근거다
+    assert len(signatures) == AI_GUIDE_MARK_SIGNATURES
+
+
+# 격자 구멍에 있던 행 라벨이 표 안으로 돌아와야 한다. 없으면 어느 청크에도 안 실린다
+def test_ai_guide_recovers_lost_row_label(structure_only_config: IngestConfig) -> None:
+    document = ingest(_find(AI_GUIDE), config=structure_only_config)
+
+    labels = [
+        element
+        for element in document.elements
+        if element.type is ElementType.TABLE
+        and element.page == AI_GUIDE_LOST_LABEL_PAGE
+        and any(
+            cell.strip() == AI_GUIDE_LOST_ROW_LABEL
+            for row in element.metadata.get("rows", [])
+            for cell in row
+        )
+    ]
+
+    assert labels, f"{AI_GUIDE_LOST_LABEL_PAGE}쪽 표에 '{AI_GUIDE_LOST_ROW_LABEL}' 이 없다"

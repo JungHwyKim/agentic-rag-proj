@@ -46,7 +46,14 @@ def _config(**overrides) -> ContentRoutingConfig:
 _MARKS = [(1, 1), (2, 2)]
 
 
-def _region(*, rows=None, blob: bytes | None = b"%PDF-fake", kind: str | None = "pdf", marks=None):
+def _region(
+    *,
+    rows=None,
+    blob: bytes | None = b"%PDF-fake",
+    kind: str | None = "pdf",
+    marks=None,
+    signature: str = "",
+):
     return ContentRegion(
         content_type=ContentType.TABLE,
         order=0,
@@ -56,6 +63,7 @@ def _region(*, rows=None, blob: bytes | None = b"%PDF-fake", kind: str | None = 
         blob=blob,
         blob_kind=kind,
         mark_cells=list(_MARKS if marks is None else marks),
+        mark_signature=signature,
     )
 
 
@@ -431,3 +439,71 @@ def test_changed_grid_misses_the_cache(mocker, tmp_path) -> None:
     table_vision.handle(_region(rows=changed), LoadContext(config=config))
 
     assert create.call_count == 2
+
+
+# --- 같은 모양의 표시는 한 번만 묻는다 ---
+#
+# Vision 이 더해주는 것은 **"그게 무슨 기호인가"** 하나뿐이고 자리는 기하가 안다. 그래서
+# 같은 벡터 경로(= 같은 서명)의 표시는 문서 안에서 한 번만 물어도 된다 — 실측(2026-08-22)
+# 으로 AI가이드 PDF 의 표시 74칸이 **서명 1종**이라 표 6개가 호출 1회가 된다.
+#
+# **문서당 flat 1회가 아닌 이유**는 그것이 재본 적 없는 가정이기 때문이다. 서명이 둘인
+# 문서는 알아서 두 번 문다
+
+
+# 이미 아는 서명이면 **부르지 않는다.** 자리는 기하가 알고 기호는 기억이 안다
+def test_known_signature_skips_the_call(mocker) -> None:
+    client = mocker.patch.object(table_vision, "_make_client")
+    render = mocker.patch.object(table_vision, "_render")
+    ctx = LoadContext(config=_config(), mark_symbols={"sig-a": "○"})
+
+    elements = table_vision.handle(_region(signature="sig-a"), ctx)
+
+    assert client.call_count == 0
+    assert render.call_count == 0
+    assert ctx.vision_calls == 0
+    rows = elements[0].metadata["rows"]
+    assert rows[1][1] == "○" and rows[2][2] == "○"
+    assert elements[0].metadata["vision_symbol_reused"] is True
+
+
+# 부른 뒤에는 그 서명의 기호를 기억한다. 다음 표가 위 경로를 타게 하는 자리다
+def test_signature_is_remembered_after_a_call(mocker) -> None:
+    _stub_render(mocker)
+    _fake_client(
+        mocker,
+        {"rows": [["원칙", "기획", "데이터"], ["투명성", "○", ""], ["책임성", "", "○"]]},
+    )
+    ctx = LoadContext(config=_config())
+
+    table_vision.handle(_region(signature="sig-a"), ctx)
+
+    assert ctx.mark_symbols == {"sig-a": "○"}
+
+
+# **못 쓴 호출의 서명은 기억하지 않는다.** 기억하면 그 문서의 남은 표가 전부 빈 기호로
+# 죽는다 — 못 쓸 응답을 캐시에 넣지 않는 것과 같은 이유다
+def test_rejected_response_does_not_remember_signature(mocker) -> None:
+    _stub_render(mocker)
+    _fake_client(mocker, {"rows": [["원칙", "기획"], ["투명성", "○"]]})
+    ctx = LoadContext(config=_config())
+
+    elements = table_vision.handle(_region(signature="sig-a"), ctx)
+
+    assert elements == []
+    assert ctx.mark_symbols == {}
+
+
+# 서명이 없으면(리전 안에 여러 모양이 섞였다) 늘 부른다 — 어느 기호를 재사용할지 모른다
+def test_mixed_signatures_still_call(mocker) -> None:
+    _stub_render(mocker)
+    create = _fake_client(
+        mocker,
+        {"rows": [["원칙", "기획", "데이터"], ["투명성", "○", ""], ["책임성", "", "○"]]},
+    )
+    ctx = LoadContext(config=_config(), mark_symbols={"sig-a": "○"})
+
+    table_vision.handle(_region(signature=""), ctx)
+
+    assert create.call_count == 1
+    assert ctx.vision_calls == 1

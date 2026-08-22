@@ -10,6 +10,7 @@ PDF에는 '표'라는 구조가 없다 — 선과 글자의 좌표만 있다. �
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,49 @@ def _overlaps(inner: tuple[float, ...], outer: tuple[float, ...], threshold: flo
     return overlap_area / inner_area >= threshold
 
 
+# 표의 격자 경계와 앵커 셀 목록. 셋이 함께 쓰므로 계산을 한 곳에 둔다
+# (`_fill_merged_cells` · `_grid_holes` · 표시 판정).
+#
+# 격자 경계는 **모든 칸 모서리의 합집합**에서 얻는다. 그 행에 있는 칸들만 보면, 여러 격자
+# 행에 걸친 칸 때문에 행의 세로 범위가 부풀어 중심점이 엉뚱한 행으로 간다(실측으로 그렇게
+# 재다가 멀쩡한 채움 80칸을 오류로 오판했다).
+#
+# 행 수가 격자 행 수와 안 맞으면 None 이다 — 그 표는 격자로 펼 수 없다
+def _grid_of(table: Any) -> tuple[list[float], list[float], list[tuple[int, int, Any]]] | None:
+    rows = getattr(table, "rows", None)
+    if not rows:
+        return None
+
+    anchors = [
+        (r, c, cell)
+        for r, row in enumerate(rows)
+        for c, cell in enumerate(row.cells)
+        if cell is not None
+    ]
+    if not anchors:
+        return None
+
+    xs = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[0], cell[2])})
+    ys = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[1], cell[3])})
+    if len(rows) != len(ys) - 1:
+        return None
+    return xs, ys, anchors
+
+
+# 격자 칸의 중심점을 덮는 앵커 셀이 있는가
+def _covered_by_anchor(
+    anchors: list[tuple[int, int, Any]], cx: float, cy: float
+) -> tuple[int, int, Any] | None:
+    for anchor in anchors:
+        rect = anchor[2]
+        if not (rect[0] - _GRID_EPS <= cx <= rect[2] + _GRID_EPS):
+            continue
+        if not (rect[1] - _GRID_EPS <= cy <= rect[3] + _GRID_EPS):
+            continue
+        return anchor
+    return None
+
+
 # 병합에 덮인 칸을 값으로 채운다.
 #
 # PyMuPDF 는 병합에 덮인 자리를 `row.cells[j] is None` 으로 내놓고 `extract()` 는 같은 자리에
@@ -140,22 +184,10 @@ def _fill_merged_cells(table: Any) -> list[list[str]]:
     if not rows or len(rows) != len(values):
         return values
 
-    anchors = [
-        (r, c, cell)
-        for r, row in enumerate(rows)
-        for c, cell in enumerate(row.cells)
-        if cell is not None
-    ]
-    if not anchors:
+    grid = _grid_of(table)
+    if grid is None:
         return values
-
-    # 격자 경계는 **모든 칸 모서리의 합집합**에서 얻는다. 그 행에 있는 칸들만 보면, 여러 격자
-    # 행에 걸친 칸 때문에 행의 세로 범위가 부풀어 중심점이 엉뚱한 행으로 간다(실측으로 그렇게
-    # 재다가 멀쩡한 채움 80칸을 오류로 오판했다)
-    xs = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[0], cell[2])})
-    ys = sorted({round(float(v), 1) for _, _, cell in anchors for v in (cell[1], cell[3])})
-    if len(rows) != len(ys) - 1:
-        return values
+    xs, ys, anchors = grid
 
     for r, row in enumerate(rows):
         if len(row.cells) != len(xs) - 1:
@@ -166,16 +198,14 @@ def _fill_merged_cells(table: Any) -> list[list[str]]:
                 continue
 
             cx = (xs[c] + xs[c + 1]) / 2
-            for anchor_row, anchor_col, rect in anchors:
-                if not (rect[0] - _GRID_EPS <= cx <= rect[2] + _GRID_EPS):
-                    continue
-                if not (rect[1] - _GRID_EPS <= cy <= rect[3] + _GRID_EPS):
-                    continue
-                # 덮은 칸의 **왼쪽 열**이고 그 칸이 위에 있을 때만 세로 연장이다.
-                # 열이 다르면 가로 연장이므로 비워 둔다
-                if anchor_col == c and anchor_row < r and anchor_col < len(values[anchor_row]):
-                    values[r][c] = values[anchor_row][anchor_col]
-                break
+            anchor = _covered_by_anchor(anchors, cx, cy)
+            if anchor is None:
+                continue
+            anchor_row, anchor_col, _rect = anchor
+            # 덮은 칸의 **왼쪽 열**이고 그 칸이 위에 있을 때만 세로 연장이다.
+            # 열이 다르면 가로 연장이므로 비워 둔다
+            if anchor_col == c and anchor_row < r and anchor_col < len(values[anchor_row]):
+                values[r][c] = values[anchor_row][anchor_col]
 
     return values
 
@@ -240,75 +270,185 @@ def _split_diagonal(page: pymupdf.Page, cell: Any, lines: list[tuple[Any, Any]])
     return row_axis, col_axis
 
 
+# 격자 구멍 — 병합에 덮인 것이 **아니라** `find_tables()` 가 셀 사각형을 아예 안 낸 자리.
+#
+# **빈 `None` 자리는 한 종류가 아니다.** 격자 칸 중심을 덮는 앵커가 있으면 그것은 가로 병합에
+# 덮인 자리라 `_fill_merged_cells()` 가 *일부러* 비워둔 곳이고(splitter 가 행 단위로만 쪼개서
+# 옆 칸 값이 이미 그 자리를 덮는다), 아무도 안 덮으면 표에 있어야 할 칸이 통째로 빠진 것이다.
+#
+# 실측(2026-08-22, PDF 4개)으로 앞은 **514자리에서 표시가 0건**이고 뒤는 **3자리에서 1건**이며,
+# 9회차부터 열려 있던 행 라벨 `책임성` 유실도 뒤쪽이었다. 안 가르고 둘 다 넓히면 얻는 것 없이
+# 가로 병합 규칙만 건드리게 된다
+def _grid_holes(table: Any, values: list[list[str]]) -> list[tuple[int, int, Any]]:
+    grid = _grid_of(table)
+    if grid is None:
+        return []
+    xs, ys, anchors = grid
+
+    holes: list[tuple[int, int, Any]] = []
+    for r, row in enumerate(table.rows):
+        if len(row.cells) != len(xs) - 1 or r >= len(values):
+            continue
+        cy = (ys[r] + ys[r + 1]) / 2
+        for c, cell in enumerate(row.cells):
+            if cell is not None or c >= len(values[r]) or values[r][c].strip():
+                continue
+            cx = (xs[c] + xs[c + 1]) / 2
+            if _covered_by_anchor(anchors, cx, cy) is not None:
+                continue
+            holes.append((r, c, pymupdf.Rect(xs[c], ys[r], xs[c + 1], ys[r + 1])))
+    return holes
+
+
+# 격자 구멍에 든 글자를 되살린다. **표 전체가 빈 열은 뺀다.**
+#
+# 9회차의 행 라벨 `책임성`(AI가이드 17쪽)이 이 경로로 돌아온다 — 표 bbox 안인데 `extract()`
+# 가 빈 문자열을 주던 자리다. 셀 사각형이 없어 `_fill_merged_cells()` 로는 못 채운다.
+#
+# **빈 열을 빼는 것이 이 함수의 어려운 부분이다.** 잣대는 새로 만들지 않고 splitter 가 이미
+# 쓰는 것(*"표 전체에서 비어 있는 열은 버린다"*, plan_log/표-경로.md 6회차)을 그대로 쓴다.
+# 가드가 필요한 이유가 곧 그 규칙이다 — 채우면 그 열이 더 이상 빈 열이 아니게 돼 splitter 가
+# 살려둔다. 실측(2026-08-22)으로 그 가드가 막은 것은 표 바깥 여백을 열로 삼킨 자리의
+# **쪽 번호**였다. **그 표본은 문서가 실데이터에서 빠지며 사라졌고 합성 테스트가 대신 지킨다**
+def _fill_grid_holes(page: pymupdf.Page, values: list[list[str]], holes: list[tuple[int, int, Any]]) -> None:
+    for r, c, rect in holes:
+        if r >= len(values) or c >= len(values[r]) or values[r][c].strip():
+            continue
+        # 그 열이 표 전체에서 비어 있으면 표의 열이 아니다
+        if not any(c < len(row) and row[c].strip() for row in values):
+            continue
+        try:
+            text = page.get_textbox(rect).strip()
+        except Exception:  # noqa: BLE001 - 글자 하나 때문에 페이지를 막지 않는다
+            continue
+        if text:
+            values[r][c] = text
+
+
 # 빈 칸을 **부분적으로** 덮는 드로잉이 있는 칸 수. 표를 Vision 으로 올릴지 판정하는 신호다.
 #
-# 세는 것은 `row.cells` 의 실제 셀 사각형이다. `_fill_merged_cells` 의 격자가 아니라 —
-# 저쪽은 병합에 덮인 자리를 채우려고 격자를 펴지만, 여기서는 "이 칸에 무엇이 그려졌나"를
-# 묻는 것이라 실제 칸 하나가 판정 단위다.
+# 판정 단위는 **대부분 `row.cells` 의 실제 셀 사각형**이다 — "이 칸에 무엇이 그려졌나"를
+# 묻는 것이라 실제 칸 하나가 단위다. 다만 `_grid_holes()` 가 찾은 **격자 구멍**만은 셀
+# 사각형이 아예 없어 합성 격자 칸으로 본다. 진짜 병합 자리(가로 연장)는 **여전히 안 센다**
+# — 실측 514자리에서 새 표시가 0건이고, 그 자리는 옆 칸 값이 이미 덮고 있다.
 #
 # 판정이 두 겹인 이유: 면적비만 보면 표 테두리 선이 걸린다(칸보다 훨씬 작다). 그래서
-# 드로잉이 그 칸 **안에** 있는지를 먼저 보고(`_MARK_INSIDE_RATIO`), 얇은 획은 아예 뺀다
-def _mark_cells(table: Any, drawings: list[Any]) -> list[tuple[int, int]]:
+# 드로잉이 그 칸 **안에** 있는지를 먼저 보고(`_MARK_INSIDE_RATIO`), 얇은 획은 아예 뺀다.
+# **두 겹은 합성 격자에서도 그대로 일한다** — 실측으로 안쪽 조건을 빼면 6, 면적 조건을
+# 빼면 30, 둘 다 빼면 251로 쏟아진다(넓힌 뒤 걸리는 것은 1이다).
+#
+# 서명도 함께 돌려준다. 어느 표에 어떤 모양의 표시가 있었는지가 Vision 호출을 줄이는 축이다
+def _mark_cells(
+    table: Any,
+    drawings: list[tuple[Any, str]],
+    values: list[list[str]],
+    holes: list[tuple[int, int, Any]],
+) -> tuple[list[tuple[int, int]], set[str]]:
     if not drawings:
-        return []
+        return [], set()
 
     rows = getattr(table, "rows", None)
     if not rows:
-        return []
-
-    try:
-        values = table.extract()
-    except Exception:  # noqa: BLE001 - 신호 하나 때문에 페이지를 막지 않는다
-        return []
+        return [], set()
 
     marked: list[tuple[int, int]] = []
+    signatures: set[str] = set()
+
+    def record(r: int, c: int, rect: Any) -> None:
+        signature = _hit_mark(rect, drawings)
+        if signature is None:
+            return
+        marked.append((r, c))
+        signatures.add(signature)
+
     for r, row in enumerate(rows):
         if r >= len(values):
             break
         for c, cell in enumerate(row.cells):
-            if cell is None or c >= len(values[r]):
+            if cell is None or c >= len(values[r]) or values[r][c].strip():
                 continue
-            if (values[r][c] or "").strip():
+            record(r, c, pymupdf.Rect(cell))
+
+    for r, c, rect in holes:
+        if r < len(values) and c < len(values[r]) and values[r][c].strip():
+            continue
+        record(r, c, rect)
+
+    marked.sort()
+    return marked, signatures
+
+
+# 그 칸을 부분적으로 덮는 표시 드로잉이 있으면 그 **모양 서명**을, 없으면 None
+def _hit_mark(rect: Any, drawings: list[tuple[Any, str]]) -> str | None:
+    area = rect.get_area()
+    if area <= 0:
+        return None
+
+    for shape, signature in drawings:
+        overlap = shape & rect
+        if overlap.is_empty:
+            continue
+        shape_area = shape.get_area()
+        if shape_area <= 0:
+            continue
+        if overlap.get_area() / shape_area < _MARK_INSIDE_RATIO:
+            continue
+        if shape_area / area >= _MARK_AREA_RATIO:
+            # 칸을 통째로 덮는다 = 배경 음영. 정보가 아니다
+            continue
+        return signature
+    return None
+
+
+# 표시 드로잉의 **모양** 서명. bbox 로 정규화해 크기 차이를 지우고 경로와 채움색만 남긴다.
+#
+# 같은 벡터 경로면 같은 글자다 — 이것이 Vision 호출을 **서명당 한 번**으로 줄이는 근거다
+# (`content/table_vision.py`). 실측(2026-08-22)으로 AI가이드 PDF 의 표시 칸 74개가
+# **서명 1종 · 크기 1종**이었다(11.3×11.3 · 채움색 (0.26,0.35,0.66) · 세그먼트 16개).
+#
+# **크기를 정규화하는 이유**: 같은 기호가 표마다 조금씩 다른 크기로 그려질 수 있는데,
+# 그걸 다른 서명으로 보면 문서당 호출이 표 수만큼으로 되돌아간다. 반대로 채움색은 남긴다 —
+# 색이 다르면 다른 뜻일 수 있고, 서명이 갈려도 그 표를 한 번 더 부르는 것뿐이라 안전한 쪽이다
+def _mark_signature(item: dict[str, Any], rect: Any) -> str:
+    width = max(float(rect.width), 1e-6)
+    height = max(float(rect.height), 1e-6)
+
+    parts: list[str] = []
+    for segment in item.get("items", []) or []:
+        coords: list[str] = []
+        for value in segment[1:]:
+            if isinstance(value, pymupdf.Point):
+                points = [(value.x, value.y)]
+            elif isinstance(value, pymupdf.Rect):
+                points = [(value.x0, value.y0), (value.x1, value.y1)]
+            else:
                 continue
+            coords += [
+                f"{(x - rect.x0) / width:.2f},{(y - rect.y0) / height:.2f}" for x, y in points
+            ]
+        parts.append(f"{segment[0]}:{'|'.join(coords)}")
 
-            rect = pymupdf.Rect(cell)
-            area = rect.get_area()
-            if area <= 0:
-                continue
-
-            for shape in drawings:
-                overlap = shape & rect
-                if overlap.is_empty:
-                    continue
-                shape_area = shape.get_area()
-                if shape_area <= 0:
-                    continue
-                if overlap.get_area() / shape_area < _MARK_INSIDE_RATIO:
-                    continue
-                if shape_area / area >= _MARK_AREA_RATIO:
-                    # 칸을 통째로 덮는다 = 배경 음영. 정보가 아니다
-                    continue
-                marked.append((r, c))
-                break
-
-    return marked
+    fill = item.get("fill")
+    color = ",".join(f"{float(c):.2f}" for c in fill) if fill else ""
+    raw = ";".join(parts) + "#" + color
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-# 그 쪽에서 표 안의 표시로 볼 만한 채움 도형들. 얇은 획(테두리·구분선)은 뺀다
-def _mark_shapes(page: pymupdf.Page) -> list[Any]:
+# 그 쪽에서 표 안의 표시로 볼 만한 채움 도형들과 그 모양 서명. 얇은 획(테두리·구분선)은 뺀다
+def _mark_shapes(page: pymupdf.Page) -> list[tuple[Any, str]]:
     try:
         drawings = page.get_drawings()
     except Exception:  # noqa: BLE001 - 신호 하나 때문에 페이지를 막지 않는다
         return []
 
-    shapes: list[Any] = []
+    shapes: list[tuple[Any, str]] = []
     for item in drawings:
         if item.get("type") != "f":
             continue
         rect = item.get("rect")
         if rect is None or rect.width < _MARK_MIN_SIDE or rect.height < _MARK_MIN_SIDE:
             continue
-        shapes.append(rect)
+        shapes.append((rect, _mark_signature(item, rect)))
     return shapes
 
 
@@ -318,19 +458,27 @@ def _mark_shapes(page: pymupdf.Page) -> list[Any]:
 # **행 번호를 조각마다 밀어 준다.** `_merge_split_tables()` 가 조각을 위에서 아래로
 # `prev_rows + rows` 로 잇기 때문에, 둘째 조각의 0행은 되붙인 표에서 첫 조각의 행 수만큼
 # 아래다. 안 밀면 자리가 통째로 어긋난 채 채워진다
+# **서명은 리전 안이 한 종류일 때만 준다.** 섞여 있으면 빈 문자열이고, 그 리전은 늘
+# Vision 을 부른다 — 어느 기호를 재사용해야 할지 알 수 없기 때문이다
 def _marks_within(
-    bbox: tuple[float, ...], raw: list[tuple[tuple[float, ...], int, list[tuple[int, int]]]]
-) -> list[tuple[int, int]]:
+    bbox: tuple[float, ...], raw: list[_RawMarks]
+) -> tuple[list[tuple[int, int]], str]:
     inside = sorted(
         (item for item in raw if bbox[1] - _GRID_EPS <= item[0][1] and item[0][3] <= bbox[3] + _GRID_EPS),
         key=lambda item: item[0][1],
     )
     marks: list[tuple[int, int]] = []
+    signatures: set[str] = set()
     offset = 0
-    for _rect, row_count, positions in inside:
+    for _rect, row_count, positions, found in inside:
         marks.extend((r + offset, c) for r, c in positions)
+        signatures |= found
         offset += row_count
-    return marks
+    return marks, (signatures.pop() if len(signatures) == 1 else "")
+
+
+# 조각 단위로 재어 둔 표시: (표 bbox, 행 수, 표시 자리, 그 자리들의 모양 서명)
+_RawMarks = tuple[tuple[float, ...], int, list[tuple[int, int]], set[str]]
 
 
 # 표 리전이 잠깐 지고 다니는 사설 키. 쪽 경계에서 갈린 셀을 판정할 때만 쓰고
@@ -696,7 +844,7 @@ class PdfLoader(BaseDocumentLoader):
         # 같은 쪽 되붙이기가 표 객체를 잃으므로, 경계 span 을 되찾을 수 있게 원본을 남겨 둔다
         raw_spans: list[tuple[tuple[float, ...], tuple[list[list[int]], list[int]]]] = []
         # 승급 신호도 같은 이유로 조각 단위로 재어 둔다
-        raw_marks: list[tuple[tuple[float, ...], int, list[tuple[int, int]]]] = []
+        raw_marks: list[_RawMarks] = []
         shapes = _mark_shapes(page) if tables else []
         diagonals = _diagonal_lines(page) if tables else []
         column_axis = ""
@@ -708,6 +856,11 @@ class PdfLoader(BaseDocumentLoader):
                 rows = []
             if not any(any(cell.strip() for cell in row) for row in rows):
                 continue
+            # 격자 구멍은 `_fill_merged_cells()` 가 못 채운다 — 셀 사각형이 아예 없어서다.
+            # **표가 살아남을지 판정한 뒤에** 채운다: 앞에 두면 구멍 글자만으로 표가 되살아나
+            # 리전 수가 움직인다(기준선이 재는 것이 그 수다)
+            holes = _grid_holes(table, rows)
+            _fill_grid_holes(page, rows, holes)
             # 대각선으로 갈린 모서리 셀은 두 축의 이름을 함께 담고 있다. 행 축 이름만
             # 그 칸에 남기고 열 축 이름은 격자 밖(metadata)으로 뺀다 — 평평한 격자에
             # '열 전체를 가리키는 이름' 이 앉을 자리가 없다
@@ -720,13 +873,15 @@ class PdfLoader(BaseDocumentLoader):
             spans = _boundary_spans(table)
             if spans is not None:
                 raw_spans.append((bbox, spans))
-            raw_marks.append((bbox, len(rows), _mark_cells(table, shapes)))
+            positions, signatures = _mark_cells(table, shapes, rows, holes)
+            raw_marks.append((bbox, len(rows), positions, signatures))
 
         for bbox, rows in _merge_split_tables(extracted):
             table_bboxes.append(bbox)
             metadata: dict[str, Any] = {}
             if column_axis:
                 metadata["column_axis"] = column_axis
+            mark_cells, mark_signature = _marks_within(bbox, raw_marks)
             merged_spans = _spans_within(bbox, raw_spans)
             if merged_spans is not None:
                 metadata[_BOUNDARY_SPANS_KEY] = merged_spans
@@ -744,7 +899,8 @@ class PdfLoader(BaseDocumentLoader):
                         # 외부 표 핸들러에 보낼 표 영역만 잘라낸 단일 페이지 PDF
                         blob=self._crop_pdf(document, page_no, bbox),
                         blob_kind="pdf",
-                        mark_cells=_marks_within(bbox, raw_marks),
+                        mark_cells=mark_cells,
+                        mark_signature=mark_signature,
                         metadata=metadata,
                     ),
                 )

@@ -14,7 +14,11 @@ from rag_pipeline.ingestion.loader.document.pdf import (
     _BOUNDARY_SPANS_KEY,
     PdfLoader,
     _diagonal_lines,
+    _fill_grid_holes,
     _fill_merged_cells,
+    _grid_holes,
+    _mark_cells,
+    _mark_signature,
     _merge_split_tables,
     _overlaps,
     _split_diagonal,
@@ -426,3 +430,130 @@ def test_plain_cell_is_not_split(tmp_path: Path) -> None:
 
     assert _split_diagonal(page, table.rows[0].cells[0], _diagonal_lines(page)) is None
     document.close()
+
+
+# --- 격자 구멍 ---
+#
+# **빈 `None` 자리는 한 종류가 아니다.** 격자 칸 중심을 덮는 앵커가 있으면 그것은 가로 병합에
+# 덮인 자리라 `_fill_merged_cells` 가 *일부러* 비워둔 곳이고, 아무도 안 덮으면 표에 있어야 할
+# 칸이 통째로 빠진 것이다(`find_tables()` 가 셀 사각형을 안 냈다).
+#
+# 실측(2026-08-22, PDF 4개)으로 앞은 514자리에서 표시가 **0건**이고 뒤는 3자리에서 **1건**이며,
+# 9회차부터 열려 있던 행 라벨 `책임성` 유실도 뒤쪽이었다. 아래 테스트들이 그 구분을 잠근다
+
+
+# 위 `_fake_table` 을 그대로 쓴다. r1c1 은 가로 병합에 덮인 자리(앵커가 덮는다)이고
+# r2c0 은 격자 구멍이다(아무 앵커도 안 덮는다). 둘이 같은 표에 있는 것이 요점이다
+def _hole_table():
+    return _fake_table(
+        [
+            ([(0, 0, 100, 10), (100, 0, 200, 10), (200, 0, 300, 10)], ["A", "B", "C"]),
+            ([(0, 10, 200, 20), None, (200, 10, 300, 20)], ["전체", "", ""]),
+            ([None, (100, 20, 200, 30), (200, 20, 300, 30)], ["", "F", "G"]),
+        ]
+    )
+
+
+# 가짜 페이지. `get_textbox` 가 그 사각형 안의 글자를 준다
+def _fake_page(text_by_rect: dict[tuple[float, ...], str]):
+    return SimpleNamespace(
+        get_textbox=lambda rect: text_by_rect.get(tuple(round(float(v), 1) for v in rect), "")
+    )
+
+
+# 격자 구멍만 나오고 **가로 병합에 덮인 자리는 안 나온다**
+def test_grid_holes_exclude_merged_slots() -> None:
+    table = _hole_table()
+    holes = _grid_holes(table, _fill_merged_cells(table))
+
+    assert [(r, c) for r, c, _ in holes] == [(2, 0)]
+
+
+# 구멍에 든 글자를 되살린다. AI가이드 17쪽의 행 라벨 `책임성` 이 이 경로로 돌아온다
+def test_grid_hole_text_is_recovered() -> None:
+    table = _hole_table()
+    values = _fill_merged_cells(table)
+    holes = _grid_holes(table, values)
+    page = _fake_page({(0.0, 20.0, 100.0, 30.0): "책임성"})
+
+    _fill_grid_holes(page, values, holes)
+
+    assert values[2][0] == "책임성"
+
+
+# **표 전체가 빈 열이면 안 넣는다.** 실측으로 그 가드가 막은 것은 표 바깥 여백을 열로 삼킨
+# 자리의 쪽 번호였다. **그 표본은 문서가 실데이터에서 빠지며 사라졌고 이 테스트가 대신 지킨다**
+# — 채우면 그 열이 더 이상 빈 열이 아니게 돼 splitter 가 살려두는 것이 이 가드의 이유다
+def test_grid_hole_in_empty_column_is_left_alone() -> None:
+    table = _fake_table(
+        [
+            ([(0, 0, 100, 10), (100, 0, 200, 10)], ["A", ""]),
+            ([(0, 10, 100, 20), None], ["B", ""]),
+        ]
+    )
+    values = _fill_merged_cells(table)
+    holes = _grid_holes(table, values)
+    page = _fake_page({(100.0, 10.0, 200.0, 20.0): "21"})
+
+    assert [(r, c) for r, c, _ in holes] == [(1, 1)]
+    _fill_grid_holes(page, values, holes)
+
+    assert values[1][1] == ""
+
+
+# 구멍에 든 표시는 잡고 **가로 병합에 덮인 자리의 것은 안 잡는다**.
+# 넓히는 것은 구멍까지이지 병합 자리까지가 아니다 — 실측 514자리에서 얻는 것이 0건이고,
+# 그 자리는 옆 칸 값이 이미 덮고 있다
+def test_mark_cells_sees_hole_but_not_merged_slot() -> None:
+    table = _hole_table()
+    values = _fill_merged_cells(table)
+    holes = _grid_holes(table, values)
+    drawings = [
+        (pymupdf.Rect(40, 22, 48, 28), "hole-sig"),
+        (pymupdf.Rect(140, 12, 148, 18), "merged-sig"),
+    ]
+
+    marks, signatures = _mark_cells(table, drawings, values, holes)
+
+    assert marks == [(2, 0)]
+    assert signatures == {"hole-sig"}
+
+
+# 칸을 통째로 덮는 드로잉은 배경 음영이다. 구멍에서도 같은 자[尺]가 그대로 돈다
+def test_mark_cells_ignores_background_shading_in_hole() -> None:
+    table = _hole_table()
+    values = _fill_merged_cells(table)
+    holes = _grid_holes(table, values)
+
+    marks, signatures = _mark_cells(
+        table, [(pymupdf.Rect(0, 20, 100, 30), "shade")], values, holes
+    )
+
+    assert marks == []
+    assert signatures == set()
+
+
+# --- 표시의 모양 서명 ---
+#
+# 같은 벡터 경로면 같은 글자로 본다. 이것이 Vision 호출을 **서명당 한 번**으로 줄이는 근거다
+
+
+# 크기가 달라도 모양이 같으면 같은 서명이다. **크기를 남기면 문서당 호출이 표 수로 되돌아간다**
+def test_mark_signature_ignores_size() -> None:
+    small = {"items": [("l", pymupdf.Point(0, 0), pymupdf.Point(10, 10))], "fill": (0.1, 0.2, 0.3)}
+    large = {"items": [("l", pymupdf.Point(0, 0), pymupdf.Point(20, 20))], "fill": (0.1, 0.2, 0.3)}
+
+    assert _mark_signature(small, pymupdf.Rect(0, 0, 10, 10)) == _mark_signature(
+        large, pymupdf.Rect(0, 0, 20, 20)
+    )
+
+
+# 채움색이 다르면 다른 서명이다. 색이 다르면 다른 뜻일 수 있고, 서명이 갈려도 그 표를
+# 한 번 더 부르는 것뿐이라 안전한 쪽이다
+def test_mark_signature_separates_fill_colour() -> None:
+    blue = {"items": [("l", pymupdf.Point(0, 0), pymupdf.Point(10, 10))], "fill": (0.1, 0.2, 0.3)}
+    white = {"items": [("l", pymupdf.Point(0, 0), pymupdf.Point(10, 10))], "fill": (1.0, 1.0, 1.0)}
+
+    assert _mark_signature(blue, pymupdf.Rect(0, 0, 10, 10)) != _mark_signature(
+        white, pymupdf.Rect(0, 0, 10, 10)
+    )
