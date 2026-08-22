@@ -28,6 +28,15 @@ _SCRIPT_RE = re.compile(r"\.claude/hooks/([\w.]+\.py)")
 # 다른 훅이 임포트해 쓰는 공용 모듈. 단독 실행되지 않으므로 배선 대상이 아니다
 LIBRARY_MODULES = {"_hookutil.py"}
 
+# 셸 명령을 검사하지 **않는** PreToolUse 훅. 아래 test_pretooluse_covers_both_shells 의 예외다.
+#
+# **기본값이 "셸 대상"인 것이 이 집합의 핵심이다.** 새 PreToolUse 훅을 무심코 추가하면 그
+# 테스트가 깨져서 "이건 셸을 보는 훅인가"를 답하게 만든다. 반대로 빠지는 쪽이 기본이면
+# 검사는 시간이 지나며 저절로 헐거워진다 — UNMAPPED_BY_DESIGN 과 같은 모양이다.
+#
+# plan_interview_check 는 ExitPlanMode 만 본다. 셸 도구를 바꿔서 우회할 대상이 아니다
+NON_SHELL_PRETOOLUSE = {"plan_interview_check.py"}
+
 # 훅의 시간 제한은 두 겹이다.
 #   바깥 = settings.json 의 timeout      훅 프로세스를 강제 종료하는 한계
 #   안쪽 = 훅 코드의 *_TIMEOUT_SEC        훅이 스스로 멈추고 사유를 남기는 한계
@@ -96,16 +105,35 @@ def test_every_hook_script_is_wired():
     assert on_disk - wired == set(), "settings.json 에 배선되지 않은 훅이 있다"
 
 
-# PreToolUse 훅은 Bash 와 PowerShell 을 모두 덮어야 한다.
+# 셸 명령을 보는 PreToolUse 훅은 Bash 와 PowerShell 을 모두 덮어야 한다.
 # 이 저장소의 실행 명령 예시는 전부 PowerShell 이라(CLAUDE.md), matcher 가 "Bash" 뿐이면
-# 커밋 전 검사도 유료 테스트 차단도 도구 하나만 바꾸면 통째로 우회된다
+# 커밋 전 검사도 유료 테스트 차단도 도구 하나만 바꾸면 통째로 우회된다.
+#
+# 셸을 안 보는 훅(NON_SHELL_PRETOOLUSE)에는 이 요구가 뜻이 없다. 예외를 집합으로 명시하는
+# 이유는 위 주석에 있다 — 기본값이 "셸 대상"이라야 검사가 헐거워지지 않는다
 @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
 def test_pretooluse_covers_both_shells(tool: str):
-    matchers = [m for event, m, _script in _wired() if event == "PreToolUse"]
-    assert matchers, "PreToolUse 훅이 없다"
+    matchers = [
+        m
+        for event, m, script in _wired()
+        if event == "PreToolUse" and script not in NON_SHELL_PRETOOLUSE
+    ]
+    assert matchers, "셸을 보는 PreToolUse 훅이 하나도 없다"
 
     for matcher in matchers:
         assert re.fullmatch(matcher, tool), f"PreToolUse matcher {matcher!r} 가 {tool} 을 놓친다"
+
+
+# 예외 집합에 죽은 이름이 남으면 안 된다. 훅을 지우거나 이벤트를 옮긴 뒤 여기만 남으면,
+# 나중에 같은 이름의 셸 훅이 생겼을 때 그 훅이 조용히 검사에서 빠진다
+def test_non_shell_exceptions_are_wired_to_pretooluse():
+    wired = {script for event, _matcher, script in _wired() if event == "PreToolUse"}
+
+    stale = NON_SHELL_PRETOOLUSE - wired
+    assert not stale, (
+        f"NON_SHELL_PRETOOLUSE 의 {sorted(stale)} 가 PreToolUse 에 배선돼 있지 않다. "
+        "예외를 지워라"
+    )
 
 
 # 훅이 스스로 멈출 수 있어야 한다. 안쪽 제한이 바깥 예산보다 크면 훅은 사유를 남기지

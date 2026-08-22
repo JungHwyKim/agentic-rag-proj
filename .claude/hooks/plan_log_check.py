@@ -142,10 +142,10 @@ def _handle_user_prompt_submit(payload: dict, session_id: str) -> None:
     # 어떤 예외도 밖으로 내보내지 않는다. 리마인더 한 줄을 못 내는 것과 사용자가 쓴 글이
     # 사라지는 것은 비교가 안 된다
     try:
-        # 필드명은 user_input 이다. prompt 가 아니다 — 틀리면 늘 빈 값이라 아무 경고 없이
-        # 영영 안 걸린다
-        text = payload.get("user_input")
-        if not isinstance(text, str) or not text.strip():
+        # 필드명을 하나로 못 박지 않는다 — 실제로 오는 것은 `prompt` 인데 `user_input`
+        # 하나만 읽다 게이트가 영영 안 열렸다. 근거는 _hookutil.prompt_text 에 있다
+        text = _hookutil.prompt_text(payload)
+        if not text:
             return
 
         if not any(p in text for p in _DESIGN_PHRASES):

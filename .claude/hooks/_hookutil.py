@@ -222,6 +222,21 @@ def touch_marker(namespace: str, session_id: str) -> None:
         return
 
 
+# 마커를 지운다. 없으면 아무 일도 안 한다. `touch_marker` 의 짝이다.
+#
+# 세션 마커는 대부분 "한 번 켜지면 끝"이라 지울 일이 없었지만, **켰다 껐다 하는 게이트**는
+# 끄는 쪽이 있어야 성립한다. 실패해도 조용히 넘어가는 것은 touch_marker 와 같은 규약이다 —
+# 못 지우면 게이트가 열린 채로 남는데, 그건 사용자를 가두는 쪽이 아니라 통과시키는 쪽이다
+def clear_marker(namespace: str, session_id: str) -> None:
+    marker = _marker_path(namespace, session_id)
+    if marker is None:
+        return
+    try:
+        marker.unlink()
+    except OSError:
+        return
+
+
 # 기준 시각 이후에 바뀐 파일들의 저장소 기준 경로. 판단이 안 서면 None.
 #
 # `changed_paths()`(git)와 쓰임이 다르다. 저쪽은 "커밋 안 된 것"을 묻고 이쪽은 "이 시각
@@ -239,6 +254,25 @@ def paths_newer_than(prefixes: tuple[str, ...], since: float) -> list[str] | Non
     except OSError:
         return None
     return found
+
+
+# UserPromptSubmit 페이로드에서 사용자가 친 글을 꺼낸다. 없으면 빈 문자열.
+#
+# **필드명을 하나로 못 박지 않는 것이 이 함수의 요점이다.** 두 훅이 `user_input` 하나만
+# 읽고 있었는데 실제로 오는 필드는 `prompt` 라, 사용자가 게이트 문구를 말해도 훅에는 늘 빈
+# 값이 들어가 **면담 게이트가 한 번도 안 열렸다**(2026-08-21 발견). 두 훅 다 그 줄 위에
+# "필드명은 user_input 이다. prompt 가 아니다 — 틀리면 늘 빈 값이라 아무 경고 없이 영영 안
+# 걸린다" 는 경고를 적어두고 그 실수를 했다.
+#
+# 그래서 **둘 다 본다.** 하네스가 필드명을 바꿔도 한쪽이 받는다 — 이 훅들의 공통 규약
+# ("판단이 서지 않으면 막지 않는다")과 같은 방향이고, 잘못 고르면 조용히 안 걸리는 종류라
+# 관대한 쪽이 맞다. 값이 있는 첫 필드를 쓴다
+def prompt_text(payload: dict) -> str:
+    for key in ("prompt", "user_input"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 # 종료를 막고 사유를 모델에게 넘긴다. 이 함수는 돌아오지 않는다
