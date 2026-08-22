@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>검색·생성 스키마 설계서</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --fg:#1f1e1c; --muted:#6b6862; --rule:#e3e0da;
+    --card:#ffffff; --accent:#8a5a2b; --warn:#8c3b2f; --ok:#2f6b4f;
+    --code-bg:#f3f1ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#171614; --fg:#eceae5; --muted:#a09b91; --rule:#332f2a;
+      --card:#1e1d1a; --accent:#d9a066; --warn:#e08a76; --ok:#7fbf9b;
+      --code-bg:#232120;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#171614; --fg:#eceae5; --muted:#a09b91; --rule:#332f2a;
+    --card:#1e1d1a; --accent:#d9a066; --warn:#e08a76; --ok:#7fbf9b;
+    --code-bg:#232120;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+    line-height:1.75; font-size:16px;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:48px 24px 96px}
+  header{border-bottom:1px solid var(--rule); padding-bottom:24px; margin-bottom:40px}
+  h1{font-size:1.9rem; margin:0 0 8px; letter-spacing:-0.02em}
+  h2{font-size:1.3rem; margin:56px 0 12px; padding-top:8px; letter-spacing:-0.01em}
+  h3{font-size:1.02rem; margin:32px 0 8px; color:var(--accent)}
+  .lede{color:var(--muted); margin:0}
+  .fig{
+    background:var(--card); border:1px solid var(--rule); border-radius:10px;
+    padding:20px; margin:20px 0; overflow-x:auto;
+  }
+  .cap{color:var(--muted); font-size:.86rem; margin:10px 2px 0}
+  code{background:var(--code-bg); padding:1px 5px; border-radius:4px; font-size:.9em;
+       font-family:"Cascadia Mono",Consolas,monospace}
+  table{border-collapse:collapse; width:100%; margin:16px 0; font-size:.93rem;
+        display:block; overflow-x:auto}
+  th,td{border:1px solid var(--rule); padding:8px 11px; text-align:left; vertical-align:top}
+  th{background:var(--code-bg); font-weight:600}
+  .note{border-left:3px solid var(--accent); padding:2px 0 2px 16px; margin:18px 0}
+  .warn{border-left-color:var(--warn)}
+  .ok{border-left-color:var(--ok)}
+  .k{color:var(--muted); font-size:.84rem; text-transform:uppercase; letter-spacing:.08em}
+  ul{padding-left:22px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="k">rag_pipeline / retrieval</div>
+  <h1>검색·생성 스키마 설계서</h1>
+  <p class="lede">
+    적재 파이프라인이 이미 굳혀 놓은 계약 위에 검색·생성이 어떻게 얹히는지를 그림으로 남긴다.
+    설계 근거와 기각한 안은 <code>plan_log/검색-생성.md</code>, 평가 세트는
+    <code>plan_log/평가-세트.md</code> 에 있다.
+  </p>
+</header>
+
+<h2>1. 스키마 — 적재가 끝나는 곳에서 검색이 시작한다</h2>
+
+<p>
+  검색은 <code>ParsedDocument</code> 에서 출발하지 않는다. 사슬은 splitter 에서 이미 한 번
+  끊겼고, 저장소가 <code>SearchResult</code> 를 내놓으므로 <strong>검색은 거기서 출발한다.</strong>
+</p>
+
+<div class="fig">
+<pre class="mermaid">
+classDiagram
+    direction LR
+
+    class ParsedDocument {
+      +DocumentMetadata metadata
+      +Element[] elements
+    }
+    class Chunk {
+      +str chunk_id
+      +str document_key
+      +str text
+      +int page
+      +int page_end
+      +str[] heading_path
+      +dict metadata
+    }
+    class VectorRecord {
+      +str id
+      +float[] vector
+      +str text
+      +str document_id
+      +str chunk_id
+      +dict metadata
+    }
+    class SearchResult {
+      +str id
+      +float score
+      +str text
+      +str document_id
+      +str chunk_id
+      +dict metadata
+    }
+    class RetrievedChunk {
+      +str chunk_id
+      +str document_id
+      +str text
+      +dict metadata
+      +float dense_score
+      +float bm25_score
+      +float fused_score
+      +float rerank_score
+      +ranking_score()
+    }
+
+    ParsedDocument --> Chunk : split()
+    Chunk --> VectorRecord : to_records + embed
+    VectorRecord --> SearchResult : store.search()
+    SearchResult --> RetrievedChunk : from_search_result()
+</pre>
+<p class="cap">
+  새로 생기는 경계는 <code>SearchResult → RetrievedChunk</code> 하나다. 새 타입을 만드는 이유는
+  <strong>경로별 점수를 실어 나를 곳</strong>이 필요해서이고, 경로가 dense 하나뿐이면
+  이 타입은 필요 없다.
+</p>
+</div>
+
+<div class="note warn">
+  <strong><code>metadata</code> 를 버리면 안 된다.</strong> <code>page</code> ·
+  <code>page_end</code> · <code>heading_path</code> · <code>source_name</code> 이 전부 거기
+  들어 있고, <strong>출처 인용의 유일한 근거</strong>다. 이것을 떨어뜨리면 Context Builder 와
+  Generator 가 “무슨 문서 몇 쪽”을 붙일 수 없다.
+</div>
+
+<div class="note warn">
+  <strong>점수는 <code>float | None</code> 이다.</strong> dense 상위 50개와 BM25 상위 50개는
+  대부분 안 겹쳐서 <em>한쪽 경로에만 걸린 청크가 실재한다.</em> 필수 <code>float</code> 로 두고
+  빠진 자리에 <code>0.0</code> 을 채우면 <strong>“점수가 0”과 “후보가 아니었음”이 안 갈린다</strong> —
+  PyMuPDF 의 <code>extract()</code> 만 보면 병합 셀과 빈 칸이 안 갈리던 것과 같은 손실이다.
+</div>
+
+<h3>이름을 <code>text</code> 로 맞추는 이유</h3>
+<p>
+  <code>Element.text</code> · <code>Chunk.text</code> · <code>SearchResult.text</code> 가 전부
+  <code>text</code> 다. 여기만 <code>content</code> 로 두면 단계를 넘을 때마다 이름을 바꿔
+  붙이게 되고, <strong>그 지점이 자리 밀림을 숨긴다.</strong>
+</p>
+
+<h2>2. 질의 시점 흐름</h2>
+
+<div class="fig">
+<pre class="mermaid">
+flowchart TD
+    Q["사용자 질의"] --> R{"Router"}
+
+    R -->|retrieve| DE["질의 임베딩 embed_query()"]
+    R -->|web_search| WS["Web Search"]
+
+    DE --> DS["Dense 검색 VectorStore.search()"]
+    Q --> BM["BM25 검색 (저장소 밖 lexical 인덱스)"]
+
+    DS --> FU["RRF 병합 — 순위만 쓴다"]
+    BM --> FU
+    FU --> RR["Reranker (Protocol + 로컬 구현체)"]
+    WS --> EV
+    RR --> EV{"Relevance Evaluator"}
+
+    EV -->|충분| CB["Context Builder"]
+    EV -->|불충분| RW["Query Rewriter"]
+    RW -->|재시도 최대 3회| R
+    EV -->|재시도 소진| CB
+
+    CB --> GE["Generator"]
+    GE --> A["답변 + 출처"]
+</pre>
+<p class="cap">
+  Dense 와 BM25 는 <strong>서로 다른 입력</strong>을 받는다 — dense 는 질의 벡터, BM25 는 질의
+  문자열이다. 병합이 RRF 인 이유는 Dot 점수(대략 −1~1)와 BM25 점수(상한 없음)의 단위가 달라
+  그대로 더하면 <strong>BM25 가 항상 이기기</strong> 때문이다. RRF 는 순위만 써서 정규화가 필요 없다.
+</p>
+</div>
+
+<div class="note">
+  <strong>질의 임베딩은 색인과 같은 <code>EmbeddingConfig</code> 를 써야 한다.</strong>
+  컬렉션 이름이 <code>{collection}_{model}_{dim}</code> 이라, 모델이 다르면
+  <code>collection_name_for()</code> 가 다른 이름을 만들어 검색이
+  <code>컬렉션이 없습니다</code> 로 죽는다.
+</div>
+
+<h2>3. 왜 Vision·LlamaParse 가 질의 시점 tool 이 될 수 없나</h2>
+
+<p>
+  가져온 설계서는 Agent 가 고를 수 있는 tool 로 Retriever · Web Search · Vision · LlamaParse
+  넷을 두었다. <strong>뒤의 둘은 넣을 입력이 없다.</strong>
+</p>
+
+<div class="fig">
+<pre class="mermaid">
+flowchart LR
+    subgraph ING["적재 시점 — 바이트가 있다"]
+      F["원본 파일"] --> L["로더 detect_regions()"]
+      L --> B["ContentRegion.blob (원본 이미지 바이트)"]
+      B --> V["Vision / OCR"]
+      B --> LP["LlamaParse"]
+      V --> E["Element.text"]
+      LP --> E
+    end
+
+    E --> C["Chunk.text + metadata"]
+    C --> VR["VectorRecord payload"]
+
+    subgraph QRY["질의 시점 — 텍스트만 남는다"]
+      VR --> SR["SearchResult.text"]
+      SR --> RC["RetrievedChunk"]
+    end
+
+    B -. "blob 은 Chunk 로 안 넘어간다" .-> X(("여기서 죽는다"))
+</pre>
+<p class="cap">
+  확인했다 — <code>blob</code> 은 splitter → records → chunk 경로에 <strong>한 번도 안
+  나온다.</strong> 질의 시점에 남는 것은 청크 텍스트뿐이라, 두 tool 에 건넬 바이트가 없다.
+</p>
+</div>
+
+<table>
+  <tr><th>Tool</th><th>판정</th><th>근거</th></tr>
+  <tr><td>Retriever</td><td>메인 트랙</td><td>Phase 2~5, Phase 6 에서 wrapping</td></tr>
+  <tr><td>Web Search</td><td>유지</td><td>질의 문자열만 있으면 된다</td></tr>
+  <tr><td>Vision</td><td><strong>제외</strong></td><td>바이트가 로더 경계에서 죽는다. 이미지 해석은 이미 적재 때 끝났다</td></tr>
+  <tr><td>LlamaParse</td><td><strong>제외</strong></td><td>같은 이유. 게다가 표를 HTML 로 돌려줘 기본값이 꺼져 있다</td></tr>
+</table>
+
+<p>
+  이것으로 원 설계서 6장의 “LlamaParse 의 소속” 미결이 닫힌다 —
+  <strong>적재 시점 전처리</strong>다. 다시 열릴 조건은 청크 payload 에 blob 참조를 싣고
+  “이 청크의 원본 이미지를 다시 본다”가 실제 요구로 나올 때이고, 그때도 tool 이 아니라
+  <strong>재적재 트리거</strong>에 가깝다.
+</p>
+
+<h2>4. 평가 세트 — 정답을 <code>chunk_id</code> 로 매기지 않는다</h2>
+
+<div class="fig">
+<pre class="mermaid">
+flowchart TD
+    QA["qa_set.jsonl — query + gold_spans"] --> N1["squash() — NFC · 소문자 · 공백 제거"]
+    RES["검색 결과 상위 k 의 청크 텍스트"] --> N2["squash()"]
+    N1 --> M{"부분문자열 포함?"}
+    N2 --> M
+    M -->|yes| HIT["hit · recall · MRR · nDCG"]
+    M -->|no| MISS["진 질의 목록 — 사람이 직접 읽는다"]
+</pre>
+<p class="cap">
+  채점과 세트 검증이 <strong>같은 <code>squash()</code></strong> 를 쓴다. 두 곳에서 따로
+  정규화하면 한쪽을 고쳤을 때 조용히 갈린다. 공백을 지우는 이유는 <strong>PDF 경로가 한국어
+  낱말 사이 공백을 잃기</strong> 때문이다 — 살려서 대조하면 PDF 판이 정답을 못 맞힌 게 아니라
+  띄어쓰기 때문에 0점이 되고, 포맷 비교가 검색이 아니라 추출 품질을 재게 된다.
+</p>
+</div>
+
+<table>
+  <tr><th>안</th><th>문제</th></tr>
+  <tr>
+    <td><code>chunk_id</code> 목록</td>
+    <td>
+      청킹을 고치면 세트가 통째로 무효다. 그런데 <strong>청크 상한 재판정이 이 세트의 목적</strong>
+      중 하나라 자기 자신을 못 잰다. 게다가 같은 문서의 HWPX 판과 PDF 판은 chunk_id 가
+      애초에 달라, 양쪽에 따로 정답을 매기면 두 포맷이 아니라 <strong>두 세트를 비교</strong>하게 된다
+    </td>
+  </tr>
+  <tr>
+    <td>쪽 번호</td>
+    <td>못 쓴다. 같은 문서를 PDF 28쪽 / HWPX 97쪽으로 세는 미해결 함정이 있다</td>
+  </tr>
+  <tr>
+    <td class="ok"><strong><code>gold_spans</code> (채택)</strong></td>
+    <td>청킹·포맷이 바뀌어도 산다. <code>recall</code> 의 분모가 <strong>청크가 아니라 span</strong>
+        이라 청킹에 안 흔들린다</td>
+  </tr>
+</table>
+
+<div class="note warn">
+  <strong>리랭커를 <code>recall@후보수</code> 로 재면 차이가 정의상 0 이다.</strong>
+  후보 집합을 안 바꾸고 순서만 바꾸기 때문이다. 이것으로 재고 “리랭커가 효과 없다”고
+  결론 내리는 것이 이 평가에서 제일 하기 쉬운 실수라, 지표를 비교 축마다 갈라 둔다 —
+  집합이 바뀌는 비교는 <code>hit@10</code>·<code>recall@10</code>·<code>MRR</code>,
+  순서만 바뀌는 비교는 <code>nDCG@5</code>·<code>precision@3</code> 이다.
+</div>
+
+<h2>5. 지켜야 할 경계</h2>
+
+<ul>
+  <li><strong>retriever 는 <code>VectorStore</code> Protocol 만 안다.</strong>
+      <code>QdrantStore</code> 나 <code>qdrant_client</code> 를 직접 import 하지 않는다 —
+      저장소를 갈아끼울 수 있게 하는 것이 이 한 줄이고, 새 추상화는 필요 없다</li>
+  <li><strong>BM25 는 저장소 밖에 둔다.</strong> qdrant sparse 벡터로 얹으면 Protocol 과
+      컬렉션 스키마를 고쳐야 하고 저장소 중립이 깨진다</li>
+  <li><strong><code>Reranker</code> 는 Protocol + 팩토리, 로컬 구현체 먼저.</strong>
+      <code>reranker_provider</code> 설정은 상용 구현체가 실재할 때 더한다 — 구현체가 하나면
+      합법값이 하나뿐인 죽은 설정이다</li>
+  <li><strong>새 예외는 <code>_STATUS_BY_EXCEPTION</code> 에 등록한다.</strong> 빠뜨리면 500 이다</li>
+  <li><strong>기본 <code>pytest</code> 는 키 없이 전부 통과해야 한다.</strong> 외부 호출을 하는
+      단계는 <code>offline_config</code> 에 끄는 설정을 넣는다</li>
+</ul>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  (function () {
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'dark') { dark = true; }
+    if (attr === 'light') { dark = false; }
+    if (window.mermaid) {
+      window.mermaid.initialize({
+        startOnLoad: true,
+        theme: dark ? 'dark' : 'neutral',
+        flowchart: { curve: 'basis', useMaxWidth: true },
+        themeVariables: { fontFamily: '"Pretendard","Malgun Gothic",system-ui,sans-serif' }
+      });
+    }
+  })();
+</script>
+
+</div>
+</body>
+</html>

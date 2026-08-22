@@ -57,7 +57,7 @@ _OK_RETURNCODES = (0, 5)
 GATE_NS = "claude_autotest_gate"
 
 # 이 아래 .py 가 바뀌면 전체 게이트 대상으로 본다
-SOURCE_PREFIXES = ("rag_pipeline/", "backend/", ".claude/hooks/")
+SOURCE_PREFIXES = ("rag_pipeline/", "backend/", ".claude/hooks/", "evaluation/")
 
 # 영역 테스트를 마지막으로 돌린 시각을 담는 마커. mtime 을 갱신해 쓴다.
 # file_path 가 없는 도구(Bash 등)로 고쳤을 때 "그 뒤로 무엇이 바뀌었나"의 기준이 된다
@@ -77,6 +77,9 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
+    # 평가 하네스. rag_pipeline 이 아니라 **그것을 재는 자**라 최상위에 있다.
+    # 여기가 조용히 깨지면 검색 품질 수치가 전부 못 믿을 값이 된다
+    ("evaluation/", "tests/evaluation"),
 )
 
 # **일부러 매핑하지 않는 것.** 여기 있는 경로는 전 영역에 영향을 주므로 부분 실행이
