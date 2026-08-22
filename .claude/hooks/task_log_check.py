@@ -59,7 +59,12 @@ SOURCE_PREFIXES = ("rag_pipeline/", "backend/")
 # `.claude/skills/**` 와 CLAUDE.md 는 **일부러 뺐다.** 문서 갱신은 task-log 스킬 5단계가
 # 이미 담당한다. 문서 한 줄 고칠 때마다 7절을 채우게 만들면 SKIP_TASKLOG=1 이 습관이
 # 되고, 그러면 정작 필요할 때도 안 걸린다
-HARNESS_PREFIX = ".claude/hooks/"
+# **`tests/hooks/` 도 여기 있다**(2026-08-22). 훅 로직만 넣고 그 테스트를 빼면 경계가
+# 반쪽이다 — 실제로 훅 테스트가 개발자 환경의 탈출구 환경변수를 물려받아, 그 값을 켠
+# 머신에서 15개가 깨지거나 **조용히 통과**하고 있었다. 조용히 통과하는 쪽이 더 나쁘고,
+# 그것이 바로 위 문단이 `.claude/hooks/` 를 넣은 이유("훅이 조용히 무력화되면 그 뒤 모든
+# 세션의 기록이 안 남는다")와 같은 종류다. 훅의 값어치는 그 테스트가 지킨다
+HARNESS_PREFIX = (".claude/hooks/", "tests/hooks/")
 HARNESS_FILES = (".claude/settings.json",)
 
 # 기록이 남는 곳

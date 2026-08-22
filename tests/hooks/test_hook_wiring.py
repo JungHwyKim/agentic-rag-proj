@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 import pytest
+from _escape_hatches import ESCAPE_HATCHES
 
 # tests/hooks/test_hook_wiring.py -> 프로젝트 루트
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -182,3 +183,46 @@ def test_every_hook_timeout_is_budgeted():
 )
 def test_hook_module_imports(module: str):
     assert importlib.import_module(module) is not None
+
+
+# 훅이 읽는 환경변수 중 탈출구가 아닌 것. 기본값은 "탈출구"다 — 아래 커버리지 테스트가
+# 그렇게 서 있어야 새 훅을 무심코 추가했을 때 "이건 게이트를 여는 변수인가"를 답하게 된다.
+# 반대로 빠지는 쪽이 기본이면 검사는 시간이 지나며 저절로 헐거워진다
+# (NON_SHELL_PRETOOLUSE · UNMAPPED_BY_DESIGN 과 같은 모양이다)
+NON_ESCAPE_ENV: set[str] = set()
+
+# 훅 소스에서 읽는 환경변수 이름을 뽑는다
+_ENV_RE = re.compile(r'os\.environ\.get\(\s*"([A-Z_][A-Z0-9_]*)"')
+
+
+# 훅의 탈출구가 전부 conftest 의 ESCAPE_HATCHES 에 있어야 한다.
+#
+# 빠지면 그 변수를 켠 개발자의 머신에서만 훅 테스트가 달라진다 — 실측(2026-08-22)으로
+# SKIP_PLANINTERVIEW=1 은 13개를 빨갛게 만들었고, 나머지는 **조용히 통과**시켰다.
+# 뒤쪽이 더 나쁘다: 검사가 있는 줄 알았는데 없는 상태가 아무 신호 없이 유지된다
+def test_every_escape_hatch_is_cleared_in_tests():
+    found: set[str] = set()
+    for path in HOOKS_DIR.glob("*.py"):
+        found.update(_ENV_RE.findall(path.read_text(encoding="utf-8")))
+
+    hatches = found - NON_ESCAPE_ENV
+    missing = hatches - set(ESCAPE_HATCHES)
+
+    assert not missing, (
+        f"{sorted(missing)} 가 ESCAPE_HATCHES 에 없다. "
+        "그 변수를 켠 환경에서는 훅 테스트가 검사 대상을 안 돌린다 — "
+        "목록에 넣거나, 탈출구가 아니면 NON_ESCAPE_ENV 에 이유와 함께 적어라"
+    )
+
+
+# 목록에 죽은 이름이 남으면 안 된다. 훅을 지우거나 탈출구 이름을 바꾼 뒤 여기만 남으면,
+# 나중에 같은 이름이 다시 생겼을 때 그것이 검사 없이 통과한다.
+# test_non_shell_exceptions_are_wired_to_pretooluse 와 같은 판단이다
+def test_no_stale_escape_hatch_names():
+    found: set[str] = set()
+    for path in HOOKS_DIR.glob("*.py"):
+        found.update(_ENV_RE.findall(path.read_text(encoding="utf-8")))
+
+    stale = set(ESCAPE_HATCHES) - found
+
+    assert not stale, f"{sorted(stale)} 는 어느 훅도 안 읽는다. ESCAPE_HATCHES 에서 지워라"

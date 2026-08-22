@@ -147,3 +147,47 @@ def test_stop_does_not_block_when_record_written_outside_write_tool(tmp_path: Pa
     )
 
     assert result.returncode == 0, result.stderr
+
+
+# --- 기록 대상의 경계 ---
+#
+# **이 경계를 검사하는 테스트가 2026-08-22 까지 하나도 없었다.** 경계가 좁아지면 그 영역만
+# 기록 없이 지나가는데 아무 에러도 안 난다 — 이 저장소가 훅마다 두려워하는 그 실패 모드다.
+# 아래는 "무엇이 대상인가"를 양쪽에서 못 박는다
+
+
+# 제품 코드와 하네스 동작부는 기록 대상이다
+@pytest.mark.parametrize(
+    "path",
+    [
+        "rag_pipeline/ingestion/loader/content/table_vision.py",
+        "backend/app/main.py",
+        ".claude/hooks/task_log_check.py",
+        # 훅 로직만 넣고 그 테스트를 빼면 경계가 반쪽이다. 훅의 값어치는 테스트가 지킨다
+        "tests/hooks/conftest.py",
+        "tests/hooks/_escape_hatches.py",
+        ".claude/settings.json",
+    ],
+)
+def test_recordable_paths(path: str) -> None:
+    assert task_log_check.is_recordable(path), f"기록 대상이어야 한다: {path}"
+
+
+# 나머지는 대상이 아니다. 넓히면 검사가 잦아져 SKIP_TASKLOG=1 이 습관이 된다 —
+# 그 습관이 들면 정작 필요할 때도 안 걸리므로, 넓히는 쪽도 위험하다
+@pytest.mark.parametrize(
+    "path",
+    [
+        # 제품 테스트는 대상이 아니다. 하네스 테스트만 특별하다
+        "tests/ingestion/loader/content/test_table_vision.py",
+        # 스킬과 문서는 일부러 뺐다. 문서 갱신은 task-log 5단계 몫이다
+        ".claude/skills/task-log/SKILL.md",
+        "CLAUDE.md",
+        "plan_log/표-경로.md",
+        # .py 가 아닌 것은 settings.json 말고 없다
+        "rag_pipeline/README.md",
+        ".claude/hooks/notes.txt",
+    ],
+)
+def test_non_recordable_paths(path: str) -> None:
+    assert not task_log_check.is_recordable(path), f"기록 대상이 아니어야 한다: {path}"
