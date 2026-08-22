@@ -23,6 +23,28 @@ qdrant 자체가 저장소라 캐시를 얹으면 진실이 두 곳이 된다.
 embedding 과 같다. 구현체가 하나면 `indexing.provider` 는 합법값이 하나뿐인 죽은 설정이다
 (`table_pdf_handler` 에 두 값이 있는 것은 두 경로가 **실재해서**다). 추상화
 (`VectorStore` Protocol + 이 팩토리)만 두고 설정은 두 번째 구현체가 생길 때 더한다.
+
+## 이 단계의 규약이 어디 있나
+
+  records.py         `document_id` 를 내용 해시가 아니라 **원본 파일명**에서 뽑는 이유 ·
+                     `unicodedata.normalize("NFC", ...)` 가 필수인 이유(macOS 는 NFD,
+                     Windows 는 NFC 로 저장해 눈에 같은 이름이 다른 키가 된다) ·
+                     `to_records()` 의 길이 검사 — `zip` 이 일어나는 유일한 자리다
+  qdrant_store.py    컬렉션 이름에 모델·차원이 들어가는 이유 · 거리 척도가 Dot 고정이고
+                     설정이 아닌 이유 · 로컬 파일 모드의 배타 잠금
+  base.py            `close()` 가 왜 인터페이스에 있나
+  schemas/vector.py  `VectorRecord.id` 가 `chunk_id` 가 아니라 `uuid5(chunk_id)` 인 이유
+                     (qdrant 는 point ID 로 uint 또는 UUID 만 받는다) · `_NAMESPACE` 를
+                     바꾸면 기존 색인 전체가 새 point 가 된다
+
+재색인은 `delete_by_document_id()` → `upsert()` 순서다. upsert 만으로는 문서가 `A B C D E`
+에서 `A B D` 로 줄었을 때 C·E 가 남아 계속 검색된다. **레코드가 0개여도 delete 는 부른다** —
+빈 문서로 바뀐 경우를 건너뛰면 옛 청크가 통째로 남는다. 두 규약 모두
+`pipeline.py:index_document()` 가 지키고, 같은 함수의 `try/finally` 가 `close()` 를 푼다.
+
+`search(filters=...)` 와 backend 색인 엔드포인트는 **일부러 없다.** 필터로 쓸 축이
+`document_id` 뿐이고 `page` 는 못 쓴다(HWPX 쪽 수가 문서에 따라 부풀어 있다 — CLAUDE.md 의
+함정 절). 근거는 `plan_log/indexing.md`.
 """
 
 from __future__ import annotations

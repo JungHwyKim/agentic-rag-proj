@@ -13,6 +13,11 @@
 크기 하한은 두지 않는다. 섹션이 짧아도 다음 섹션과 합치지 않는다 — 서로 다른 절의 내용을
 한 청크에 담으면 검색 결과가 어느 절 얘기인지 알 수 없게 된다.
 
+병합 경계는 `ElementType.TITLE` 이다. **그 경계를 만드는 것은 이 단계가 아니라 로더**
+(`loader/document/headings.py`)이고, splitter 는 포맷을 모른다 — HWPX 가 제목을 스타일이
+아니라 글자 크기로 표시한다는 것 같은 사정은 전부 로더 쪽 문제다. 여기서 포맷을 보기
+시작하면 로더의 2단계 라우팅이 세워둔 경계가 무너진다.
+
 ## ingest() 에 끼우지 않는 이유
 
 `pipeline.py` 의 예약 주석은 `split → embed → index` 를 한 덩어리로 적어놨고, 청크를 소비할
@@ -23,9 +28,18 @@
 ## chunk_id
 
 `f"{document_key}:{chunk_index:04d}"` 다. `document_key` 를 안 주면 파싱 결과 전문의 해시를
-쓴다. 저장소에 아직 `document_id` 가 없고("재업로드 = 중복"인지가 indexing 결정이라 미결이다)
-그 결정을 여기서 앞질러 내리지 않기 위해서다. indexing 이 생기면 진짜 id 를 넘기면 되고
-`Chunk` 스키마는 안 바뀐다.
+쓴다. "재업로드 = 중복"인지는 indexing 결정이라 그 결정을 여기서 앞질러 내리지 않기
+위해서다. **그 미결은 indexing 이 닫았다** — `records.py:document_id_for()` 가 원본 파일명에서
+뽑는다. 상위(`pipeline.py:index_document()`)가 그 값을 `document_key` 로 넘기고
+`Chunk` 스키마는 안 바뀌었다.
+
+## 이 단계의 규약이 어디 있나
+
+  sections.py    병합 경계(TITLE)까지 요소를 잇는다 · 제목 머리를 본문 앞에 붙이되
+                 예산에서 미리 빼고 자른다(실측: 1200 상한에 최대 1258자)
+  oversized.py   상한 초과 구간 분할 · 겹침을 여기서만 주는 이유
+  tables.py      표는 텍스트 청커에 안 태운다 · 조각마다 헤더 행을 되풀이한다 ·
+                 표에 겹침을 안 주는 이유(같은 행이 두 청크에 들어간다)
 """
 
 from __future__ import annotations

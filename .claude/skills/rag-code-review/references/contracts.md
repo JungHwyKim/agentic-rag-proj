@@ -86,6 +86,10 @@ content_hash(blob, salt=f"llamaparse:{tier}:{version}")     # table_llamaparse.p
 
 - **모든 class/def 위에 한 줄 한국어 설명 주석.** 예외 없다
 - 모듈 docstring 에는 *왜* 그렇게 했는지를 적는다. 실측 수치는 근거와 함께
+- **각 단계 `__init__.py` docstring 끝에 "이 단계의 규약이 어디 있나" 색인 절이 있다.**
+  CLAUDE.md 가 단계별 상세를 안 갖고 여기를 가리키므로(2026-08-22), **하위 모듈을 새로
+  만들거나 규약을 옮겼는데 색인에 안 넣으면 포인터가 끊긴다.** 끊겨도 에러가 안 나므로
+  리뷰에서 본다 — `cleaner`·`splitter`·`embedding`·`indexing` 넷 다 이 형태다
 - 모든 모듈 상단에 `from __future__ import annotations`
 - ruff: line-length 100, `E,F,I,UP,B,SIM` 선택, E501 무시
 
