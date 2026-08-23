@@ -174,13 +174,19 @@ def test_pre_tool_use_does_not_consume_the_marker(
     assert _ready(hook_root)
 
 
-# matcher 를 넓혀도 엉뚱한 도구를 막으면 안 된다
+# matcher 를 넓혀도 엉뚱한 도구를 막으면 안 된다.
+# `AskUserQuestion` 이 함께 있는 이유: PostToolUse 쪽 matcher 가 그 도구까지 넓어졌으므로,
+# PreToolUse 쪽도 같이 넓혔다가 면담 질문 자체가 막히는 회귀를 여기서 잡는다
+@pytest.mark.parametrize("tool", ["Write", "AskUserQuestion"])
 def test_other_tools_are_untouched(
-    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    hook_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tool: str,
 ):
     _run(
         monkeypatch,
-        {"hook_event_name": "PreToolUse", "session_id": SESSION, "tool_name": "Write"},
+        {"hook_event_name": "PreToolUse", "session_id": SESSION, "tool_name": tool},
     )
 
     assert capsys.readouterr().out == ""
@@ -260,3 +266,171 @@ def test_real_field_wins_over_empty_legacy(hook_root: Path, monkeypatch: pytest.
     _run(monkeypatch, _prompt("설계서 작성해줘", user_input=""))
 
     assert _ready(hook_root)
+
+
+# ---------------------------------------------------------------------------
+# AskUserQuestion 답변으로 여는 경로
+#
+# 이쪽의 실패 모드는 위 문구 판정과 비대칭이다. 문구는 사용자가 직접 친 글이지만 선택지
+# **라벨은 모델이 쓴다** — 그래서 "헛되이 열린다" 쪽이 더 무겁고, 실측에서 나온 오탐 하나가
+# 아래 두 번째 테스트로 박혀 있다. 반대쪽(안 열림)은 사용자가 문구를 말하는 경로가 그대로
+# 살아 있어 갇히지 않는다
+# ---------------------------------------------------------------------------
+
+
+# AskUserQuestion 의 PostToolUse 페이로드.
+#
+# **답이 질문 텍스트로 짝지어지는 것이 실제 모양이다** — `tool_response` 는
+# `{questions, answers, annotations}` 이고 `answers` 가 `{질문: 고른 라벨}` 이다(전사 실측).
+# 가짜를 `{라벨: True}` 같은 편한 모양으로 만들면 코드와 가짜가 똑같이 틀린 채 통과한다 —
+# 이 저장소가 LlamaParse 응답·병합 셀·게이트 필드명에 이어 네 번째로 겪을 뻔한 형태다
+def _ask(rounds: list[tuple[str, list[str], str]], *, field: str = "tool_response") -> dict:
+    return {
+        "hook_event_name": "PostToolUse",
+        "session_id": SESSION,
+        "tool_name": "AskUserQuestion",
+        field: {
+            "questions": [
+                {
+                    "question": question,
+                    "header": "진행",
+                    "multiSelect": False,
+                    "options": [{"label": label, "description": ""} for label in labels],
+                }
+                for question, labels, _ in rounds
+            ],
+            "answers": {question: chosen for question, _, chosen in rounds},
+            "annotations": {},
+        },
+    }
+
+
+# 마지막 문항에서 "작성"을 고르면 그것으로 열린다. 이 경로 전체의 존재 이유다
+def test_answer_opens_the_gate(
+    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _run(
+        monkeypatch,
+        _ask([("지금 설계서를 작성할까요?", ["지금 설계서 작성", "라운드 더"], "지금 설계서 작성")]),
+    )
+
+    assert _ready(hook_root)
+    assert "plan-interview" in capsys.readouterr().out
+
+
+# **실측 오탐을 그대로 박은 회귀선.** 선택지 둘 다 문구를 담고 있어 어느 쪽을 골라도 열리는
+# 문항이었다(전사에서 나온 유일한 오탐, header `트리거 문구`). 대안 가드를 지우면 여기서 걸린다
+def test_answer_without_an_alternative_leaves_the_gate_closed(
+    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _run(
+        monkeypatch,
+        _ask(
+            [
+                (
+                    "게이트를 여는 문구를 어떻게 잡을까요?",
+                    ['"설계서 작성" 포함 변형 (추천)', '정확히 "설계서 작성해줘" 만'],
+                    '"설계서 작성" 포함 변형 (추천)',
+                )
+            ]
+        ),
+    )
+
+    assert not _ready(hook_root)
+    assert capsys.readouterr().out == ""
+
+
+# **답만 본다.** 질문·선택지까지 훑으면 문구를 논의하는 문항이 전부 열린다(실측 오탐 5건)
+def test_phrase_only_in_the_question_leaves_the_gate_closed(
+    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _run(
+        monkeypatch,
+        _ask(
+            [
+                (
+                    '지금 "설계서 작성해줘" 라고 말할까요?',
+                    ["설계서 작성해줘", "라운드를 더 돌자"],
+                    "라운드를 더 돌자",
+                )
+            ]
+        ),
+    )
+
+    assert not _ready(hook_root)
+    assert capsys.readouterr().out == ""
+
+
+# 사용자가 "Other" 에 직접 친 글도 같은 자리로 온다. 라벨 목록에 없다고 버리면 안 된다 —
+# 전사의 진짜 3건 중 1건이 이 모양이었다(`1번. 설계서 작성해줘`)
+def test_free_text_answer_opens_the_gate(hook_root: Path, monkeypatch: pytest.MonkeyPatch):
+    _run(
+        monkeypatch,
+        _ask(
+            [
+                (
+                    "회귀 방지선을 무엇으로 둘까요?",
+                    ["합성 + 실파일 둘 다 (권장)", "합성만", "실파일만"],
+                    "1번. 설계서 작성해줘",
+                )
+            ]
+        ),
+    )
+
+    assert _ready(hook_root)
+
+
+# 부정형은 답에서도 걸러야 한다. 문구 판정을 프롬프트 경로와 같은 함수로 두는 이유다
+def test_negated_answer_leaves_the_gate_closed(hook_root: Path, monkeypatch: pytest.MonkeyPatch):
+    _run(
+        monkeypatch,
+        _ask(
+            [("지금 설계서를 작성할까요?", ["지금 설계서 작성", "라운드 더"], "아직 설계서 작성하지 마")]
+        ),
+    )
+
+    assert not _ready(hook_root)
+
+
+# 하네스가 답을 `tool_input` 에 실어 보내도 받아야 한다. 이 도구는 스키마상 `answers` 가
+# 입력에도 있어서 어느 쪽인지가 계약이 아니다 — 이중 조회를 지우면 여기서 걸린다
+def test_answers_from_tool_input_open_the_gate(hook_root: Path, monkeypatch: pytest.MonkeyPatch):
+    _run(
+        monkeypatch,
+        _ask(
+            [("지금 설계서를 작성할까요?", ["지금 설계서 작성", "라운드 더"], "지금 설계서 작성")],
+            field="tool_input",
+        ),
+    )
+
+    assert _ready(hook_root)
+
+
+# 두 이벤트가 실제로 이어지나. 답변 하나로 계획 확정까지 가는 것이 이 작업의 결과물이다
+def test_exit_plan_mode_passes_after_an_answer(
+    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _run(
+        monkeypatch,
+        _ask([("지금 설계서를 작성할까요?", ["지금 설계서 작성", "라운드 더"], "지금 설계서 작성")]),
+    )
+    capsys.readouterr()
+
+    _run(monkeypatch, _exit_plan_mode("PreToolUse"))
+
+    assert capsys.readouterr().out == ""
+
+
+# **안내는 세션당 한 번으로 묶지 않는다.** 리마인더(HINT)와 반대다 — 게이트가 열리는 순간에
+# 안 나오면 모델이 문구를 다시 청하고, 그게 이 경로가 없애려는 왕복이다
+def test_answer_hint_is_emitted_every_time(
+    hook_root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    payload = _ask(
+        [("지금 설계서를 작성할까요?", ["지금 설계서 작성", "라운드 더"], "지금 설계서 작성")]
+    )
+
+    _run(monkeypatch, payload)
+    _run(monkeypatch, payload)
+
+    assert capsys.readouterr().out.count("plan-interview") == 2

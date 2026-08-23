@@ -97,7 +97,7 @@
         ]
       },
       {
-        "matcher": "ExitPlanMode",
+        "matcher": "ExitPlanMode|AskUserQuestion",
         "hooks": [
           {
             "type": "command",
