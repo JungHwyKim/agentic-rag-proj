@@ -1,8 +1,33 @@
 {
   "_meta": {
-    "생성일": "2026-08-20",
+    "최종갱신": "2026-08-23",
     "무엇인가": "회귀 판정의 기준값. 코드를 고친 뒤 이 값과 대조해 '의도한 변화'와 '회귀'를 가른다.",
-    "재는 방법": "detect_regions() 단독 실행 — route_all 을 안 타므로 외부 API 호출도 과금도 없다. task_log/routing-diff-시행령개정안.md 가 택한 방식과 같다.",
+    "재는 방법": ".\\.venv\\Scripts\\python.exe -m regression.measure — 두 블록을 재서 이 파일과 대조하고 달라진 항목만 표로 낸다. **읽기 전용이라 이 파일을 쓰지 않는다**(--save-baseline 이 없는 이유는 regression/measure.py 모듈 docstring 에). documents 는 detect_regions() 단독이라 외부 API 호출도 과금도 없다. --json 은 잰 값만, --skip-tests 는 문서만 잰다.",
+    "설정": {
+      "ingest": {
+        "max_excel_rows": 5000,
+        "detect_headings": true
+      },
+      "content": {
+        "table_pdf_handler": "pymupdf",
+        "image_handler": "ocr",
+        "vision_model": "gpt-4.1-mini",
+        "max_vision_calls_per_doc": 30,
+        "min_image_width": 100,
+        "min_image_height": 100,
+        "min_image_display_pt": 20.0,
+        "max_image_aspect_ratio": 8.0,
+        "ocr_lang": "kor+eng",
+        "ocr_psm": 6,
+        "ocr_preserve_spaces": true,
+        "ocr_min_chars": 10,
+        "ocr_min_confidence": 60.0,
+        "pdf_scan_text_threshold": 10,
+        "pdf_render_dpi": 300,
+        "cache_enabled": false
+      }
+    },
+    "설정을 왜 싣나": "detect_regions() 가 실제로 설정을 읽는다 — 지금 닿는 것은 max_excel_rows · pdf_scan_text_threshold · pdf_render_dpi 셋이고, 뒤의 둘은 스캔 PDF 를 통째 이미지 리전으로 만들지를 갈라 **리전 수를 직접 바꾼다**. 안 박으면 개발자 .env 를 타 같은 명령이 머신마다 다른 값을 낸다. 닿는 셋보다 넓게 박은 것은 나중에 다른 필드를 읽어도 .env 가 안 새게 하려는 것이다. 뺀 것은 머신마다 달라야 하는 API 키와 tesseract_cmd 뿐이다.",
     "여기에 없는 것": "splitter(청크 수·크기 분포)는 이 파일에 없다. documents 블록은 detect_regions() 범위이고 청킹은 그 뒤 단계라, 실파일 기대값은 tests/ingestion/splitter/test_splitter_real.py 가 잠근다. 제목 승격도 load() 에서 돌아 리전 수·타입을 바꾸지 않으므로 여기서는 안 보인다 — 그게 승격을 detect_regions() 밖에 둔 이유다.",
     "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. 어느 쪽이 맞는지 실제 문서로 확인하고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다. 절차는 regression-test 스킬에 있다.",
     "주의": "documents 의 입력 파일은 tests/fixtures/ 에 있고 gitignore 다. 없는 환경에서는 그 항목을 조용히 skip 한다 — 없다고 해서 회귀가 아니다.",
@@ -13,16 +38,38 @@
       "2026-08-20: '[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx' 항목을 뺐다. **회귀가 아니라 실데이터에서 제외한 것이다** — 사용자가 깨진 도형·표가 많다고 판단했고 변환본을 다시 올리기로 했다. 뺄 때의 값은 page_count 97 / regions_total 774 / regions_by_type {\"image\": 28, \"text\": 746} 였다 — 변환본이 오면 이 값과 대조하지 말 것. 다른 파일이다. 같은 문서의 .pdf 와 .hwp 항목은 남겨 뒀다(.hwp 는 레거시 감지만 본다). cleaner 의 반복 머리말 테스트에도 이 HWPX 가 남아 있다 — 그 테스트는 도형·표를 안 쓰고, 다른 세 문서 짝은 두 포맷 모두 머리말 제거 0건이라 뺄 수 없다.",
       "2026-08-22: '국가아동권리보장원+권리지원부_제3차+아동정책기본계획+아동용+안내서.pdf' 항목을 뺐다. **회귀가 아니라 실데이터에서 제외한 것이다** — 사용자 지시이고 AI가이드 HWPX(2026-08-20) 와 같은 처리다. 뺄 때의 값은 page_count 23 / regions_total 421 / regions_by_type {\"image\": 7, \"table\": 1, \"text\": 413} 였다. **딸린 것을 먼저 확인했고 남길 테스트가 없었다** — tests/ 어느 파이썬 파일도 이 문서를 이름으로 부르지 않고(실파일 테스트는 전부 명시 목록을 쓴다) evaluation/documents.py 도 애초에 안 쓴다. AI가이드 HWPX 때 cleaner 머리말 테스트 하나를 남긴 것과 갈리는 지점이다. 이 배제로 plan_log/표-경로.md 의 미결 '아동정책 11쪽 드로잉 1이 표시인가 장식인가' 도 표본이 사라져 닫혔다. 문서 10 -> 9.",
       "2026-08-22: 표시 판정을 격자 구멍까지 넓히고 그 구멍의 글자를 되살렸는데 **documents 블록은 하나도 안 움직였다**(아동정책 제외 말고는). 이 블록이 재는 것은 regions_total·regions_by_type·pages_by_type 인데 두 변경은 리전 **안의 값**만 고치기 때문이다. 구멍 채우기를 '표가 살아남을지 판정한 뒤'에 두는 것이 그것을 지탱한다 — 앞에 두면 구멍 글자만으로 빈 표가 되살아나 리전 수가 움직인다.",
-      "2026-08-23: 신뢰가능 AI 가이드의 한컴 변환본을 새 문서로 **추가**했다(9 -> 10개). 2026-08-20 에 옛 HWPX 판을 뺄 때 '사용자가 변환본을 올리면 다시 잰다'로 남겨 둔 자리다. **뺄 때의 값과 대조하지 말 것 — 다른 파일이다.** 기존 9개 문서는 하나도 안 움직였다 — 이번 변경은 파일 추가뿐이라 detect_regions() 를 건드리지 않는다."
+      "2026-08-23: 신뢰가능 AI 가이드의 한컴 변환본을 새 문서로 **추가**했다(9 -> 10개). 2026-08-20 에 옛 HWPX 판을 뺄 때 '사용자가 변환본을 올리면 다시 잰다'로 남겨 둔 자리다. **뺄 때의 값과 대조하지 말 것 — 다른 파일이다.** 기존 9개 문서는 하나도 안 움직였다 — 이번 변경은 파일 추가뿐이라 detect_regions() 를 건드리지 않는다.",
+      "2026-08-23: **tests 블록을 총계 하나에서 영역별 표로 바꿨다.** 낡은 것은 수치가 아니라 형태였다 — 519 -> 655 의 136건이 최소 네 세션의 몫이라, 한 숫자에 붙은 서사형 근거(\"337 -> 383 은 embedding …\")를 아무도 이어 쓸 수 없었다. 실제로 그날 한 세션이 *\"내 몫은 21건뿐이라 근거 칸에 쓸 말이 없다\"* 며 갱신을 포기했다(task_log/2026-08-23-평가러너-고정설정.md §7). 영역 축이면 그 21건이 갈 자리가 생긴다. **적는 수를 passed 가 아니라 수집 수로 바꾼 것이 두 번째 결정이다** — tests/fixtures/ 가 gitignore 라 다른 클론에서 실파일 테스트가 skip 되는데, skip 은 수집 뒤라 collected 는 환경과 무관하다. 이것이 plan_log/하네스-확장.md 의 미결 '기준선이 fixtures 없는 환경에서 쓸모가 있나' 를 **절반 닫는다**(documents 쪽은 여전히 픽스처가 필요하다). 그리고 재는 코드를 regression/measure.py 로 저장소에 들였다 — 매번 스크래치패드에 새로 짜는 비용이 갱신을 미루게 하는 두 번째 원인이었다. **documents 10건은 하나도 안 움직였다**: 설정을 명시로 못 박고 다시 쟀는데 전부 일치했다(.env 가 pdf_scan_text_threshold 등을 안 건드려서다).",
+      "2026-08-23: tests.by_area 는 커밋 89810a0 시점의 값이다. 잴 당시 다른 세션이 plan_interview_check.py 와 그 테스트를 편집 중이어서 작업 트리에서는 tests/hooks 가 150(총 664)으로 나왔는데, **어느 커밋에도 없는 상태라 안 실었다.** 그 세션이 커밋하면 measure 가 tests/hooks 한 줄을 diff 로 낸다 — 그때 +9 를 확인하고 갱신하면 된다. 미커밋 상태를 기준선에 넣으면 재현 지점이 사라지고, 되돌려질 경우 **역사에 없던 값**을 기대하게 된다."
     ]
   },
   "tests": {
-    "명령": ".\\.venv\\Scripts\\python.exe -m pytest -q",
-    "passed": 517,
-    "skipped": 2,
-    "failed": 0,
-    "duration_sec": 70.4,
-    "근거": "337 -> 383 은 embedding, 383 -> 466 은 indexing 단계 신설분이다. 466 -> 478 은 2026-08-18~19 의 표 작업이다. 478 -> 513 은 이미지 표시 크기 필터·훅 도구 비의존·병합 헤더/잘린 응답 수정분이고, 513 -> 517 은 2026-08-20 의 쪽 넘김 표 되붙이기 4건이다(합쳐지는가 · 앵커 이어받기 · blob 소거 · **헤더가 같아도 사이에 본문이 있으면 안 합쳐지는가**). 기준선의 이 값은 두 번 낡은 적이 있다 — 단계가 늘 때 함께 갱신할 것.",
+    "명령": ".\\.venv\\Scripts\\python.exe -m pytest -q --collect-only",
+    "지표": "by_area 는 **수집 수**다. skip 은 수집 뒤에 일어나므로 tests/fixtures/ 가 없는 클론에서도 같은 값이 나온다 — 그것이 이 지표를 고른 이유다. 실행 결과(run)는 픽스처가 있는 머신 기준이라 환경마다 갈린다.",
+    "by_area": {
+      "tests/ingestion/loader/document": 146,
+      "tests/hooks": 141,
+      "tests/ingestion/loader/content": 89,
+      "tests/ingestion/indexing": 82,
+      "tests/ingestion/splitter": 56,
+      "tests/ingestion/embedding": 46,
+      "tests/ingestion/cleaner": 39,
+      "tests/evaluation": 30,
+      "tests/regression": 27,
+      "tests/ingestion": 12,
+      "tests/api": 7,
+      "tests/ingestion/loader": 7
+    },
+    "collected_total": 682,
+    "run": {
+      "passed": 680,
+      "skipped": 2,
+      "failed": 0,
+      "duration_sec": 79.8,
+      "환경": "tests/fixtures/ 가 있는 머신 기준. 없는 클론에서는 이 셋만 달라지고 by_area 는 그대로다.",
+      "어떻게 얻었나": "관측은 `689 passed, 2 skipped, 7 deselected in 79.77s` 였고, 그 실행에는 동시 세션이 편집 중이던 tests/hooks 9건이 섞여 있었다(선택 691). **passed 680 은 거기서 그 9를 뺀 도출값이다** — by_area 총계 682 와 맞는다(682 = 680 passed + 2 skipped). duration 은 691건을 돈 관측값 그대로라 682건 기준으로는 아주 조금 길다. 다음 갱신 때 그 9건이 커밋돼 있으면 관측값을 그대로 적으면 된다."
+    },
+    "근거": "2026-08-23 에 총계 하나에서 영역별 표로 바꿨다. 이유는 _meta.갱신 이력에 있다. **영역 목록은 어디에도 안 박혀 있다** — measure.py 가 수집 결과를 디렉터리별로 접으므로 새 영역이 생기면 diff 에 '(기준선에 없음)' 으로 저절로 뜬다. 고정 목록이었다면 tests/hooks(141)와 tests/evaluation(30)이 근거에 한 번도 안 나온 채로 계속 갔을 것이다. 영역별 수가 줄면 항상 확인한다 — 지워졌는지 이름이 바뀌었는지는 다른 문제이고, Stop 훅의 전체 pytest 는 *실패*를 잡지 *삭제*를 못 잡는다. 그것이 이 블록이 남는 이유다.",
     "주의": "-m integration 은 제외된 값이다(pyproject 의 addopts). 유료 테스트는 이 기준선에 안 들어간다."
   },
   "documents": {
