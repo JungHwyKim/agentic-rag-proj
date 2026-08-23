@@ -28,6 +28,22 @@
       }
     },
     "설정을 왜 싣나": "detect_regions() 가 실제로 설정을 읽는다 — 지금 닿는 것은 max_excel_rows · pdf_scan_text_threshold · pdf_render_dpi 셋이고, 뒤의 둘은 스캔 PDF 를 통째 이미지 리전으로 만들지를 갈라 **리전 수를 직접 바꾼다**. 안 박으면 개발자 .env 를 타 같은 명령이 머신마다 다른 값을 낸다. 닿는 셋보다 넓게 박은 것은 나중에 다른 필드를 읽어도 .env 가 안 새게 하려는 것이다. 뺀 것은 머신마다 달라야 하는 API 키와 tesseract_cmd 뿐이다.",
+    "픽스처 없는 환경": {
+      "무엇인가": "tests/fixtures/ 가 없는 클론에서 대조할 값. 2026-08-23 에 픽스처를 안 복사한 워크트리로 실측했다.",
+      "documents": "10건 전부 '없어서 못 잼'. 회귀가 아니다 — measure 가 조용히 skip 한다.",
+      "tests.by_area": {
+        "tests/ingestion/loader/document": 121
+      },
+      "tests.collected_total": 739,
+      "왜 이 영역만 흔들리나": "test_hwpx_real.py 의 _hwpx_params() 가 **수집 시점에** FIXTURES.glob('*.hwpx') 를 부른다. 파일이 6개면 파라미터가 6개, 하나도 없으면 skip 마크가 붙은 파라미터 1개로 접힌다 — 테스트 5개 x 5 = 25. 실파일 모듈 다섯 중 이 하나만 그렇고, 나머지 넷(splitter·embedding·indexing·cleaner)은 정적 목록 + 런타임 skip 이라 안 흔들린다. **지표 선택의 잘못이 아니라 한 모듈의 수집 방식이고, 고치면 사라진다.**",
+      "주의": "739 는 커밋 906051c 시점 값이다. by_area 의 다른 영역이 바뀌면 이 총계도 함께 바뀌므로, 차이(-25)가 본질이고 총계는 파생값이다."
+    },
+    "warnings 대조 규칙": {
+      "규칙": "정확한 리스트 비교(순서 포함). 정규화하지 않는다.",
+      "왜": "실제 표본이 쪽 번호를 담는다 — 아동정책 PDF(기준선에서 제외한 픽스처)가 ['23쪽은 텍스트가 없어 이미지로 처리했습니다.'] 하나를 낸다. 쪽 번호를 지우는 정규화를 넣으면 **쪽 계산이 밀린 회귀가 조용히 통과한다** — HWPX 쪽 수 부풀림이 이 저장소의 알려진 함정이라 그 신호를 버릴 수 없다. 합성 표본(cp949 텍스트)은 ['cp949 인코딩으로 디코드했습니다.'] 로 인코딩 이름을 담는다.",
+      "왜 안전한가": "measure 는 route_all() 을 안 타므로 **문서 로더의 경고 9종만** 들어온다(excel 2 · hwpx 3 · image 1 · pdf 2 · text 1). 외부 API 실패처럼 실행마다 흔들리는 핸들러 경고(image_vision 등)는 애초에 안 섞인다. 그리고 LoadContext.warn() 이 같은 메시지를 한 번만 담아 중복이 안 쌓인다. 순서는 파싱 순서라 같은 문서에 결정적이다.",
+      "표본": "기준선 10건은 전부 빈 배열이라 규칙을 정할 표본이 없었다(2026-08-23 미결). 제외한 픽스처와 합성 입력에서 표본을 얻어 닫았다."
+    },
     "여기에 없는 것": "splitter(청크 수·크기 분포)는 이 파일에 없다. documents 블록은 detect_regions() 범위이고 청킹은 그 뒤 단계라, 실파일 기대값은 tests/ingestion/splitter/test_splitter_real.py 가 잠근다. 제목 승격도 load() 에서 돌아 리전 수·타입을 바꾸지 않으므로 여기서는 안 보인다 — 그게 승격을 detect_regions() 밖에 둔 이유다.",
     "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. 어느 쪽이 맞는지 실제 문서로 확인하고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다. 절차는 regression-test 스킬에 있다.",
     "주의": "documents 의 입력 파일은 tests/fixtures/ 에 있고 gitignore 다. 없는 환경에서는 그 항목을 조용히 skip 한다 — 없다고 해서 회귀가 아니다.",
@@ -47,7 +63,7 @@
   },
   "tests": {
     "명령": ".\\.venv\\Scripts\\python.exe -m pytest -q --collect-only",
-    "지표": "by_area 는 **수집 수**다. skip 은 수집 뒤에 일어나므로 tests/fixtures/ 가 없는 클론에서도 같은 값이 나온다 — 그것이 이 지표를 고른 이유다. 실행 결과(run)는 픽스처가 있는 머신 기준이라 환경마다 갈린다.",
+    "지표": "by_area 는 **수집 수**다. skip 은 수집 뒤에 일어나므로 tests/fixtures/ 가 없는 클론에서도 대체로 같은 값이 나온다 — 그것이 이 지표를 고른 이유다. **다만 한 영역은 흔들린다**: tests/ingestion/loader/document 가 픽스처 없이는 146 -> 121 이다(_meta.픽스처 없는 환경). 실행 결과(run)는 픽스처가 있는 머신 기준이라 환경마다 갈린다.",
     "by_area": {
       "tests/hooks": 150,
       "tests/ingestion/loader/document": 146,

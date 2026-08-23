@@ -33,11 +33,23 @@
 읽기 시작해도 `.env` 가 새어 들어오지 않게 하기 위해서다. 안 넣은 것은 **머신마다 달라야
 하는 것**뿐이다 — API 키와 `tesseract_cmd`.
 
-## `tests` 블록이 수집 수인 이유
+## `tests` 블록이 수집 수인 이유 — 그리고 그 이유가 완전하지 않은 곳
 
 `tests/fixtures/` 가 gitignore 라 다른 클론에는 없고, 실파일 테스트가 거기서 조용히 skip
-된다. **skip 은 수집 뒤에 일어나므로** 수집 수는 환경과 무관하게 같다. `passed`/`skipped`
+된다. **skip 은 수집 뒤에 일어나므로** 수집 수는 대체로 환경과 무관하다. `passed`/`skipped`
 를 영역별로 적으면 픽스처 없는 클론에서 여러 영역이 어긋나 항상 빨간 기준선이 된다.
+
+**다만 "대체로" 다.** 처음에는 환경 독립이라고 단정해 적었는데 실측이 뒤집었다(2026-08-23,
+픽스처를 안 복사한 워크트리) — `tests/ingestion/loader/document` 가 146 에서 **121 로
+25건 줄어든다.** `test_hwpx_real.py` 의 `_hwpx_params()` 가 **수집 시점에**
+`FIXTURES.glob("*.hwpx")` 를 부르기 때문이다. 파일이 6개면 파라미터가 6개이고, 하나도
+없으면 `pytest.mark.skip` 이 붙은 파라미터 **한 개**로 접힌다(5개 테스트 x 5 = 25).
+
+실파일 모듈 다섯 중 이 하나만 그렇다. 나머지 넷(`splitter` · `embedding` · `indexing` ·
+`cleaner`)은 **정적 목록으로 parametrize 하고 런타임에 skip** 해서 수집 수가 안 흔들린다.
+그래서 이것은 지표 선택의 잘못이 아니라 **한 모듈의 수집 방식**이고, 고치면 사라진다.
+
+값은 `baseline.json` 의 `_meta.픽스처 없는 환경` 에 적어 뒀다 — 그 환경에서도 대조할 수 있게.
 """
 
 from __future__ import annotations
