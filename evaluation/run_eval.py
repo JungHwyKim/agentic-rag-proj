@@ -83,8 +83,8 @@ K_AXES: tuple[int, ...] = (1, 3, 5, 10, 20)
 
 
 # 세트가 성립하는지 본다. 문제 목록을 돌려주고 비어 있으면 통과다
-def check(refresh: bool = False) -> list[str]:
-    qa = load_qa_set()
+def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
+    qa = load_qa_set(qa_path)
     if not qa.items:
         return [f"세트가 비어 있습니다: {qa.path}"]
 
@@ -129,13 +129,14 @@ def run_dense(
     label: str,
     groups: list[str] | None = None,
     use_bm25: bool = False,
+    qa_path: Path | None = None,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
     from rag_pipeline.retrieval import build_bm25_index, retrieve
 
-    qa = load_qa_set()
+    qa = load_qa_set(qa_path)
     if not qa.items:
         raise SystemExit(f"세트가 비어 있습니다: {qa.path}")
 
@@ -337,6 +338,11 @@ def main() -> int:
     parser.add_argument("--k", type=int, default=20, help="후보를 어디까지 가져오나 (검색은 무료)")
     parser.add_argument("--report-k", type=int, default=10, help="summary 의 주지표 k")
     parser.add_argument("--label", default="dense-baseline")
+    parser.add_argument(
+        "--qa-set",
+        type=Path,
+        help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
+    )
     parser.add_argument("--refresh", action="store_true", help="파싱 캐시를 버리고 다시 읽는다")
     parser.add_argument(
         "--save-baseline",
@@ -346,7 +352,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.check or not args.dense:
-        problems = check(refresh=args.refresh)
+        problems = check(refresh=args.refresh, qa_path=args.qa_set)
         for line in problems:
             print("  ✗", line)
         print(f"\n{'통과' if not problems else str(len(problems)) + '건 문제'}")
@@ -361,6 +367,7 @@ def main() -> int:
         label=args.label,
         groups=args.groups,
         use_bm25=args.hybrid,
+        qa_path=args.qa_set,
     )
     out = RESULTS_DIR / f"{args.label}-{args.fmt}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -372,6 +379,10 @@ def main() -> int:
             json.dumps(as_baseline(report), ensure_ascii=False, indent=1), encoding="utf-8"
         )
         print(f"\n기준선 갱신: {BASELINE_PATH}")
+    elif args.qa_set is not None:
+        # **다른 세트를 기본 기준선과 대조하면 안 된다.** query_id 가 안 겹쳐 전 항목이
+        # "없음 -> N" 으로 나오는데, 그것은 회귀가 아니라 애초에 다른 질문들이다
+        print(f"\n(기준선 대조 생략 — 기준선은 {load_qa_set().path.name} 것이다)")
     elif BASELINE_PATH.exists():
         baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
         print(f"\n기준선 대비 ({baseline.get('label')}-{baseline.get('format')}):")
