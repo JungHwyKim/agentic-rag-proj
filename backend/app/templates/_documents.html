@@ -1,0 +1,21 @@
+{# 사이드바 문서 목록. QdrantStore.list_documents() 결과를 그대로 받는다 #}
+{% if documents %}
+  <ul class="doc-list">
+    {% for doc in documents %}
+      <li class="doc-item">
+        <span class="doc-name" title="{{ doc.source_name }}">{{ doc.source_name }}</span>
+        <span class="doc-meta">{{ doc.chunk_count }}청크</span>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  {# 첫 실행에서 비는 것은 정상이다 — list_documents() 가 컬렉션 없을 때 예외가 아니라
+     빈 리스트를 돌려주는 것과 짝이다 (qdrant_store.py) #}
+  <p class="muted small">아직 색인된 문서가 없습니다.</p>
+{% endif %}
+
+{# 사이드바 맨 아래 자리를 함께 갱신한다. 이 조각의 주 대상은 #documents 이고
+   여기는 out-of-band 라, 목록 요청 하나로 두 자리가 같은 값으로 움직인다 #}
+<p class="sidebar-foot muted small" id="doc-count" hx-swap-oob="true">
+  {%- if documents %}{{ documents | length }}개 문서 · 인덱싱 완료{% endif -%}
+</p>

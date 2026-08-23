@@ -2,6 +2,8 @@
 fastapi
 uvicorn[standard]
 python-multipart          # multipart/form-data 파일 업로드에 필수
+# 화면을 서버에서 렌더한다. Node 툴체인을 안 들이는 대신 이것과 static/htmx.min.js 둘로 끝난다
+jinja2
 pydantic>=2
 pydantic-settings
 

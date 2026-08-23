@@ -1,0 +1,221 @@
+/* 화면 구성안(스크린샷)의 배치를 그대로 옮긴다. 다만 **치수는 실데이터 기준**이다 —
+   예시는 문서 2개·소스 2개에 파일명이 짧지만 실제는 문서 5개·소스 5개이고 파일명이
+   `국가아동권리보장원+권리지원부_제3차+아동정책기본계획+아동용+안내서.pdf` 처럼 길다.
+   예시 치수를 그대로 박으면 실화면에서 터진다. */
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --line: #e3e5ea;
+  --line-soft: #eceef2;
+  --text: #1f2328;
+  --muted: #8a9099;
+  --accent: #4a5bd4;
+  --lavender: #e8e6fb;
+  --lavender-ink: #4a3fb0;
+  --user-bubble: #dfe4fb;
+  --sunken: #fafafc;
+  --r: 10px;
+  --r-sm: 6px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  /* 예시의 작은 글씨 느낌. 한글 폰트를 먼저 두고 없으면 시스템 기본으로 떨어진다 */
+  font: 13px/1.65 "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+}
+
+.layout { display: flex; gap: 14px; padding: 14px; height: 100vh; }
+
+/* ============ 사이드바 ============ */
+.sidebar {
+  width: 214px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 14px 12px;
+  overflow-y: auto;
+}
+
+/* 예시에서 문서 수 문구는 히스토리 아래 **맨 바닥**에 있다.
+   자리는 chat.html 에 있고 값은 _documents.html 이 hx-swap-oob 로 채운다 */
+.sidebar-foot { margin: auto 0 0; padding-top: 12px; }
+.sidebar-foot:empty { display: none; }
+
+.panel-title { font-size: 12px; font-weight: 700; margin: 0 0 9px; letter-spacing: -.2px; }
+
+.upload-btn {
+  width: 100%;
+  padding: 7px;
+  margin-bottom: 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+/* 목업이라는 것이 눈에 보여야 한다 */
+.upload-btn[disabled] { color: var(--muted); cursor: not-allowed; }
+
+.doc-list, .history { list-style: none; margin: 0; padding: 0; }
+
+.doc-item {
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* 실제 파일명이 길고 공백이 없어 anywhere 가 아니면 패널을 밀어낸다 */
+.doc-name { font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.doc-meta { font-size: 10.5px; color: var(--muted); }
+
+/* 히스토리는 비활성이다 — 예시처럼 테두리는 두되 전체를 흐리게 해 클릭 불가를 알린다 */
+.history { opacity: .55; }
+.history-item {
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: #fff;
+}
+.history-item.is-active { background: var(--lavender); border-color: transparent; }
+.history-title { font-size: 11.5px; font-weight: 700; }
+.history-time { font-size: 10.5px; color: var(--muted); }
+
+/* ============ 대화 ============ */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 16px;
+  min-width: 0;
+}
+.messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; }
+
+.bubble { padding: 11px 14px; border-radius: var(--r); overflow-wrap: anywhere; }
+/* 질문만 오른쪽에 좁게. 나머지는 예시처럼 대화 영역 전체 폭을 쓴다 */
+.bubble.user { align-self: flex-end; max-width: 62%; background: var(--user-bubble); }
+.bubble.assistant { align-self: stretch; background: #fff; border: 1px solid var(--line); }
+.answer-text { white-space: pre-wrap; }
+
+/* 정적 표시 둘. 준비 중이라는 것이 보이도록 흐리고 클릭을 막는다 */
+.is-placeholder { opacity: .5; pointer-events: none; }
+.badge-row {
+  align-self: stretch;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  background: var(--lavender);
+  color: var(--lavender-ink);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 11.5px;
+}
+.badge-link { font-weight: 700; white-space: nowrap; }
+.rewrite-row {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding-left: 2px;
+}
+.dots { display: inline-flex; gap: 3px; }
+.dots i { width: 5px; height: 5px; border-radius: 50%; background: #b9bec6; }
+
+/* ============ 소스 태그 ============
+   실데이터 대응이 여기 몰린다 — 태그가 5개이고 이름이 길다. */
+.sources { margin-top: 11px; }
+
+/* 예시처럼 가로로 나란히. 5개면 두세 줄로 접힌다 */
+.source-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.source-tag {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.source-tag:hover { border-color: var(--accent); color: var(--accent); }
+
+/* **파일명만 자른다.** 쪽 번호는 태그의 요점이라 잘리면 안 된다.
+   원본 이름은 button[title] 에 있다 (_answer.html) */
+.tag-name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-page { white-space: nowrap; color: var(--muted); }
+.source-tag:hover .tag-page { color: inherit; }
+
+/* 발췌는 태그 줄 뒤에서 전체 폭을 쓴다 */
+.excerpt {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  font-size: 11.5px;
+}
+.excerpt-head { margin: 0 0 6px; font-weight: 700; display: flex; gap: 8px; }
+.score { font-weight: 400; color: var(--muted); }
+.excerpt-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #3d434b; }
+.excerpt-path { margin: 7px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ============ 입력줄 ============ */
+.composer { display: flex; gap: 7px; }
+.composer input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+.composer input::placeholder { color: var(--muted); }
+.composer input:focus { outline: none; border-color: var(--accent); }
+.composer button {
+  width: 40px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.composer button:hover { border-color: var(--accent); color: var(--accent); }
+.composer input:disabled, .composer button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* htmx 가 요청 중에만 보여준다 */
+.pending { display: none; font-size: 11.5px; color: var(--muted); }
+.htmx-request.pending, .htmx-request .pending { display: block; }
+
+.muted { color: var(--muted); }
+.small { font-size: 10.5px; }
+.center { text-align: center; }
