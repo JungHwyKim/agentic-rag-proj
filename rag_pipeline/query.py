@@ -1,0 +1,54 @@
+"""질의 경로의 진입점. 파일이 아니라 **질문**을 받는다.
+
+`ingestion/pipeline.py` 의 `ingest()`·`index_document()` 와 나란한 세 번째 진입점이고,
+저 둘과 마찬가지로 **HTTP 를 전혀 모른다.** 스크립트나 노트북에서도 그대로 쓸 수 있다.
+
+## 왜 `ingestion/` 아래가 아닌가
+
+적재 단계가 아니기 때문이다. 저쪽은 파일 하나를 받아 저장소에 넣는 흐름이고 이쪽은 이미
+들어간 것을 꺼내는 흐름이다. 같은 폴더에 두면 `ingestion` 이라는 이름이 거짓이 된다.
+
+## 왜 `store` 와 `embedder` 를 인자로 받나
+
+`index_document()` 는 `get_store()` 로 자기 클라이언트를 열고 `finally` 에서 닫는다. 한 번
+돌고 끝나는 배치라 그게 맞다. **질의는 다르다** — qdrant 로컬 파일 모드가 저장 디렉터리에
+배타 잠금을 걸어 요청마다 열면 두 번째 질의가 죽는다. 그래서 수명을 부르는 쪽이 정한다:
+backend 는 startup 에 하나 열어 앱 수명 내내 들고 있고, 스크립트는 `with` 로 쓴다.
+
+**여기서 열지 않는 것이 곧 계약이다.** 편의로 기본값을 만들어 두면(없으면 열어준다) 그
+경로를 밟은 두 번째 호출이 잠금 오류로 죽는데, 원인이 이 함수에 안 보인다.
+
+## 여기서 안 하는 것
+
+Evaluator·Rewriter 재검색 루프 · semantic cache · hybrid · reranker. 전부
+`plan_log/검색-생성.md` 의 Phase 4~5 와 마지막 단계이고, 붙는 자리는 `retrieve()` 와
+`generate_answer()` 사이다.
+"""
+
+from __future__ import annotations
+
+from rag_pipeline.config import IngestConfig
+from rag_pipeline.generation import generate_answer
+from rag_pipeline.ingestion.embedding.base import Embedder
+from rag_pipeline.ingestion.indexing.base import VectorStore
+from rag_pipeline.retrieval import retrieve
+from rag_pipeline.schemas.answer import Answer
+
+__all__ = ["answer_question"]
+
+
+# 질문 하나에 근거를 붙여 답한다. 검색 -> 생성을 합성하는 것이 하는 일의 전부다
+def answer_question(
+    query: str,
+    *,
+    store: VectorStore,
+    embedder: Embedder,
+    config: IngestConfig | None = None,
+    top_k: int | None = None,
+) -> Answer:
+    cfg = config or IngestConfig()
+    limit = top_k if top_k is not None else cfg.generation.generation_top_k
+
+    chunks = retrieve(query, store=store, embedder=embedder, top_k=limit)
+    text = generate_answer(query, chunks, cfg.generation)
+    return Answer(query=query, text=text, sources=chunks)

@@ -75,6 +75,11 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/embedding/", "tests/ingestion/embedding"),
     ("rag_pipeline/ingestion/indexing/", "tests/ingestion/indexing"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
+    # 질의 쪽 셋. 적재와 갈라 둔 것은 실제로 다른 테스트가 도는 영역이라서다 —
+    # 검색·생성을 고쳤을 때 로더 테스트 수백 개를 돌릴 이유가 없다
+    ("rag_pipeline/retrieval/", "tests/retrieval"),
+    ("rag_pipeline/generation/", "tests/generation"),
+    ("rag_pipeline/query.py", "tests/test_query.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
     # 평가 하네스. rag_pipeline 이 아니라 **그것을 재는 자**라 최상위에 있다.
