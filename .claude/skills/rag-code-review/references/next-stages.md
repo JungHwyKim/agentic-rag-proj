@@ -5,23 +5,37 @@
 `references/splitter.md`, embedding 은 `references/embedding.md`, indexing 은
 `references/indexing.md` 다.
 
-**2026-08-23 에 dense 한 갈래와 생성이 실제로 생겼다.** 이 파일의 옛 전제(*"retriever 는 아직
-코드가 없다"* · *"질의 엔드포인트가 아직 없다"*)는 더 이상 맞지 않는다. 지금 있는 것은 이렇다.
+**2026-08-23 에 dense·생성에 이어 hybrid(BM25+RRF)까지 생겼다.** 이 파일의 옛 전제
+(*"retriever 는 아직 코드가 없다"* · *"질의 엔드포인트가 아직 없다"*)는 더 이상 맞지 않는다.
+지금 있는 것은 이렇다.
 
-- `rag_pipeline/retrieval/dense.py:retrieve()` — 질의 임베딩 → `store.search()` → `RetrievedChunk`
+- `rag_pipeline/retrieval/hybrid.py:retrieve()` — **공개 진입 함수.** dense 한 갈래로도,
+  BM25 를 얹어서도 돈다
+- `rag_pipeline/retrieval/dense.py:search_dense()` — 질의 임베딩 → `store.search()`.
+  `SearchResult` 를 그대로 낸다(승격은 합류하는 쪽이 한다)
+- `rag_pipeline/retrieval/bm25.py` · `tokenize.py` · `fusion.py` — BM25 인덱스 · 한국어
+  토크나이저 · RRF
 - `rag_pipeline/generation/answer.py:generate_answer()` — 근거 청크로 답변 문장 1회
 - `rag_pipeline/query.py:answer_question()` — 위 둘을 잇는 **세 번째 진입점**
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
-**나머지는 여전히 없다** — hybrid(BM25) · 리랭커 · 질의 재작성 루프 · semantic cache.
+**나머지는 여전히 없다** — 리랭커 · 질의 재작성 루프 · semantic cache.
 그래서 이 파일은 아직 `retriever.md` 로 승격하지 않았다(승격 규칙은 맨 아래). 있는 것에는
 아래 계약을 적용하고, 없는 것은 여전히 지적하지 않는다.
 
-새로 생긴 확실한 계약 셋:
+새로 생긴 확실한 계약 넷:
 
-- **`retrieve()`·`answer_question()` 은 `store` 와 `embedder` 를 인자로 받는다.** 스스로 열면
-  backend 의 startup 싱글턴과 qdrant 배타 잠금이 충돌한다. 편의 기본값(없으면 열어준다)이
-  보이면 지적한다
+- **`retrieve()`·`answer_question()` 은 `store`·`embedder`·`bm25` 를 인자로 받는다.** 스스로
+  열면 backend 의 startup 싱글턴과 qdrant 배타 잠금이 충돌하고, BM25 는 질의마다 저장소를
+  다시 훑게 된다. 편의 기본값(없으면 열어준다/지어준다)이 보이면 지적한다.
+  **`bm25=None` 은 예외다** — 그것이 dense-only 스위치이고, `use_bm25` 설정을 안 만든 이유다
+- **`bm25=None` 일 때의 결과는 dense 와 글자 그대로 같아야 한다.** RRF 를 태우면 안 된다 —
+  경로가 하나면 순위 변환이 점수 간격을 잃기만 하고, 무엇보다 **hybrid 비교의 기준선이 함께
+  움직여** 무엇이 달라졌는지 못 가른다. `test_retrieve_hybrid.py:test_no_bm25_is_exactly_dense`
+  가 지킨다
+- **BM25 후보 판정을 점수 부호(`score > 0`)로 하면 안 된다.** `BM25Okapi` 는 흔한 낱말에
+  IDF 0 을 주므로 **낱말이 겹치는 청크가 통째로 버려진다**(실측: 문서 2개 코퍼스에서 재현).
+  판정은 낱말 겹침이고 점수는 순위용이다
 - **생성 실패는 예외(`GenerationError`)다.** 로더 쪽 *"빈 결과 + warn"* 규약은 폴백 층이
   있어서 성립하는 것이고 생성에는 없다. `_STATUS_BY_EXCEPTION` 에 503 으로 등록돼 있다.
   **검색 0건은 실패가 아니다** — 모델을 안 부르고 `NO_EVIDENCE_ANSWER` 를 돌려주며
@@ -97,6 +111,7 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 retriever 가 실제로 구현되면 이 파일을 `references/retriever.md` 로 승격하고,
 `SKILL.md` 라우팅 표의 해당 줄을 바꾼다. cleaner·splitter·embedding·indexing 이 그렇게 갔다.
 
-**조건이 절반 충족됐다** — dense 와 생성은 있고 hybrid·리랭커·재작성은 없다. 지금 승격하면
-파일 대부분이 여전히 "아직 없는 것"이라 제목이 거짓이 된다. **다시 볼 조건: hybrid 가 붙을 때**
-(`plan_log/검색-생성.md` Phase 2). 그때 검색과 생성을 두 파일로 가를지도 함께 정한다.
+**다시 볼 조건이 2026-08-23 에 충족됐다** — hybrid 가 붙었다. 그런데도 **승격하지 않았다.**
+리랭커·재작성 루프가 없어 파일의 상당 부분이 여전히 "아직 없는 것"이고, 제목만 바꾸면 그
+부분이 거짓이 된다. 조건을 다시 좁힌다 — **다시 볼 조건: 리랭커(Phase 3)가 붙을 때.**
+그때 검색과 생성을 두 파일로 가를지도 함께 정한다.

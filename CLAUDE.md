@@ -33,7 +33,7 @@ uv pip install -r requirements.txt
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
-- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store` 와 `embedder` 를 인자로 받는 유일한 진입점**이고, 그 이유는 아래 qdrant 잠금 함정에 있다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. `bm25` 는 안 넘기면 dense 한 갈래로 도는 것이 곧 스위치라 설정이 없다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 
