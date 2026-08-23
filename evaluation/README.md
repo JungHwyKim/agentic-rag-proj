@@ -56,7 +56,11 @@
 .\.venv\Scripts\python.exe -m evaluation.run_eval --check --refresh
 
 # dense baseline. **OpenAI 과금이 일어난다** (PDF 4개 문서 + 질의 60개 ≈ $0.003)
-.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --label baseline-pdf --k 10
+# --save-baseline 을 붙였을 때만 baseline.json 을 굳힌다
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --save-baseline
+
+# 기준선이 있는 상태에서 그냥 돌리면 **질의별 승·패·무**가 나오고 기준선은 안 건드린다
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --label 실험이름
 
 # 포맷 비교는 두 판을 다 가진 그룹으로 제한해야 한다 (AI 가이드에는 HWPX 가 없다)
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format hwpx --label base-hwpx `
@@ -67,11 +71,70 @@
 **조용히 넘어가지 않고 멈춘다** — 넘어가면 그 그룹 질의가 문서 없이 채점되어 점수가 가짜로
 낮아진다.
 
+### 적재 설정은 `.env` 가 아니라 코드에 고정돼 있다
+
+`evaluation/config.py` 의 `EVAL_SETTINGS` 다. baseline 이 *"이후 모든 비교의 기준선"* 이려면
+**같은 명령이 머신마다 같은 수치를 내야** 하는데, `IngestConfig()` 를 그냥 만들면 개발자
+`.env` 를 그대로 탄다. 고정하지 않는 것은 둘뿐이다 — **API 키**와 **`tesseract_cmd`**
+(머신마다 달라야 하는 것들이다).
+
+설정 클래스들이 `extra="ignore"` 라 `EVAL_SETTINGS` 에 오타가 나면 **아무 에러 없이 그 항목만
+조용히 안 먹는다.** `tests/evaluation/test_eval_config.py` 가 필드 이름을 대조해 막는다.
+같은 테스트가 **`corpus.py` 와 `run_eval.py` 가 같은 설정을 쓰는 것**도 강제한다 — 한쪽만
+`IngestConfig()` 를 쓰면 *"정답 span 이 청크 하나 안에 있다"* 는 검증이 실제로 색인된 청크와
+갈린다.
+
+### `--k` 와 `--report-k`
+
+검색은 로컬 qdrant 라 **k 를 키워도 비용이 0** 이다(과금은 질의 임베딩에서만 난다). 그래서
+후보를 `--k`(기본 20)까지 한 번에 받아 `1·3·5·10·20` 으로 각각 채점하고 `summary` 는
+`--report-k`(기본 10)로 낸다. 공짜로 얻는 것이 둘이다 — 비교 4번(*"`recall@top_k`(상한) vs
+`nDCG@5`(실효)"*)과 `plan_log/indexing.md` 의 `top_k` 기본값 근거.
+
+`per_query` 는 **`--k` 채점**을 남긴다. 주지표 k 로 남기면 `rank` 가 그보다 뒤인 질의가 전부
+`None` 이 되어 *"후보를 늘리면 잡히나"* 를 못 읽는다.
+
+### 결과가 가는 곳 둘
+
+- `.cache/evaluation/runs/` — 매 실행. 실험 기록이라 gitignore 다
+- `evaluation/baseline.json` — **`--save-baseline` 을 명시했을 때만.** 기준선은 저장소에
+  살아야 다른 머신·다른 세션이 견줄 대상을 본다(`regression/baseline.json` 선례).
+  **수치가 달라졌다고 자동으로 덮어쓰지 않는다** — 의도한 개선과 회귀를 가르는 것은 사람 몫이다
+
+`usage` 는 baseline 파일에 **안 담는다.** 캐시 적중에 따라 흔들려 diff 노이즈가 된다
+(실측: 문서 임베딩이 전부 캐시에 있으면 같은 실행이 1,399토큰, 없으면 십만 단위다).
+
+### 적재 카운터를 함께 읽는다
+
+`image_handler="hybrid"` 는 Vision 을 부르고 **Vision 응답은 실행마다 다르다**
+(`plan_log/표-경로.md` 12회차). `.cache/content` 가 첫 응답을 얼려 주지만 **캐시를 지우면
+baseline 이 조용히 흔들린다.** 막을 방법이 없어 보이게 했다 — 리포트의 `indexed` 가 문서별
+`vision_calls`·`ocr_applied`·`warnings` 를 담는다. 검색 수치가 움직였을 때 **검색이 변한
+것인지 적재가 변한 것인지**를 이걸로 가른다.
+
 ## 지금까지의 수치
 
-`hit@10` **0.483** / `MRR` 0.253 (PDF 4개 문서 414청크, 한 컬렉션, 2026-08-22).
-전문과 그룹별 분해는 [verify_log/2026-08-22-검색평가-세트.md](../verify_log/2026-08-22-검색평가-세트.md).
-실행 결과 JSON 은 `.cache/evaluation/runs/` 에 남는다(gitignore).
+기준선은 [`baseline.json`](baseline.json) 이다 (PDF 4개 문서 414청크, 한 컬렉션, 2026-08-23).
+
+| k | 1 | 3 | 5 | 10 | 20 |
+|---|---|---|---|---|---|
+| `hit@k` | 0.150 | 0.300 | 0.400 | **0.483** | 0.617 |
+| miss | 51 | 42 | 36 | 31 | 23 |
+
+`MRR` 0.253 · `nDCG@10` 0.314. 그룹별 `hit@10` — 중등 0.667 / 시행령 0.467 /
+학교기록물 0.467 / **AI 가이드 0.333**.
+
+**읽을 것 둘.** (1) 후보를 10에서 20으로 늘리면 8건이 더 잡힌다 — `top_k` 를 정할 때 쓸
+근거다(`plan_log/indexing.md` 미결). (2) **k=20 에서도 23건(38%)이 안 잡힌다.** 후보 수로
+해결되는 문제가 아니라는 뜻이고, 그 23건을 직접 읽는 것이 다음 일이다.
+
+**이 실행에서 `vision_calls` 가 네 문서 모두 0 이었다.** `image_handler="hybrid"` 인데도
+이미지가 전부 OCR 로 갔다는 뜻이라, **적어도 이 PDF 넷에서는 Vision 비결정성이 기준선을
+흔들지 않는다.** 다른 코퍼스·다른 포맷에서는 다시 봐야 한다.
+
+전문과 질의별 결과는 `baseline.json` 과
+[verify_log/2026-08-23-평가러너-고정설정.md](../verify_log/2026-08-23-평가러너-고정설정.md).
+매 실행 JSON 은 `.cache/evaluation/runs/` 에 남는다(gitignore).
 
 `--check` 가 보는 것은 셋이다.
 

@@ -27,7 +27,7 @@ from rag_pipeline.ingestion.indexing import document_id_for, get_store, to_recor
 from rag_pipeline.ingestion.loader.detect import detect_format
 from rag_pipeline.ingestion.loader.registry import get_loader
 from rag_pipeline.ingestion.splitter import split
-from rag_pipeline.schemas.document import FileFormat, ParsedDocument
+from rag_pipeline.schemas.document import DocumentMetadata, FileFormat, ParsedDocument
 
 
 # 색인 한 번의 결과. 무엇을 몇 개 어디에 넣었고 얼마를 썼는지
@@ -38,6 +38,12 @@ class IndexResult:
     chunk_count: int
     indexed_count: int
     usage: EmbeddingUsage
+    # 그 색인이 **어떤 적재 위에서 나왔나.** `vision_calls`·`ocr_applied`·`warnings` 가
+    # 여기 있다. 없으면 검색 수치가 달라졌을 때 *검색이 변한 것인지 적재가 변한 것인지*
+    # 가릴 방법이 없다 — Vision 은 LLM 이라 응답이 실행마다 다르다(plan_log/표-경로.md 12회차).
+    # 호출부가 `ingest()` 를 한 번 더 불러 얻는 안은 기각했다: 그 두 번째 파싱이 실제로
+    # 색인된 것과 다를 수 있어, 다른 파싱의 카운터는 애초에 쓸모가 없다
+    metadata: DocumentMetadata
 
 
 # 파일 하나를 읽어 ParsedDocument로 만든다. 포맷 판별 -> 로더 라우팅 -> 파싱 -> 정리
@@ -103,6 +109,7 @@ def index_document(
         chunk_count=len(chunks),
         indexed_count=indexed,
         usage=embedder.usage,
+        metadata=document.metadata,
     )
 
 

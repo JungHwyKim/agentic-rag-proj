@@ -28,6 +28,10 @@ PDF 경로가 한국어 낱말 사이 공백을 자주 잃는다(실측: `템에
 
 파싱이 느리다(문서 9개에 수 분). `.cache/evaluation/` 에 넣는다 — `.gitignore` 에 `.cache/`
 가 이미 있다. 로더를 고치면 캐시가 낡으므로 `--refresh` 로 지운다.
+
+**캐시 키가 파일명뿐이라 설정이 바뀌어도 옛 캐시를 그대로 쓴다.** 즉 지금 디스크에 있는
+캐시가 어느 설정으로 만들어졌는지 이 파일은 모른다. `--dense` 는 이 캐시를 안 타므로
+baseline 은 안전하고, 영향받는 것은 span 검증뿐이다 — 미결로 `plan_log/평가-세트.md` 에 있다.
 """
 
 from __future__ import annotations
@@ -116,11 +120,14 @@ def _load_one(path: Path, *, refresh: bool = False) -> FormatCorpus:
         raw = json.loads(cached.read_text(encoding="utf-8"))
     else:
         # 지연 import — 코퍼스를 안 쓰는 경로(형식 검사만)가 파이프라인을 안 끌어오게 한다
-        from rag_pipeline.config import IngestConfig
+        from evaluation.config import eval_config
         from rag_pipeline.ingestion.pipeline import ingest
         from rag_pipeline.ingestion.splitter import split
 
-        config = IngestConfig()
+        # **`IngestConfig()` 를 쓰면 안 된다.** 그러면 이 파싱이 개발자 `.env` 를 타는데,
+        # `--dense` 의 색인은 고정 설정으로 돌아 둘이 갈린다 — *"정답 span 이 청크 하나
+        # 안에 있다"* 는 검증이 실제로 색인된 청크와 다른 것을 보게 된다
+        config = eval_config()
         document = ingest(path, original_name=path.name, config=config)
         chunks = split(document, config.splitter, document_key=path.name)
         raw = {

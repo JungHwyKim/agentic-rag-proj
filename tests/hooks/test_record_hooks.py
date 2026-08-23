@@ -167,6 +167,10 @@ def test_stop_does_not_block_when_record_written_outside_write_tool(tmp_path: Pa
         "tests/hooks/conftest.py",
         "tests/hooks/_escape_hatches.py",
         ".claude/settings.json",
+        # 평가 하네스도 **틀려도 조용한** 부류다 — 채점기가 어긋나면 그럴듯한 숫자가 계속
+        # 나온다. auto_test_check 는 이미 소스로 취급하고 있었다
+        "evaluation/scoring.py",
+        "evaluation/config.py",
     ],
 )
 def test_recordable_paths(path: str) -> None:
@@ -187,6 +191,12 @@ def test_recordable_paths(path: str) -> None:
         # .py 가 아닌 것은 settings.json 말고 없다
         "rag_pipeline/README.md",
         ".claude/hooks/notes.txt",
+        # 세트 자체와 러너 문서는 .py 가 아니라 안 걸린다. 질의 한 줄 고칠 때마다 회고를
+        # 요구하면 SKIP_TASKLOG=1 이 습관이 된다
+        "evaluation/qa_set.jsonl",
+        "evaluation/README.md",
+        # 평가 테스트만 홀로 고치는 세션은 드물어 안 넣었다(task_log_check.py 주석)
+        "tests/evaluation/test_eval_config.py",
     ],
 )
 def test_non_recordable_paths(path: str) -> None:

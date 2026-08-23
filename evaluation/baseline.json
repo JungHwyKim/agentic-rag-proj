@@ -1,0 +1,742 @@
+{
+ "_meta": {
+  "무엇인가": "dense 검색의 기준값. 이후 모든 검색 비교가 이 값과의 차이로 판정된다.",
+  "재는 방법": "python -m evaluation.run_eval --dense --format pdf --k 20 --report-k 10 --save-baseline",
+  "설정": "settings 블록이 그 실행의 고정 설정이다 (evaluation/config.py).",
+  "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. --save-baseline 없이 돌리면 질의별 승·패·무가 나오므로 그것을 읽고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다.",
+  "주의": "입력 파일은 tests/fixtures/ 에 있고 gitignore 다 — 파일이 없는 환경에서는 재현할 수 없다. 그리고 image_handler=hybrid 라 .cache/content 를 지우면 Vision 응답이 달라져 이 값이 조용히 흔들린다. indexed 의 vision_calls 를 함께 보는 이유다.",
+  "갱신 이력": []
+ },
+ "label": "dense-baseline",
+ "format": "pdf",
+ "groups": [
+  "시행령-개정안-안내서",
+  "신뢰가능-AI-가이드",
+  "중등-기초학력-보장계획",
+  "학교기록물-관리지침"
+ ],
+ "k": 20,
+ "report_k": 10,
+ "per_query_k": 20,
+ "settings": {
+  "ingest": {
+   "detect_headings": true,
+   "max_excel_rows": 5000
+  },
+  "content": {
+   "table_pdf_handler": "pymupdf",
+   "image_handler": "hybrid",
+   "vision_model": "gpt-4.1-mini",
+   "max_vision_calls_per_doc": 30,
+   "min_image_width": 100,
+   "min_image_height": 100,
+   "min_image_display_pt": 20.0,
+   "max_image_aspect_ratio": 8.0,
+   "ocr_lang": "kor+eng",
+   "ocr_psm": 6,
+   "ocr_preserve_spaces": true,
+   "ocr_min_chars": 10,
+   "ocr_min_confidence": 60.0,
+   "pdf_scan_text_threshold": 10,
+   "pdf_render_dpi": 300,
+   "cache_enabled": true
+  },
+  "cleaner": {
+   "remove_control_chars": true,
+   "normalize_whitespace": true,
+   "remove_repeated_headers": true,
+   "header_min_pages": 3,
+   "header_min_span_ratio": 0.6
+  },
+  "splitter": {
+   "max_chunk_chars": 1200,
+   "chunk_overlap_chars": 150,
+   "include_heading_in_text": true
+  },
+  "embedding": {
+   "embedding_model": "text-embedding-3-small",
+   "embedding_dimensions": null,
+   "embedding_batch_size": 100,
+   "max_embedding_tokens_per_doc": 200000,
+   "embedding_cache_enabled": true
+  }
+ },
+ "indexed": [
+  {
+   "group": "시행령-개정안-안내서",
+   "file": "시행령 개정안 안내서(정보시스템의무사항알림).pdf",
+   "chunks": 118,
+   "indexed": 118,
+   "vision_calls": 0,
+   "llamaparse_calls": 0,
+   "ocr_applied": true,
+   "warnings": []
+  },
+  {
+   "group": "신뢰가능-AI-가이드",
+   "file": "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf",
+   "chunks": 71,
+   "indexed": 71,
+   "vision_calls": 0,
+   "llamaparse_calls": 0,
+   "ocr_applied": true,
+   "warnings": []
+  },
+  {
+   "group": "중등-기초학력-보장계획",
+   "file": "2026+중등+기초학력+보장+주친+계획.pdf",
+   "chunks": 103,
+   "indexed": 103,
+   "vision_calls": 0,
+   "llamaparse_calls": 0,
+   "ocr_applied": true,
+   "warnings": []
+  },
+  {
+   "group": "학교기록물-관리지침",
+   "file": "「2025년 학교기록물 관리 지침」 (1).pdf",
+   "chunks": 122,
+   "indexed": 122,
+   "vision_calls": 0,
+   "llamaparse_calls": 0,
+   "ocr_applied": true,
+   "warnings": []
+  }
+ ],
+ "summary": {
+  "queries": 60,
+  "misses": 31,
+  "hit@10": 0.48333333333333334,
+  "recall@10": 0.48333333333333334,
+  "MRR": 0.2530026455026455,
+  "nDCG@10": 0.31448196423191843,
+  "precision@10": 0.05
+ },
+ "by_k": {
+  "1": {
+   "queries": 60,
+   "misses": 51,
+   "hit@1": 0.15,
+   "recall@1": 0.15,
+   "MRR": 0.15,
+   "nDCG@1": 0.15,
+   "precision@1": 0.15
+  },
+  "3": {
+   "queries": 60,
+   "misses": 42,
+   "hit@3": 0.3,
+   "recall@3": 0.3,
+   "MRR": 0.21944444444444444,
+   "nDCG@3": 0.24027513791667005,
+   "precision@3": 0.1
+  },
+  "5": {
+   "queries": 60,
+   "misses": 36,
+   "hit@5": 0.4,
+   "recall@5": 0.4,
+   "MRR": 0.24194444444444446,
+   "nDCG@5": 0.28759915296930916,
+   "precision@5": 0.08333333333333333
+  },
+  "10": {
+   "queries": 60,
+   "misses": 31,
+   "hit@10": 0.48333333333333334,
+   "recall@10": 0.48333333333333334,
+   "MRR": 0.2530026455026455,
+   "nDCG@10": 0.31448196423191843,
+   "precision@10": 0.05
+  },
+  "20": {
+   "queries": 60,
+   "misses": 23,
+   "hit@20": 0.6166666666666667,
+   "recall@20": 0.6166666666666667,
+   "MRR": 0.26196298899472276,
+   "nDCG@20": 0.34781517502820075,
+   "precision@20": 0.03166666666666667
+  }
+ },
+ "by_group": {
+  "시행령-개정안-안내서": {
+   "queries": 15,
+   "misses": 8,
+   "hit@10": 0.4666666666666667,
+   "recall@10": 0.4666666666666667,
+   "MRR": 0.24126984126984127,
+   "nDCG@10": 0.3210252654029416,
+   "precision@10": 0.05333333333333334
+  },
+  "신뢰가능-AI-가이드": {
+   "queries": 15,
+   "misses": 10,
+   "hit@10": 0.3333333333333333,
+   "recall@10": 0.3333333333333333,
+   "MRR": 0.1462962962962963,
+   "nDCG@10": 0.19084242048725547,
+   "precision@10": 0.03333333333333333
+  },
+  "중등-기초학력-보장계획": {
+   "queries": 15,
+   "misses": 5,
+   "hit@10": 0.6666666666666666,
+   "recall@10": 0.6666666666666666,
+   "MRR": 0.36333333333333334,
+   "nDCG@10": 0.4340819706444242,
+   "precision@10": 0.06666666666666667
+  },
+  "학교기록물-관리지침": {
+   "queries": 15,
+   "misses": 8,
+   "hit@10": 0.4666666666666667,
+   "recall@10": 0.4666666666666667,
+   "MRR": 0.2611111111111111,
+   "nDCG@10": 0.3119782003930525,
+   "precision@10": 0.04666666666666667
+  }
+ },
+ "per_query": [
+  {
+   "query_id": "sih-01",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.08333333333333333,
+   "precision": 0.05,
+   "ndcg": 0.27023815442731974,
+   "rank": 12
+  },
+  {
+   "query_id": "sih-02",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "sih-03",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "sih-04",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-05",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.1,
+   "ndcg": 1.0177825608059992,
+   "rank": 2
+  },
+  {
+   "query_id": "sih-06",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-07",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-08",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-09",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.14285714285714285,
+   "precision": 0.05,
+   "ndcg": 0.3333333333333333,
+   "rank": 7
+  },
+  {
+   "query_id": "sih-10",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.3333333333333333,
+   "precision": 0.05,
+   "ndcg": 0.5,
+   "rank": 3
+  },
+  {
+   "query_id": "sih-11",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "sih-12",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-13",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.14285714285714285,
+   "precision": 0.05,
+   "ndcg": 0.3333333333333333,
+   "rank": 7
+  },
+  {
+   "query_id": "sih-14",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sih-15",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-01",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-02",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-03",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.05,
+   "precision": 0.05,
+   "ndcg": 0.227670248696953,
+   "rank": 20
+  },
+  {
+   "query_id": "ai-04",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.1111111111111111,
+   "precision": 0.05,
+   "ndcg": 0.3010299956639812,
+   "rank": 9
+  },
+  {
+   "query_id": "ai-05",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.058823529411764705,
+   "precision": 0.05,
+   "ndcg": 0.23981246656813146,
+   "rank": 17
+  },
+  {
+   "query_id": "ai-06",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.25,
+   "precision": 0.05,
+   "ndcg": 0.43067655807339306,
+   "rank": 4
+  },
+  {
+   "query_id": "ai-07",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-08",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-09",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "ai-10",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.05263157894736842,
+   "precision": 0.05,
+   "ndcg": 0.23137821315975915,
+   "rank": 19
+  },
+  {
+   "query_id": "ai-11",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.3333333333333333,
+   "precision": 0.05,
+   "ndcg": 0.5,
+   "rank": 3
+  },
+  {
+   "query_id": "ai-12",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.09090909090909091,
+   "precision": 0.05,
+   "ndcg": 0.27894294565112987,
+   "rank": 11
+  },
+  {
+   "query_id": "ai-13",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "ai-14",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.0625,
+   "precision": 0.05,
+   "ndcg": 0.24465054211822604,
+   "rank": 16
+  },
+  {
+   "query_id": "ai-15",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "sch-01",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "sch-02",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-03",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-04",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-05",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-06",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.16666666666666666,
+   "precision": 0.05,
+   "ndcg": 0.3562071871080222,
+   "rank": 6
+  },
+  {
+   "query_id": "sch-07",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "sch-08",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.25,
+   "precision": 0.05,
+   "ndcg": 0.43067655807339306,
+   "rank": 4
+  },
+  {
+   "query_id": "sch-09",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "sch-10",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "sch-11",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "sch-12",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-13",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-14",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "sch-15",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.0625,
+   "precision": 0.05,
+   "ndcg": 0.24465054211822604,
+   "rank": 16
+  },
+  {
+   "query_id": "bas-01",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.2,
+   "precision": 0.05,
+   "ndcg": 0.38685280723454163,
+   "rank": 5
+  },
+  {
+   "query_id": "bas-02",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "bas-03",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.25,
+   "precision": 0.05,
+   "ndcg": 0.43067655807339306,
+   "rank": 4
+  },
+  {
+   "query_id": "bas-04",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "bas-05",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "bas-06",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "bas-07",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.5,
+   "precision": 0.05,
+   "ndcg": 0.6309297535714575,
+   "rank": 2
+  },
+  {
+   "query_id": "bas-08",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.07692307692307693,
+   "precision": 0.05,
+   "ndcg": 0.26264953503719357,
+   "rank": 13
+  },
+  {
+   "query_id": "bas-09",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.2,
+   "precision": 0.05,
+   "ndcg": 0.38685280723454163,
+   "rank": 5
+  },
+  {
+   "query_id": "bas-10",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.1,
+   "precision": 0.05,
+   "ndcg": 0.2890648263178879,
+   "rank": 10
+  },
+  {
+   "query_id": "bas-11",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 0.2,
+   "precision": 0.05,
+   "ndcg": 0.38685280723454163,
+   "rank": 5
+  },
+  {
+   "query_id": "bas-12",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  },
+  {
+   "query_id": "bas-13",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "bas-14",
+   "hit": true,
+   "recall": 1.0,
+   "reciprocal_rank": 1.0,
+   "precision": 0.05,
+   "ndcg": 1.0,
+   "rank": 1
+  },
+  {
+   "query_id": "bas-15",
+   "hit": false,
+   "recall": 0.0,
+   "reciprocal_rank": 0.0,
+   "precision": 0.0,
+   "ndcg": 0.0,
+   "rank": null
+  }
+ ]
+}
