@@ -12,6 +12,17 @@ qdrant 가 받는 형식**이라는 조건을 동시에 만족하는 것이 이�
 사람이 읽는 `chunk_id` 는 payload 로 함께 저장한다. UUID 만 남기면 검색 결과에서 원본
 청크를 눈으로 되짚을 수 없다.
 
+## 왜 `StoredChunk` 와 `SearchResult` 가 갈려 있나
+
+**`score` 때문이다.** 저장소를 전량 훑는 열거(`VectorStore.iter_chunks()`)에는 점수가 없는데,
+`SearchResult` 를 그대로 쓰면 빈자리에 `0.0` 을 채우게 된다. 그것은 이 저장소가 두 번 겪은
+손실과 같은 모양이다 — `RetrievedChunk` 의 경로별 점수를 `float | None` 로 둔 이유이고
+(`schemas/retrieval.py`), PyMuPDF 의 `extract()` 만 보면 병합 셀과 빈 칸이 안 갈리던 이유다.
+**"점수가 0"과 "점수라는 것이 없음"은 다르다.**
+
+그래서 점수 없는 쪽을 상위에 두고 `SearchResult` 가 `score` 를 얹는다. 반대로 짜면
+(`SearchResult` 를 두고 열거용을 따로) 필드 다섯이 두 벌이 되어 한쪽만 늘어난다.
+
 ## `metadata` 에 무엇이 들어가나
 
 `Chunk` 의 **최상위 필드**(`page`·`heading_path`·`source_name`·`element_orders` 등)와
@@ -26,7 +37,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["SearchResult", "VectorRecord", "point_id_for"]
+__all__ = ["SearchResult", "StoredChunk", "VectorRecord", "point_id_for"]
 
 # chunk_id -> point UUID 파생에 쓰는 고정 네임스페이스. **바꾸면 기존 색인 전체가 새 point 가
 # 되어 재색인이 갱신이 아니라 중복이 된다.** 값 자체에 의미는 없고 고정이라는 점만 중요하다
@@ -51,11 +62,16 @@ class VectorRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-# 검색 결과 한 건. score 를 반드시 싣는다 — 이후 threshold·rerank 가 붙을 자리다
-class SearchResult(BaseModel):
+# 저장소에 들어 있는 청크 하나. **점수가 없다** — 검색이 아니라 열거의 결과다
+class StoredChunk(BaseModel):
+    # uuid5(chunk_id). 저장소가 주는 신원이라 어느 경로로 얻어도 같은 값이다
     id: str
-    score: float
     text: str
     document_id: str
     chunk_id: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# 검색 결과 한 건. 열거 결과에 score 를 얹은 것이다 — threshold·rerank 가 붙을 자리다
+class SearchResult(StoredChunk):
+    score: float

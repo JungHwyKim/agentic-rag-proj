@@ -16,42 +16,33 @@ qdrant 로컬 파일 모드가 저장 디렉터리에 배타 잠금을 걸어, �
 따로 채점한다 — 검색은 한 번이고 채점만 여러 번이다. 여기 기본값 5 가 무심코 실리면
 `@10`·`@20` 만 후보 부족으로 조용히 낮아지고, 원인이 **검색 품질처럼 보인다.**
 
-## 왜 `RetrievedChunk` 로 승격하나
+## 왜 `SearchResult` 를 그대로 내나
 
-경로가 dense 하나뿐인 지금은 `SearchResult` 로도 충분하다(`schemas/retrieval.py` docstring).
-그런데도 여기서 승격하는 것은 이 값이 `Answer.sources` 로 **그대로 나가는 공개 계약**이라,
-BM25 가 붙는 날 타입이 바뀌면 라우트와 템플릿까지 함께 고쳐야 하기 때문이다.
-`dense_score` 에 저장소 점수를 그대로 실어 두면 **임계값 논의를 나중에 실측으로** 할 수 있다.
+**승격은 합류하는 쪽이 한다.** BM25 가 붙으면서 "여러 경로의 결과를 합친 한 건"을 만드는
+자리가 `hybrid.py` 로 갈렸고, 여기서 미리 `RetrievedChunk` 로 바꾸면 합류부가 점수를 다시
+꺼내 쓰게 된다. 이 함수의 책임은 *"저장소에서 가까운 것을 가져온다"* 하나다.
 """
 
 from __future__ import annotations
 
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
-from rag_pipeline.schemas.retrieval import RetrievedChunk
+from rag_pipeline.schemas.vector import SearchResult
 
-__all__ = ["retrieve"]
+__all__ = ["search_dense"]
 
 
-# 질의와 가까운 청크를 top_k 개 가져온다. 공개 진입 함수이고 HTTP 를 모른다
-def retrieve(
+# 질의와 가까운 청크를 top_k 개 가져온다. 저장소가 매긴 점수를 그대로 달고 나온다
+def search_dense(
     query: str,
     *,
     store: VectorStore,
     embedder: Embedder,
     top_k: int = 5,
-) -> list[RetrievedChunk]:
+) -> list[SearchResult]:
     text = query.strip()
     if not text:
         return []
 
     vector = embedder.embed_query(text)
-    results = store.search(vector, top_k=top_k)
-    # fused_score 는 경로가 하나뿐이어도 채운다 — 정렬 기준이 늘 같은 자리에 있어야 한다
-    # (schemas/retrieval.py 의 ranking_score)
-    chunks = []
-    for result in results:
-        chunk = RetrievedChunk.from_search_result(result, dense_score=result.score)
-        chunk.fused_score = result.score
-        chunks.append(chunk)
-    return chunks
+    return store.search(vector, top_k=top_k)

@@ -39,13 +39,14 @@ from __future__ import annotations
 
 import contextlib
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from qdrant_client import QdrantClient, models
 
 from rag_pipeline.config import EmbeddingConfig, IndexingConfig
 from rag_pipeline.exceptions import IndexingError
-from rag_pipeline.schemas.vector import SearchResult, VectorRecord
+from rag_pipeline.schemas.vector import SearchResult, StoredChunk, VectorRecord
 
 __all__ = ["QdrantStore", "collection_name_for"]
 
@@ -89,16 +90,25 @@ def _to_point(record: VectorRecord) -> models.PointStruct:
     )
 
 
-# 검색 결과 한 건을 SearchResult 로 바꾼다. payload 가 비어도 죽지 않게 기본값을 준다
-def _to_result(point: Any) -> SearchResult:
+# point 하나를 StoredChunk 로 바꾼다. payload 가 비어도 죽지 않게 기본값을 준다
+def _to_stored(point: Any) -> StoredChunk:
     payload = getattr(point, "payload", None) or {}
-    return SearchResult(
+    return StoredChunk(
         id=str(point.id),
-        score=float(getattr(point, "score", 0.0) or 0.0),
         text=str(payload.get("text") or ""),
         document_id=str(payload.get(_DOCUMENT_ID_KEY) or ""),
         chunk_id=str(payload.get("chunk_id") or ""),
         metadata=payload.get("metadata") or {},
+    )
+
+
+# 검색 결과 한 건을 SearchResult 로 바꾼다. 열거와 같은 payload 해석을 쓰고 score 만 얹는다 —
+# 두 벌로 두면 한쪽에만 필드가 늘어난다
+def _to_result(point: Any) -> SearchResult:
+    stored = _to_stored(point)
+    return SearchResult(
+        **stored.model_dump(),
+        score=float(getattr(point, "score", 0.0) or 0.0),
     )
 
 
@@ -329,6 +339,47 @@ class QdrantStore:
             ) from exc
 
         return list(found.values())
+
+    # 저장된 청크를 전부 훑는다. BM25 인덱스를 짓는 쪽이 소비자다.
+    #
+    # **컬렉션이 없으면 search() 와 달리 빈 이터레이터다.** 저쪽은 "색인한 적 없음"과 "질의가
+    # 안 맞음"이 사용자가 할 일이 달라 갈랐지만, 열거에서 첫 실행이 비는 것은 정상이다 —
+    # backend 가 첫 질의에 이걸 부르는데 여기서 던지면 색인 전 서버가 질의마다 죽는다.
+    # list_documents() 가 같은 판단을 이미 했다.
+    #
+    # 벡터는 안 받는다. 청크 수백 개 × 1536차원을 BM25 하나 짓자고 실어 오면 첫 질의가
+    # 색인만큼 무거워진다 (list_documents() 와 같은 이유)
+    def iter_chunks(self) -> Iterator[StoredChunk]:
+        client = self._qdrant
+        try:
+            if not client.collection_exists(self._collection):
+                return
+        except Exception as exc:  # noqa: BLE001 - 원인을 IndexingError로 바꿔 올린다
+            raise IndexingError(
+                f"컬렉션을 확인하지 못했습니다: {type(exc).__name__}: {exc}",
+                user_message="벡터 저장소를 확인할 수 없습니다.",
+            ) from exc
+
+        offset: Any = None
+        while True:
+            try:
+                points, offset = client.scroll(
+                    collection_name=self._collection,
+                    limit=_SCROLL_BATCH,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - 원인을 IndexingError로 바꿔 올린다
+                raise IndexingError(
+                    f"저장된 청크를 읽지 못했습니다: {type(exc).__name__}: {exc}",
+                    user_message="색인된 청크를 읽을 수 없습니다.",
+                ) from exc
+
+            for point in points:
+                yield _to_stored(point)
+            if offset is None:
+                return
 
     # 컬렉션에 든 point 수. 컬렉션이 없으면 0
     def count(self) -> int:

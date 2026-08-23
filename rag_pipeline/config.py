@@ -197,6 +197,31 @@ class IndexingConfig(BaseSettings):
     upsert_batch_size: int = 128
 
 
+# 여러 검색 경로의 후보를 어디까지 모으고 어떻게 합칠지 정하는 설정. 과금 항목이 없다
+class RetrievalConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 각 경로(dense·BM25)에서 뽑아 RRF 로 합칠 후보 수. **임시값이고 실측 전이다** —
+    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(plan_log/검색-생성.md 2회차).
+    # 50 은 새로 지어낸 수가 아니라 schemas/retrieval.py docstring 이 이미 쓴 수이고,
+    # 문서당 청크가 45~104개이므로 대략 한 문서치다.
+    # **두 경로에 같은 값을 쓴다** — 한쪽만 길면 RRF 가 긴 쪽에 유리해져, 기울기가 숫자가
+    # 아니라 구조에서 나오고 원인을 못 짚는다
+    candidate_k: int = 50
+
+    # RRF 의 순위 완충 상수. score = Σ 1/(rrf_k + rank) 의 그 값이다.
+    # **우리가 고른 수가 아니라 RRF 원 논문 값이라** 분포의 틈을 찾을 필요가 없었다.
+    # 크면 상위권 순위차를 뭉개고 작으면 1등을 과대평가한다
+    rrf_k: int = 60
+
+    # top_k 는 여기 없다. 지금 retrieve() 인자이자 GenerationConfig.generation_top_k 에서
+    # 오는데, 셋째 출처를 만들면 어느 것이 이겼는지 호출부마다 달라진다
+
+
 # 검색된 청크로 답변을 만들 때 쓰는 설정. 질의당 LLM 1회가 비용의 전부다
 class GenerationConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -279,6 +304,15 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_indexing"):
             object.__setattr__(self, "_indexing", IndexingConfig())
         return self._indexing  # type: ignore[attr-defined]
+
+    # 검색 단계 설정. 같은 lazy 형태라 테스트·평가에서 _retrieval 로 덮어쓸 수 있다.
+    # **적재 설정 객체에 붙는 것이 어색해 보이지만 generation 이 이미 그렇다** — 검색만 밖에
+    # 두면 이유 없는 비대칭이 되고, offline_config 픽스처도 둘로 갈린다
+    @property
+    def retrieval(self) -> RetrievalConfig:
+        if not hasattr(self, "_retrieval"):
+            object.__setattr__(self, "_retrieval", RetrievalConfig())
+        return self._retrieval  # type: ignore[attr-defined]
 
     # 생성 단계 설정. 같은 lazy 형태라 테스트에서 _generation 으로 덮어쓸 수 있다.
     # **그 덮어쓰기가 offline_config 의 실키 차단이다** — GenerationConfig() 가 .env 를 직접
