@@ -64,7 +64,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 #
 # 딸린 제약: index_document() 는 get_store() 로 **자기 클라이언트를 직접 열어** finally 에서
 # 닫는다. 그래서 업로드 버튼을 진짜로 붙이는 순간 같은 프로세스 안에서 이 싱글턴과 충돌한다.
-# 그때 첫 후보는 도커가 아니라 index_document(store=...) 주입이다 (plan_log/frontend.md 미결)
+# 그때 첫 후보는 도커가 아니라 index_document(store=...) 주입이다 (plan_log/backend.md 미결)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config = IngestConfig()

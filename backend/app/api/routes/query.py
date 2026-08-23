@@ -65,7 +65,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
 async def document_list(request: Request) -> HTMLResponse:
     store = request.app.state.store
     # list_documents() 는 Protocol 이 아니라 QdrantStore 에만 있다 — backend 가 구체 타입을
-    # 아는 유일한 자리이고, 그 판단의 근거는 plan_log/frontend.md 에 있다.
+    # 아는 유일한 자리이고, 그 판단의 근거는 plan_log/backend.md 에 있다.
     # 없는 구현체가 끼면 목록만 빈다(화면은 산다)
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []

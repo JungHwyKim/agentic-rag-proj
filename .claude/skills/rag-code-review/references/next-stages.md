@@ -27,7 +27,7 @@
   **검색 0건은 실패가 아니다** — 모델을 안 부르고 `NO_EVIDENCE_ANSWER` 를 돌려주며
   `Answer.sources` 가 빈 리스트로 나간다
 - **`QdrantStore.list_documents()` 는 `VectorStore` Protocol 에 없다.** 누락이 아니라
-  저장소 중립을 지킨 결정이다(`plan_log/frontend.md`). Protocol 에 올리자는 지적을 하지 않는다
+  저장소 중립을 지킨 결정이다(`plan_log/backend.md`). Protocol 에 올리자는 지적을 하지 않는다
 
 `ingest()` 에 아무 호출도 없다는 이유로 "그 단계가 아직 없다"고 판단하지 않는다.
 splitter·embedding·indexing 은 구현됐지만 **일부러 그 자리에 안 끼웠다** — 전 구간 흐름은

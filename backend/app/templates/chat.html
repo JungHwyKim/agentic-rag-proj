@@ -16,7 +16,7 @@
     <section class="panel">
       <h2 class="panel-title">문서</h2>
       {# 업로드는 이번 회차에서 목업이다. index_document() 가 자기 store 를 직접 열어
-         startup 싱글턴과 충돌하기 때문 — 근거와 해결 후보는 plan_log/frontend.md 미결 #}
+         startup 싱글턴과 충돌하기 때문 — 근거와 해결 후보는 plan_log/backend.md 미결 #}
       <button class="upload-btn" type="button" disabled
               title="이번 단계에서는 스크립트로 색인합니다">파일 업로드</button>
       <div id="documents" hx-get="/api/v1/documents" hx-trigger="load" hx-swap="innerHTML">

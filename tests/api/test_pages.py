@@ -62,7 +62,7 @@ def test_htmx_is_vendored(client: TestClient):
 
 
 # 업로드 버튼은 이번 회차에서 목업이다. 눌리면 index_document() 가 자기 store 를 열어
-# startup 싱글턴과 충돌하므로 **비활성이어야 한다** (plan_log/frontend.md 미결)
+# startup 싱글턴과 충돌하므로 **비활성이어야 한다** (plan_log/backend.md 미결)
 def test_upload_button_is_disabled(client: TestClient):
     body = client.get("/").text
 
