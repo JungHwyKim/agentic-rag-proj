@@ -197,6 +197,36 @@ class IndexingConfig(BaseSettings):
     upsert_batch_size: int = 128
 
 
+# 검색된 청크로 답변을 만들 때 쓰는 설정. 질의당 LLM 1회가 비용의 전부다
+class GenerationConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ContentRoutingConfig·EmbeddingConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정
+    # 객체가 독립이라 각자 읽는 것이다 — 생성만 끄고 임베딩은 살리는 조합이 가능해야 한다
+    openai_api_key: str | None = None
+
+    # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
+    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(plan_log/frontend.md).
+    # Vision 과 같은 모델을 쓰는 것은 우연이 아니라 싼 쪽에서 시작한다는 같은 판단이다
+    generation_model: str = "gpt-4.1-mini"
+
+    # 답변 길이 상한. 한국어는 청크에서 문자 ≈ 토큰이라(CLAUDE.md) 대략 이만큼의 글자다
+    generation_max_tokens: int = 1024
+
+    # 근거에서 벗어나지 않는 것이 목적이라 낮게 둔다. 0 이 아닌 이유는 표·목록을 그대로
+    # 베끼는 대신 질문에 맞게 추리는 여지를 남기기 위해서다
+    generation_temperature: float = 0.2
+
+    # 컨텍스트에 실을 청크 수. **임시값이다** — baseline 이 hit@1 0.150 / @5 0.400 /
+    # @10 0.483 / @20 0.617 이라 늘리면 오르는 것은 알지만, 대가(컨텍스트 토큰·답변 품질)를
+    # 재는 쪽이 없어 값을 못 정한다. plan_log/indexing.md 의 top_k 미결과 한 줄이다
+    generation_top_k: int = 5
+
+
 # 적재 파이프라인 전체 설정
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -249,6 +279,15 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_indexing"):
             object.__setattr__(self, "_indexing", IndexingConfig())
         return self._indexing  # type: ignore[attr-defined]
+
+    # 생성 단계 설정. 같은 lazy 형태라 테스트에서 _generation 으로 덮어쓸 수 있다.
+    # **그 덮어쓰기가 offline_config 의 실키 차단이다** — GenerationConfig() 가 .env 를 직접
+    # 읽으므로, lazy 가 아니면 픽스처가 키를 지운 객체를 꽂을 자리 자체가 없다
+    @property
+    def generation(self) -> GenerationConfig:
+        if not hasattr(self, "_generation"):
+            object.__setattr__(self, "_generation", GenerationConfig())
+        return self._generation  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다
