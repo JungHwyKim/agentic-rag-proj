@@ -45,6 +45,7 @@ from rag_pipeline.config import (
     EmbeddingConfig,
     IndexingConfig,
     IngestConfig,
+    RetrievalConfig,
     SplitterConfig,
 )
 
@@ -89,6 +90,13 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
         "chunk_overlap_chars": 150,
         "include_heading_in_text": True,
     },
+    # 검색 후보 폭과 RRF 상수. **과금 항목이 아닌데도 고정한다** — 이 둘이 바뀌면
+    # 같은 질의가 다른 청크를 물어 hit@k 가 통째로 달라진다. 지금은 dense 만 쓰면
+    # 아무 영향이 없지만(--hybrid 없이는 인덱스를 안 넘긴다) hybrid 실행부터 결과를 가른다
+    "retrieval": {
+        "candidate_k": 50,
+        "rrf_k": 60,
+    },
     "embedding": {
         "embedding_model": "text-embedding-3-small",
         "embedding_dimensions": None,
@@ -110,6 +118,7 @@ def eval_config(*, qdrant_path: Path | None = None) -> IngestConfig:
     object.__setattr__(config, "_cleaner", CleanerConfig(**EVAL_SETTINGS["cleaner"]))
     object.__setattr__(config, "_splitter", SplitterConfig(**EVAL_SETTINGS["splitter"]))
     object.__setattr__(config, "_embedding", EmbeddingConfig(**EVAL_SETTINGS["embedding"]))
+    object.__setattr__(config, "_retrieval", RetrievalConfig(**EVAL_SETTINGS["retrieval"]))
 
     if qdrant_path is not None:
         object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=qdrant_path))

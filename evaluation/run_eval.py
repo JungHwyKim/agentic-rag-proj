@@ -122,12 +122,18 @@ def axes_for(k: int) -> tuple[int, ...]:
 
 # dense 검색 baseline. **과금이 일어난다** — 색인과 질의 임베딩 둘 다 OpenAI 를 부른다
 def run_dense(
-    *, fmt: str, k: int, report_k: int, label: str, groups: list[str] | None = None
+    *,
+    fmt: str,
+    k: int,
+    report_k: int,
+    label: str,
+    groups: list[str] | None = None,
+    use_bm25: bool = False,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
-    from rag_pipeline.retrieval import retrieve
+    from rag_pipeline.retrieval import build_bm25_index, retrieve
 
     qa = load_qa_set()
     if not qa.items:
@@ -167,13 +173,25 @@ def run_dense(
     axes = axes_for(k)
     embedder = get_embedder(config.embedding)
     store = get_store(config.indexing, config.embedding)
+    # **인덱스를 루프 밖에서 한 번 짓는다.** 안에서 지으면 질의마다 저장소를 통째로 다시 훑어
+    # 45건이 45번이 된다. `--hybrid` 가 없으면 None 이고, 그때 결과는 dense 와 글자 그대로
+    # 같아야 한다 (rag_pipeline/retrieval/hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
+    bm25 = build_bm25_index(store) if use_bm25 else None
     # k 축마다 QueryScore 목록. **검색은 한 번이고 채점만 여러 번이다**
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
         for item in items:
             # **top_k=k 를 반드시 넘긴다.** retrieve() 의 기본값 5 가 실리면 by_axis[10]·
             # [20] 만 후보 부족으로 조용히 낮아져 검색 품질이 나빠진 것처럼 보인다
-            texts = [hit.text for hit in retrieve(item.query, store=store, embedder=embedder, top_k=k)]
+            hits = retrieve(
+                item.query,
+                store=store,
+                embedder=embedder,
+                top_k=k,
+                bm25=bm25,
+                config=config.retrieval,
+            )
+            texts = [hit.text for hit in hits]
             for axis in axes:
                 by_axis[axis].append(score_query(item.query_id, texts, item.gold_spans, axis))
     finally:
@@ -195,6 +213,14 @@ def run_dense(
         # **`per_query` 는 `--k` 채점이다** (모듈 docstring 참고)
         "per_query_k": k,
         "settings": EVAL_SETTINGS,
+        # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
+        # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
+        # dense 폴백이라, 안 남기면 "그냥 효과가 없었다"와 구분이 안 되기 때문이다
+        "retriever": {
+            "use_bm25": use_bm25,
+            "bm25_chunks": len(bm25) if bm25 is not None else None,
+            "bm25_warnings": list(bm25.warnings) if bm25 is not None else [],
+        },
         "indexed": indexed,
         "usage": {"tokens": embedder.usage.total_tokens, "calls": embedder.usage.api_calls},
         "summary": summarize(by_axis[report_k], report_k),
@@ -301,6 +327,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="검색 품질 평가 러너")
     parser.add_argument("--check", action="store_true", help="세트만 검증한다 (과금 없음)")
     parser.add_argument("--dense", action="store_true", help="dense baseline 을 잰다 (과금)")
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="BM25 를 얹어 RRF 로 합친다. 빼면 지금까지와 똑같은 dense 다",
+    )
     parser.add_argument("--format", dest="fmt", default="pdf", help="색인할 포맷 라벨 (pdf / hwpx)")
     parser.add_argument("--groups", nargs="*", help="특정 그룹만. 비우면 세트의 전 그룹")
     parser.add_argument("--k", type=int, default=20, help="후보를 어디까지 가져오나 (검색은 무료)")
@@ -324,7 +355,12 @@ def main() -> int:
     report_k = min(args.report_k, args.k)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     report = run_dense(
-        fmt=args.fmt, k=args.k, report_k=report_k, label=args.label, groups=args.groups
+        fmt=args.fmt,
+        k=args.k,
+        report_k=report_k,
+        label=args.label,
+        groups=args.groups,
+        use_bm25=args.hybrid,
     )
     out = RESULTS_DIR / f"{args.label}-{args.fmt}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")

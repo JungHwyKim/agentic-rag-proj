@@ -21,6 +21,7 @@ from rag_pipeline.config import (
     ContentRoutingConfig,
     EmbeddingConfig,
     IngestConfig,
+    RetrievalConfig,
     SplitterConfig,
 )
 
@@ -33,6 +34,7 @@ _MODELS = {
     "cleaner": CleanerConfig,
     "splitter": SplitterConfig,
     "embedding": EmbeddingConfig,
+    "retrieval": RetrievalConfig,
 }
 
 
