@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from backend.app.core.templates import templates
@@ -71,6 +70,3 @@ async def document_list(request: Request) -> HTMLResponse:
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
     return templates.TemplateResponse(request, "_documents.html", {"documents": documents})
-
-
-__all__ = ["Jinja2Templates", "router"]

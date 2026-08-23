@@ -269,7 +269,6 @@ class QdrantStore:
 
         return [_to_result(point) for point in getattr(response, "points", [])]
 
-
     # 색인된 문서 목록. 문서당 (document_id, source_name, chunk_count) 하나로 접는다.
     #
     # **Protocol(base.py)에는 안 올린다.** 저장소 중립을 지키는 쪽이 그것이고, 두 번째
