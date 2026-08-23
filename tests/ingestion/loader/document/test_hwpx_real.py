@@ -38,6 +38,10 @@ DECREE_LANDSCAPE = "시행령 개정안 안내서(정보시스템의무사항알
 # 전체다 — 옛 HWPX 판의 이름이 이 이름의 **접두사**라, 짧은 조각(`신뢰가능`)으로 두면
 # _find 가 두 파일을 함께 집는다. 시행령/가로쪽 짝과 같은 상황이다
 AI_GUIDE_FIXED = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드_fixed"
+# 옛 판. 2026-08-20 에 regression/baseline.json 의 documents 에서는 뺐지만 파일은 남아 있고,
+# 아래 공통 검증은 계속 돈다 — 저쪽에서 뺀 것은 "리전 수를 정답으로 삼지 않는다"는 뜻이지
+# "구조가 깨져도 된다"는 뜻이 아니다. 이름이 변환본 이름의 접두사라 _find 의 정확 일치가 가른다
+AI_GUIDE_ORIGINAL = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드"
 
 # 시행령 개정안 안내서를 사람이 직접 열어 확인한 쪽 번호. 로더 결과를 여기에 맞춘다
 DECREE_TABLE_PAGES = [1, 4, 6, 7, 11, 13, 14, 15, 24, 25, 26]
@@ -89,29 +93,44 @@ def structure_only_config() -> IngestConfig:
     return config
 
 
-# fixtures 안의 모든 .hwpx 를 하나씩 돌리기 위한 파라미터
-def _hwpx_params():
-    files = _real_files(".hwpx")
-    if not files:
-        return [pytest.param(None, marks=pytest.mark.skip(reason="실제 .hwpx 파일 없음"))]
-    # id 를 자르지 않는다. 앞부분이 같은 파일이 둘 있으면 pytest 가 0/1 을 붙이는데,
-    # 그러면 실패한 파일이 어느 것인지 이름으로 짚을 수 없다
-    return [pytest.param(p, id=p.stem) for p in files]
+# 공통 검증을 돌릴 문서 목록.
+#
+# **glob 이 아니라 목록인 이유가 있다.** 예전에는 `FIXTURES.glob("*.hwpx")` 로 파라미터를
+# 만들었는데, 그러면 **수집 시점에** 파일 시스템을 보므로 수집되는 테스트 개수가 환경마다
+# 달라진다 — 실측(2026-08-23)으로 픽스처가 있으면 30개, 없으면 skip 파라미터 1개씩 5개로
+# 접혀 `tests/ingestion/loader/document` 가 146 에서 121 로 25건 줄었다. `tests/fixtures/` 가
+# gitignore 라 다른 클론에서는 늘 그 상태다.
+#
+# 실파일 모듈 다섯 중 여기만 그랬다. splitter·embedding·indexing·cleaner 는 처음부터 정적
+# 목록으로 parametrize 하고 **런타임에** skip 한다. 이제 이 파일도 같다.
+#
+# 잃은 것: 새 .hwpx 를 fixtures 에 넣으면 자동으로 검사되던 것. 대신 여기 한 줄을 적어야
+# 한다. 그 자동 편입이 실제로 값어치를 한 적은 없다 — 새 픽스처가 들어온 유일한 사례
+# (2026-08-23 변환본, 커밋 8de5305)에서 그 커밋이 이 파일을 44줄 고쳤다. 목록이었어도
+# 같은 편집에서 한 줄 더 넣었을 자리다.
+COMMON_HWPX = (
+    DECREE_GUIDE,
+    DECREE_LANDSCAPE,
+    SCHOOL_GUIDE,
+    BASIC_PLAN,
+    AI_GUIDE_ORIGINAL,
+    AI_GUIDE_FIXED,
+)
 
 
 # ---------------------------------------------------------------- 공통 검증
 
 
 # 실제 한컴 파일도 매직바이트로 정확히 갈려야 한다
-@pytest.mark.parametrize("path", _hwpx_params())
-def test_detected_as_hwpx(path: Path) -> None:
-    assert peek_format(path) is FileFormat.HWPX
+@pytest.mark.parametrize("name", COMMON_HWPX)
+def test_detected_as_hwpx(name: str) -> None:
+    assert peek_format(_find(name)) is FileFormat.HWPX
 
 
 # 본문이 충분히 추출되고 경고 없이 끝나야 한다
-@pytest.mark.parametrize("path", _hwpx_params())
-def test_extracts_body_without_warnings(path: Path, structure_only_config: IngestConfig) -> None:
-    document = ingest(path, config=structure_only_config)
+@pytest.mark.parametrize("name", COMMON_HWPX)
+def test_extracts_body_without_warnings(name: str, structure_only_config: IngestConfig) -> None:
+    document = ingest(_find(name), config=structure_only_config)
     paragraphs = [e for e in document.elements if e.type is ElementType.PARAGRAPH]
 
     assert len(paragraphs) > 100
@@ -123,29 +142,29 @@ def test_extracts_body_without_warnings(path: Path, structure_only_config: Inges
 
 
 # 한국어가 깨지지 않아야 한다
-@pytest.mark.parametrize("path", _hwpx_params())
-def test_korean_not_mojibake(path: Path, structure_only_config: IngestConfig) -> None:
-    text = ingest(path, config=structure_only_config).full_text
+@pytest.mark.parametrize("name", COMMON_HWPX)
+def test_korean_not_mojibake(name: str, structure_only_config: IngestConfig) -> None:
+    text = ingest(_find(name), config=structure_only_config).full_text
 
     assert "�" not in text  # 디코딩 실패 대체 문자
     assert any("가" <= ch <= "힣" for ch in text)
 
 
 # 리전 order 는 문서 순서대로 빈틈없이 증가해야 재조립이 안전하다
-@pytest.mark.parametrize("path", _hwpx_params())
-def test_region_order_is_sequential(path: Path, structure_only_config: IngestConfig) -> None:
+@pytest.mark.parametrize("name", COMMON_HWPX)
+def test_region_order_is_sequential(name: str, structure_only_config: IngestConfig) -> None:
     loader = HwpxLoader(structure_only_config)
-    regions = loader.detect_regions(path, LoadContext(config=structure_only_config.content))
+    regions = loader.detect_regions(_find(name), LoadContext(config=structure_only_config.content))
 
     assert [r.order for r in regions] == list(range(len(regions)))
 
 
 # BinData 그림이 이미지 리전으로 잡혀야 한다.
 # 본문 XML에는 바이트가 없고 binaryItemIDRef 로 참조만 되어 있어 놓치기 쉽다
-@pytest.mark.parametrize("path", _hwpx_params())
-def test_embedded_images_extracted(path: Path, structure_only_config: IngestConfig) -> None:
+@pytest.mark.parametrize("name", COMMON_HWPX)
+def test_embedded_images_extracted(name: str, structure_only_config: IngestConfig) -> None:
     loader = HwpxLoader(structure_only_config)
-    regions = loader.detect_regions(path, LoadContext(config=structure_only_config.content))
+    regions = loader.detect_regions(_find(name), LoadContext(config=structure_only_config.content))
     images = [r for r in regions if r.content_type is ContentType.IMAGE]
 
     assert images, "BinData 그림이 하나도 추출되지 않았습니다"

@@ -29,14 +29,10 @@
     },
     "설정을 왜 싣나": "detect_regions() 가 실제로 설정을 읽는다 — 지금 닿는 것은 max_excel_rows · pdf_scan_text_threshold · pdf_render_dpi 셋이고, 뒤의 둘은 스캔 PDF 를 통째 이미지 리전으로 만들지를 갈라 **리전 수를 직접 바꾼다**. 안 박으면 개발자 .env 를 타 같은 명령이 머신마다 다른 값을 낸다. 닿는 셋보다 넓게 박은 것은 나중에 다른 필드를 읽어도 .env 가 안 새게 하려는 것이다. 뺀 것은 머신마다 달라야 하는 API 키와 tesseract_cmd 뿐이다.",
     "픽스처 없는 환경": {
-      "무엇인가": "tests/fixtures/ 가 없는 클론에서 대조할 값. 2026-08-23 에 픽스처를 안 복사한 워크트리로 실측했다.",
+      "무엇인가": "tests/fixtures/ 가 없는 클론에서 이 기준선이 어떻게 동작하는지. 2026-08-23 에 픽스처를 안 복사한 워크트리로 두 번 실측했다 — 한 번은 문제를 찾으려고, 한 번은 고친 뒤 확인하려고.",
+      "tests": "**by_area 가 그대로다.** 픽스처 0개 · 6개 · 7개에서 모두 같은 값이 나온다(tests/ingestion/loader/document 146 고정, 실행하면 41 skipped). 그래서 픽스처 없는 클론에서도 tests 블록은 그대로 대조된다.",
       "documents": "10건 전부 '없어서 못 잼'. 회귀가 아니다 — measure 가 조용히 skip 한다.",
-      "tests.by_area": {
-        "tests/ingestion/loader/document": 121
-      },
-      "tests.collected_total": 790,
-      "왜 이 영역만 흔들리나": "test_hwpx_real.py 의 _hwpx_params() 가 **수집 시점에** FIXTURES.glob('*.hwpx') 를 부른다. 파일이 6개면 파라미터가 6개, 하나도 없으면 skip 마크가 붙은 파라미터 1개로 접힌다 — 테스트 5개 x 5 = 25. 실파일 모듈 다섯 중 이 하나만 그렇고, 나머지 넷(splitter·embedding·indexing·cleaner)은 정적 목록 + 런타임 skip 이라 안 흔들린다. **지표 선택의 잘못이 아니라 한 모듈의 수집 방식이고, 고치면 사라진다.**",
-      "주의": "789 는 커밋 1bc9242 시점 값이다(직전 739 는 906051c). by_area 의 다른 영역이 바뀌면 이 총계도 함께 바뀌므로, **차이(-25)가 본질이고 총계는 파생값이다.** 2026-08-23 에 더한 테스트 50개는 넷 다 픽스처를 안 써서 차이가 그대로 -25 로 남았다 — 픽스처를 쓰는 테스트가 들어오면 이 차이 자체를 다시 재야 한다."
+      "한때 흔들렸다": "처음 실측했을 때 tests/ingestion/loader/document 가 146 -> **121** 이었다(-25). test_hwpx_real.py 만 FIXTURES.glob('*.hwpx') 로 parametrize 해 **수집 시점에** 파일 시스템을 봤기 때문이다 — 파일이 6개면 파라미터 6개, 없으면 skip 마크 1개로 접혀 테스트 5개 x 5 = 25 가 사라졌다. 실파일 모듈 다섯 중 이 하나만 그랬고, 나머지 넷은 처음부터 정적 목록 + 런타임 skip 이었다. **같은 날 그 모듈을 정적 목록(COMMON_HWPX)으로 바꿔 닫았다.** 되돌리면 이 항목의 수치가 다시 갈린다."
     },
     "warnings 대조 규칙": {
       "규칙": "정확한 리스트 비교(순서 포함). 정규화하지 않는다.",
@@ -60,12 +56,13 @@
       "2026-08-23: **tests/hooks 141 -> 150 을 확인하고 반영했다.** 앞 항목에서 '어느 커밋에도 없어서 뺀다'고 남겨 둔 그 9건이다 — 그 세션이 1a5639c 로 커밋했다. 확인은 셋으로 했다: (1) 기준선 시점 89810a0 이후 tests/hooks 를 건드린 커밋이 1a5639c **하나뿐**이고, (2) 그 파일의 테스트 함수가 14 -> 22 로 늘었으며(수집 수는 +9 — parametrize 때문에 함수 수와 1 어긋난다), (3) tests/hooks 가 작업 트리에서 깨끗해 지금 센 값이 곧 HEAD 값이다. **run 블록도 도출값에서 관측값으로 바꿨다** — 앞서 관측한 `689 passed, 2 skipped in 79.77s`(선택 691)이 그 9건이 커밋되면서 곧 HEAD 의 값이 됐다. 그래서 '어떻게 얻었나' 설명을 뺐다. collected_total 682 -> 691.",
       "2026-08-23: **미뤄 뒀던 새 영역과 증가분 +73 을 확정했다**(691 -> 764, 커밋 04e3f4d 기준). 1294509 때 '어느 커밋에도 없다'며 diff 로만 띄워 뒀던 것이 전부 커밋됐다. **여섯 영역이 각각 커밋 하나에 정확히 대응한다** — tests/retrieval 8(bb1e4dd) · tests/generation 11(eba77f7) · tests(test_query.py) 5(73be307) · tests/api 7->40(55d379f) · tests/evaluation 30->40(f6c67f7) · tests/ingestion/indexing 82->88(e23a625). **측정 시점에 본 트리가 더러웠다** — tests/api/test_pages.py 와 tests/ingestion/indexing/test_qdrant_documents.py 가 미커밋 수정 상태였다. 그래서 **깨끗한 HEAD 워크트리를 따로 만들어 쟀고**(픽스처는 복사), 그 값이 본 트리와 같아 그 두 수정이 테스트 수를 안 바꾼다는 것이 확인됐다. 규칙('미커밋 상태는 안 싣는다')을 어긴 것이 아니라 HEAD 값을 오염 없이 얻은 것이다. run 은 본 저장소 관측값이다 — 워크트리 실행은 340.6s 였지만 임시 디스크라 대표값이 아니고, 통과/skip 은 762/2 로 양쪽이 같다. **새 테스트 73건은 키 없이 통과한다**(워크트리에 .env 가 없어 그 실행이 곧 그 확인이다).",
       "2026-08-23: tests 블록만 갱신했다(collected_total 764->814 · tests/retrieval 8->52 · tests/ingestion/indexing 88->94 · run.passed 762->812). **documents 블록은 10건 전부 불변이고 그것이 이 갱신의 판정 근거다** — hybrid 검색 배선은 retrieval/ 과 backend 만 건드려 detect_regions() 경로에 닿지 않으므로, 문서 쪽이 하나라도 움직였다면 배선이 파싱으로 샌 것이라 회귀로 봐야 했다. 늘어난 50 은 새 파일 넷의 수집 수(19+11+14+6)와 정확히 일치한다.",
-      "2026-08-23: EVAL_SETTINGS 에 retrieval 블록이 들어가 tests/evaluation 40->41 이다(+1). **늘어난 하나는 새로 쓴 테스트가 아니라 기존 가드가 블록 하나를 더 잡은 것이다** — test_eval_config.py 가 EVAL_SETTINGS 의 블록마다 model_fields 대조를 parametrize 한다. documents 는 여전히 불변이다."
+      "2026-08-23: EVAL_SETTINGS 에 retrieval 블록이 들어가 tests/evaluation 40->41 이다(+1). **늘어난 하나는 새로 쓴 테스트가 아니라 기존 가드가 블록 하나를 더 잡은 것이다** — test_eval_config.py 가 EVAL_SETTINGS 의 블록마다 model_fields 대조를 parametrize 한다. documents 는 여전히 불변이다.",
+      "2026-08-23: **test_hwpx_real.py 를 정적 목록으로 바꿔 by_area 의 마지막 환경 의존을 없앴다.** 수치는 안 움직인다(픽스처가 있으면 예나 지금이나 146) — 바뀐 것은 **픽스처가 없을 때도 146** 이라는 것이다. 실측: hwpx 0개·6개·7개에서 모두 146. 대신 새 hwpx 를 fixtures 에 넣어도 자동으로 안 잡히니 COMMON_HWPX 에 한 줄을 적어야 한다 — 그 자동 편입이 값어치를 한 적은 없다(새 픽스처가 들어온 유일한 사례 8de5305 가 그 파일을 44줄 고쳤다)."
     ]
   },
   "tests": {
     "명령": ".\\.venv\\Scripts\\python.exe -m pytest -q --collect-only",
-    "지표": "by_area 는 **수집 수**다. skip 은 수집 뒤에 일어나므로 tests/fixtures/ 가 없는 클론에서도 대체로 같은 값이 나온다 — 그것이 이 지표를 고른 이유다. **다만 한 영역은 흔들린다**: tests/ingestion/loader/document 가 픽스처 없이는 146 -> 121 이다(_meta.픽스처 없는 환경). 실행 결과(run)는 픽스처가 있는 머신 기준이라 환경마다 갈린다.",
+    "지표": "by_area 는 **수집 수**다. skip 은 수집 뒤에 일어나므로 tests/fixtures/ 가 없는 클론에서도 같은 값이 나온다 — 그것이 이 지표를 고른 이유다. **2026-08-23 에 실측으로 확인했다** (_meta.픽스처 없는 환경). 실행 결과(run)는 픽스처가 있는 머신 기준이라 환경마다 갈린다.",
     "by_area": {
       "tests/hooks": 150,
       "tests/ingestion/loader/document": 146,
