@@ -23,17 +23,26 @@ from rag_pipeline.schemas.document import ElementType
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 
 AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
-# 2026-08-20 에 실데이터에서 뺐다 — 깨진 도형·표가 많다고 사용자가 판단했고
-# 변환본을 다시 올리기로 했다. 상수는 그때 되살릴 자리를 남겨 둔 것이다
-AI_GUIDE_HWPX = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.hwpx"  # noqa: F841 - 재도입 예정
+# 2026-08-23 에 들어온 한컴 변환본. 2026-08-20 에 뺀 옛 HWPX 판을 대신한다.
+# **옛 값(요소 721 / 제목 54 / 청크 47)과 대조하지 말 것 — 다른 파일이다.**
+# 옛 판도 fixtures 에 남아 있지만 cleaner/test_real.py 의 머리말 테스트 전용이다
+AI_GUIDE_HWPX_FIXED = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드_fixed.hwpx"
 DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).hwpx"
 
 # 사람이 결과를 눈으로 확인한 값이다. 요소 -> 청크로 얼마나 뭉쳐지는지가 이 단계의 핵심이라
 # 양쪽을 함께 잠근다. 승격된 제목 수가 곧 섹션 경계 수다
 EXPECTED = {
     AI_GUIDE_PDF: {"elements": 509, "titles": 74, "chunks": 70},
-    # AI가이드 HWPX 는 2026-08-20 에 뺐다(위 상수 주석 참고). 그때 잠겨 있던 값은
-    # elements 721 / titles 54 / chunks 47 이고, 변환본이 오면 다시 재서 넣는다
+    # 변환본은 표가 0개라 청크가 전부 본문이다. PDF 판과 청크 수가 68 / 70 으로 비슷해
+    # 보이지만 구성이 다르다 — 저쪽 70 에는 표 청크 10개가 들어 있다.
+    #
+    # **이 문서만 잔챙이 청크 상한을 따로 준다**(8, 기본 10% 규칙으로는 6). 느슨하게 푸는
+    # 것이 아니라 **알려진 결함의 대가를 수치로 잠그는 것**이다 — 8개 중 7개가 이 파일의
+    # 두 결함에서 곧바로 나온다: 3개는 쪽이 1로 붕괴해 cleaner 가 못 지운 머리말·꼬리말
+    # (`공공기관 신뢰가능 AI 구현 실용가이드` / `DNA플러스 2019`)이고, 4개는 [붙임]의
+    # 위험도 2x2 상자가 표가 아니라 각각 별개 도형이라 따로 떨어진 것이다.
+    # 옛 HWPX 판은 0/47 · PDF 판은 6/70 이라 **이 문서의 변환본에서만 넘친다**
+    AI_GUIDE_HWPX_FIXED: {"elements": 856, "titles": 99, "chunks": 68, "tiny_max": 8},
     DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 47},
 }
 
@@ -105,8 +114,11 @@ def test_merging_removes_tiny_chunks(
     document, chunks = _chunks(name, offline_ingest_config, splitter_config)
 
     tiny = [c for c in chunks if len(c.text) < 100]
+    # 기본은 청크의 10% 다. 문서별 상한은 EXPECTED 에 사유와 함께 적었을 때만 쓴다 —
+    # 규칙을 통째로 낮추면 이 검사가 다른 문서에서도 안 울린다
+    ceiling = EXPECTED[name].get("tiny_max", len(chunks) // 10)
     assert len(chunks) < len(document.elements) / 3
-    assert len(tiny) <= len(chunks) // 10
+    assert len(tiny) <= ceiling
 
 
 # 재적재마다 id 가 바뀌면 색인이 중복된다

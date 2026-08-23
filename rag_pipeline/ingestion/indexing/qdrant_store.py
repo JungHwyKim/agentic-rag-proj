@@ -55,6 +55,10 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 # 재색인·삭제가 문서를 찾는 payload 키. 필터에서 이 이름으로 건다
 _DOCUMENT_ID_KEY = "document_id"
 
+# 문서 목록을 훑을 때 한 번에 받아올 point 수. 목록은 payload 만 받으므로(벡터 제외)
+# upsert_batch_size 보다 크게 잡아도 메모리가 안 는다
+_SCROLL_BATCH = 256
+
 
 # 설정 두 개에서 실제 컬렉션 이름을 파생한다. 모델이 바뀌면 다른 컬렉션이 된다
 def collection_name_for(indexing: IndexingConfig, embedding: EmbeddingConfig) -> str:
@@ -264,6 +268,67 @@ class QdrantStore:
             ) from exc
 
         return [_to_result(point) for point in getattr(response, "points", [])]
+
+    # 색인된 문서 목록. 문서당 (document_id, source_name, chunk_count) 하나로 접는다.
+    #
+    # **Protocol(base.py)에는 안 올린다.** 저장소 중립을 지키는 쪽이 그것이고, 두 번째
+    # 구현체가 실재할 때 올린다 (plan_log/검색-생성.md 의 "새 추상화를 안 만든다"와 같은 잣대).
+    # 그래서 이 메서드는 backend 가 QdrantStore 를 구체 타입으로 아는 유일한 자리다.
+    #
+    # **컬렉션이 없으면 search() 와 달리 빈 리스트다.** 저쪽은 "색인한 적 없음"과 "질의가 안
+    # 맞음"이 사용자가 할 일이 달라 갈랐지만, 목록은 둘 다 "보여줄 문서가 없다" 하나다 —
+    # 첫 실행에서 사이드바가 비는 것은 정상이지 오류가 아니다
+    def list_documents(self) -> list[dict[str, Any]]:
+        client = self._qdrant
+        try:
+            if not client.collection_exists(self._collection):
+                return []
+        except Exception as exc:  # noqa: BLE001 - 원인을 IndexingError로 바꿔 올린다
+            raise IndexingError(
+                f"컬렉션을 확인하지 못했습니다: {type(exc).__name__}: {exc}",
+                user_message="벡터 저장소를 확인할 수 없습니다.",
+            ) from exc
+
+        # dict 를 쓰는 것은 **삽입 순서가 곧 첫 색인 순서**라서다. 정렬하면 그 정보를 잃는다
+        found: dict[str, dict[str, Any]] = {}
+        offset: Any = None
+        try:
+            while True:
+                # 벡터는 안 받는다 — 청크 수백 개 × 1536차원을 목록 하나 만들자고 실어 오면
+                # 사이드바 갱신이 색인만큼 무거워진다
+                points, offset = client.scroll(
+                    collection_name=self._collection,
+                    limit=_SCROLL_BATCH,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for point in points:
+                    payload = getattr(point, "payload", None) or {}
+                    document_id = payload.get(_DOCUMENT_ID_KEY)
+                    if not document_id:
+                        continue
+                    entry = found.get(document_id)
+                    if entry is None:
+                        metadata = payload.get("metadata") or {}
+                        found[document_id] = {
+                            "document_id": document_id,
+                            # source_name 이 없으면 document_id 로 떨어진다. 문서 키가 원본
+                            # 파일명 기반(NFC)이라 사람이 읽을 수 있는 값이다
+                            "source_name": metadata.get("source_name") or document_id,
+                            "chunk_count": 1,
+                        }
+                    else:
+                        entry["chunk_count"] += 1
+                if offset is None:
+                    break
+        except Exception as exc:  # noqa: BLE001 - 원인을 IndexingError로 바꿔 올린다
+            raise IndexingError(
+                f"문서 목록을 읽지 못했습니다: {type(exc).__name__}: {exc}",
+                user_message="색인된 문서 목록을 읽을 수 없습니다.",
+            ) from exc
+
+        return list(found.values())
 
     # 컬렉션에 든 point 수. 컬렉션이 없으면 0
     def count(self) -> int:

@@ -19,9 +19,30 @@ plan mode 라는 증거이므로, `plan_log_check` 처럼 "이 세션이 그 세
     READY 마커가 없으면 `permissionDecision: "deny"` 로 막고, 라운드를 더 돌라는 사유를
     모델에게 넘긴다.
 
-  PostToolUse (matcher: ExitPlanMode)
-    READY 마커를 지운다. 게이트가 다시 닫혀, 같은 세션에서 plan mode 를 또 쓰면 처음부터
-    면담을 한다.
+  PostToolUse (matcher: ExitPlanMode|AskUserQuestion)
+    `ExitPlanMode` 면 READY 마커를 지운다. 게이트가 다시 닫혀, 같은 세션에서 plan mode 를
+    또 쓰면 처음부터 면담을 한다.
+    `AskUserQuestion` 이면 반대로 **마커를 만든다.** 사용자가 면담 문항에서 "설계서 작성"
+    을 고르면 그것으로 열린다 — 아래 "답변으로 여는 경로".
+
+**답변으로 여는 경로 — 무엇을 보고 무엇을 안 보나.** `AskUserQuestion` 의 답은
+`UserPromptSubmit` 을 만들지 않아 오래도록 게이트 밖에 있었고, 그래서 사용자는 면담 문항에서
+방금 고른 것을 일반 메시지로 **다시 타이핑**해야 했다(문항이 없애려던 왕복이 문항 뒤에 그대로
+남아 있었다). 이제 `tool_response` 의 `answers`(`{질문: 고른 라벨}`)를 본다. 규칙 둘이 전사
+실측(`AskUserQuestion` 결과 114건 · 답 236개)에서 나왔다.
+
+  **답만 본다.** 질문·선택지 텍스트까지 훑으면 9건이 열리는데 그중 5건이 문구를 *논의하는*
+  문항이다. 답만 보면 4건이다.
+
+  **그 문항에 문구에 안 맞는 선택지가 하나라도 있을 때만 연다.** 남은 4건 중 오탐 1건은
+  선택지가 `'"설계서 작성" 포함 변형'` / `'정확히 "설계서 작성해줘" 만'` 이라 **어느 쪽을
+  골라도 열리는 문항**이었다. 진짜 3건은 전부 대안이 있었다. 이 가드가 재는 것은 "사용자가
+  진짜 갈림길에서 골랐는가"이고, 모델이 모든 선택지에 문구를 넣어 스스로 게이트를 여는 길을
+  닫는다. 실측으로 4→3, **오탐 0 · 누락 0.**
+
+감수 사항: 라벨 문구를 쓰는 것은 여전히 모델이다. 선택지 하나를 터무니없게 만들면 사실상
+고를 것이 하나다. 훅으로는 못 막고 마지막에 클릭하는 것은 사용자라, 대안을 진짜 대안으로
+두라는 규칙은 `plan-interview` SKILL.md 쪽에 있다.
 
 **소비를 PostToolUse 에서 하는 이유.** PreToolUse 에서 지우면 사용자가 계획을 거절하고
 수정을 요청했을 때 마커가 이미 없어 다음 `ExitPlanMode` 가 또 막힌다. 일을 하고도 막히는
@@ -74,6 +95,21 @@ HINT = (
     "[plan-interview] plan mode 입니다. 혼자 결론 내지 말고 plan-interview 스킬로 "
     f'질문-답변 라운드를 도세요. 계획 확정(ExitPlanMode)은 사용자가 "{OPEN_PHRASE}" '
     "라고 말한 뒤에만 열립니다."
+)
+
+# 답변 경로가 보는 도구. PostToolUse 에서만 쓴다
+ASK_TOOL = "AskUserQuestion"
+
+# 답변으로 게이트가 열렸을 때 모델에게 넘기는 한 줄.
+#
+# **세션당 한 번으로 묶지 않는다.** 위 HINT 는 매 프롬프트마다 붙으면 소음이라 묶여 있지만,
+# 이쪽은 게이트가 열리는 순간에만 나오고 **그때 안 나오면 모델이 사용자에게 문구를 다시
+# 청한다** — 이 경로가 없애려는 바로 그 왕복이다. 같은 이유로 `_in_plan_mode()` 로 감싸지도
+# 않는다: 트리거가 이미 좁아(실측 114건 중 3건) plan mode 밖에서 헛나올 위험이 리마인더와
+# 비교가 안 된다
+ANSWER_HINT = (
+    "[plan-interview] 사용자가 문항에서 설계서 작성을 골랐습니다. 게이트가 열렸습니다 — "
+    "문구를 다시 청하지 말고, 플랜 파일에 실행 계획을 쓴 뒤 곧바로 ExitPlanMode 로 가세요."
 )
 
 DENY_REASON = (
@@ -176,12 +212,80 @@ def _handle_pre_tool_use(payload: dict, session_id: str) -> None:
     _deny()
 
 
-# 계획이 실제로 제시됐으면 게이트를 다시 닫는다
+# answers 와 questions 가 실린 곳을 찾는다. tool_response 를 먼저 보고 없으면 tool_input.
+#
+# **필드명을 한 곳에 못 박지 않는 것이 요점이다.** `_hookutil.prompt_text()` 가 `prompt` 와
+# `user_input` 을 둘 다 보는 것과 같은 판단이다 — 거기서는 이름을 하나로 믿었다가 게이트가
+# **한 번도 안 열린** 채 유지됐다(2026-08-21 발견). 이 도구는 스키마상 `answers` 가 입력에도
+# 있어서 하네스가 어느 쪽에 실어 보낼지 계약이 아니다. 값이 있는 첫 곳을 쓴다
+def _ask_fields(payload: dict) -> tuple[dict, list]:
+    answers: dict = {}
+    questions: list = []
+    for key in ("tool_response", "tool_input"):
+        holder = payload.get(key)
+        if not isinstance(holder, dict):
+            continue
+        if not answers and isinstance(holder.get("answers"), dict):
+            answers = holder["answers"]
+        if not questions and isinstance(holder.get("questions"), list):
+            questions = holder["questions"]
+    return answers, questions
+
+
+# 고른 답과 그 문항의 선택지 라벨을 짝지어 낸다.
+#
+# **짝을 못 지은 답은 버린다.** 선택지를 모르면 아래 대안 가드를 걸 수 없고, 가드 없는 개방은
+# 이 경로가 막으려는 바로 그것이다. 버려서 안 열려도 사용자가 문구를 말하는 경로가 그대로
+# 살아 있으므로 갇히지 않는다
+def _answered_questions(payload: dict) -> list[tuple[str, list[str]]]:
+    answers, questions = _ask_fields(payload)
+
+    pairs: list[tuple[str, list[str]]] = []
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+
+        # multiSelect 도 값은 문자열 하나다(실측 236/236). 여러 개를 고르면 한 줄에 붙어 온다
+        answer = answers.get(question.get("question"))
+        if not isinstance(answer, str) or not answer.strip():
+            continue
+
+        labels = [
+            str(option.get("label") or "")
+            for option in question.get("options") or []
+            if isinstance(option, dict)
+        ]
+        pairs.append((answer, labels))
+    return pairs
+
+
+# 이번 답변이 게이트를 여나. 판정 근거는 모듈 docstring 의 "답변으로 여는 경로" 에 있다
+def _answer_opens_gate(payload: dict) -> bool:
+    for answer, labels in _answered_questions(payload):
+        if not _opens_gate(answer):
+            continue
+        # 문구에 안 맞는 선택지가 하나라도 있어야 "사용자가 갈림길에서 골랐다"가 된다
+        if any(not _opens_gate(label) for label in labels):
+            return True
+    return False
+
+
+# 계획이 제시됐으면 게이트를 닫고, 면담 답변이면 연다. 한 이벤트가 두 도구를 처리한다
 def _handle_post_tool_use(payload: dict, session_id: str) -> None:
-    if not _is_exit_plan_mode(payload):
+    if _is_exit_plan_mode(payload):
+        _hookutil.clear_marker(READY_NS, session_id)
         return
 
-    _hookutil.clear_marker(READY_NS, session_id)
+    if str(payload.get("tool_name") or "").strip() != ASK_TOOL:
+        return
+
+    if not _answer_opens_gate(payload):
+        return
+
+    _hookutil.touch_marker(READY_NS, session_id)
+    # 이 이벤트의 stdout 은 모델 컨텍스트로 들어간다. 한국어라 UTF-8 로 못 박는다
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(ANSWER_HINT)
 
 
 # 훅 진입점

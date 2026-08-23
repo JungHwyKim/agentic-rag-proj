@@ -21,6 +21,7 @@ from pptx.util import Inches
 from rag_pipeline.config import (
     ContentRoutingConfig,
     EmbeddingConfig,
+    GenerationConfig,
     IndexingConfig,
     IngestConfig,
 )
@@ -75,6 +76,14 @@ def offline_config(tmp_path: Path) -> IngestConfig:
         config,
         "_indexing",
         IndexingConfig(qdrant_path=tmp_path / "qdrant"),
+    )
+    # 생성도 임베딩과 같은 이유로 덮어쓴다 — ingest() 가 안 부르지만 GenerationConfig() 가
+    # .env 를 직접 읽는다. **이것이 IngestConfig.generation 을 lazy 로 둔 이유다**:
+    # lazy 가 아니면 키를 지운 객체를 꽂을 자리 자체가 없다 (rag_pipeline/config.py)
+    object.__setattr__(
+        config,
+        "_generation",
+        GenerationConfig(openai_api_key=None),
     )
     return config
 

@@ -29,10 +29,11 @@ uv pip install -r requirements.txt
 
 ## 아키텍처
 
-진입점은 `rag_pipeline/ingestion/pipeline.py` 에 둘 있고 **둘 다 HTTP를 전혀 모른다.** 스크립트나 노트북에서도 그대로 쓸 수 있다.
+진입점은 셋이고 **전부 HTTP를 모른다.** 스크립트나 노트북에서도 그대로 쓸 수 있다. 적재 쪽 둘은 `rag_pipeline/ingestion/pipeline.py`, 질의 쪽 하나는 `rag_pipeline/query.py` 다.
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store` 와 `embedder` 를 인자로 받는 유일한 진입점**이고, 그 이유는 아래 qdrant 잠금 함정에 있다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 
@@ -94,6 +95,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ### backend ↔ rag_pipeline 분리
 
 - `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
+- 화면은 서버 렌더다(Jinja2 + 벤더링한 htmx, Node 툴체인 없음). `routes/pages.py` 가 화면을, `routes/query.py` 가 HTMX 가 부를 **HTML 조각**을 돌려준다 — JSON 을 주고 브라우저에서 다시 조립하면 템플릿이 두 벌이 된다. 빈 `frontend/` 는 이 결정 이후로 쓰이지 않는다
 - 로더는 동기·CPU 바운드라 `run_in_threadpool` 로 넘긴다
 - `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다
 - 설정도 둘로 나뉜다: `backend/app/core/config.py`(웹) vs `rag_pipeline/config.py`(파싱). 둘 다 `PROJECT_ROOT/.env` 를 읽는다
@@ -108,8 +110,8 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 테스트 패턴
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
-- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다
-- `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다
+- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다. **생성 설정도 임베딩과 같은 이유로 키를 지운다** — `IngestConfig.generation` 이 lazy 프로퍼티인 것이 그 덮어쓰기를 가능하게 하는 전제라, lazy 를 없애면 이 차단이 조용히 사라진다
+- `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다. **설정 클래스가 전부 `extra="ignore"` 라 필드 이름을 틀리면 예외 없이 그 항목만 조용히 안 먹는다** — 덮어썼다고 믿는 값이 실은 `.env` 를 탄다. 이름을 코드에 못 박는 곳(`evaluation/config.py` 의 `EVAL_SETTINGS`)은 `model_fields` 와 대조해 막는다
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
 - 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 다섯이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율), `indexing/test_indexing_real.py`(청크 수백 개에서의 자리 밀림·실제 한글 파일명). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 - **테스트 파일 이름은 저장소 전체에서 유일해야 한다.** `tests/` 에 `__init__.py` 가 없어 basename 이 곧 모듈명이라, 같은 이름이 두 폴더에 있으면 pytest 가 collection error 로 죽는다. 영역 테스트만 돌릴 때는 안 나고 전체에서만 난다. 그래서 실파일 테스트가 `test_hwpx_real.py` · `test_splitter_real.py` 처럼 영역 이름을 달고 있다. **`conftest.py` 도 같은 규칙 아래 있다** — 루트 `tests/conftest.py` 가 `sys.modules["conftest"]` 를 먼저 차지해, 하위 폴더 테스트에서 `import conftest` 하면 엉뚱한 모듈을 집는다. 그래서 conftest 끼리 나눠 쓸 값은 이름이 겹치지 않는 모듈에 둔다(`tests/hooks/_escape_hatches.py`)
@@ -117,7 +119,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 알고 있어야 할 함정
 
 - **LlamaParse SDK**: `llama-parse` 와 `llama-cloud-services` 는 둘 다 deprecated다. `llama-cloud>=1.0` 의 `Client.parsing.parse()` 를 쓴다. **응답의 `markdown` 은 문자열이 아니다** — `pages` 를 담은 pydantic 모델이고 성공한 페이지에만 `markdown: str` 이, 실패한 페이지에는 `error` 가 들어온다. 문자열로 알고 `.strip()` 을 부르다 `AttributeError` 로 적재 전체가 멈춘 적이 있다(2026-08-18, 유료 표 경로 첫 실행). **가짜 응답을 문자열로 만들면 테스트가 이 오해를 그대로 검증한다** — 그래서 `test_router.py` 의 가짜는 실제 `pages` 모양이다
-- **같은 문서라도 포맷이 청크 수를 가른다**: 시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배 차이다(실측). 요소 수는 285 vs 435 로 1.5배뿐이라 요소가 잘아진 것만으로는 설명이 안 된다. 어느 쪽이 검색에 유리한지는 **아직 못 잰다** — 정답 질의 세트가 없다. 반대로 가로쪽 판은 세로판과 요소·청크가 완전히 같아, 가로 쪽 기하 보정은 청킹을 바꾸지 않는다
+- **같은 문서라도 포맷이 청크 수를 가른다**: 시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배 차이다(실측). 요소 수는 285 vs 435 로 1.5배뿐이라 요소가 잘아진 것만으로는 설명이 안 된다. 어느 쪽이 검색에 유리한지는 **아직 안 쟀다** — 막고 있던 정답 질의 세트는 `evaluation/` 에 생겼고(60건, 사람 검수 완료) 포맷 비교 실행이 남았다. 반대로 가로쪽 판은 세로판과 요소·청크가 완전히 같아, 가로 쪽 기하 보정은 청킹을 바꾸지 않는다
 - **Vision 에 보낼 이미지 포맷은 `blob_kind` 가 아니라 바이트에서 읽는다**: 로더들이 이미지 리전의 `blob_kind` 에 `"png"` 를 하드코딩하는데 `blob` 은 문서에 박힌 **원본 바이트**다(PDF 는 `extract_image()` 결과, HWPX 는 zip 의 BinData 그대로). `image_vision` 이 그것을 `data:image/png` 로 붙여 보내다가 **jpx·bmp 가 전부 `BadRequestError` 로 거절**당했다 — 실측으로 AI가이드 PDF(jpx 4/4) · 시행령 HWPX · 가로쪽(bmp 12/12)이 `vision_calls=0` 이었고, 유일하게 전부 성공한 AI가이드 HWPX 는 jpeg 28/28 이었다(5/5 일치). 그래서 `_normalize_for_vision()` 이 `PIL.Image.format` 으로 판정한다. **지원 포맷(png·jpeg·gif·webp)은 재인코딩하지 않는다** — 전부 PNG 로 구우면 JPEG 사진이 3배로 부풀어(3.8MB→11.1MB) base64 가 20MB 상한의 74%까지 간다. 못 받는 것만 구우면 25%다. 확장자도 못 믿는다: 학교기록물 HWPX 의 `.jpg` 7개 중 4개가 실제로는 MPO 다
 - **OCR 한국어**: `ocr_psm=6` 을 쓴다(기본 3은 한글 한 줄을 세로로 오인식). `preserve_interword_spaces=1` 이 없으면 "주식회사"가 "주 식 회 사"로 쪼개져 임베딩·검색이 망가진다. 다만 `image_to_data` 는 이 옵션을 무시하므로 **신뢰도는 `image_to_data`, 최종 텍스트는 `image_to_string`** 으로 용도를 분리해 뒀다 — 합치지 말 것
 - **이미지 전처리**: 600px 미만일 때만 확대한다. 이미 큰 이미지를 늘리면 보간 흐림 때문에 인식률이 떨어진다(실측: 원본 7토큰 → 미세 업스케일 후 0토큰)
@@ -131,8 +133,9 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **쪽 경계는 다른 축으로 판정한다**: 같은 쪽에서 쓴 *세로 간격 12pt* 는 쪽이 바뀌면 축 자체가 사라진다. `pdf.py:_merge_across_pages()` 가 **좌우 끝 ±2pt · 열 수 동일 · 두 리전 사이에 한글을 가진 텍스트 블록이 0개**로 판정한다. **헤더 반복으로 판정하면 안 된다** — 그럴듯해 보이지만 실측으로 **오검출 4 · 미검출 3** 이다(쪽을 가로지르는 인접 표 쌍 11개, 정답은 HWPX 행 수). AI가이드 12~17쪽이 `원칙 1`~`원칙 5` 각각의 별개 표인데 헤더를 글자까지 되풀이해서다. 한글 유무를 쓰는 이유는 참 4건 사이에 있던 것이 전부 쪽 번호 하나(6자·한글 0자)여서이고, **기하 띠(쪽 높이 상·하위 %)는 틈이 1.0%p 뿐이라 기각**했다(머리말 최하단 5.7% vs 본문 최상단 6.7%). 감수 사항: 한글 머리말이 매 쪽 반복되는 문서는 못 잇는다. 이어 붙인 뒤 `_fill_merged_cells()` 를 다시 못 돌리므로(쪽별 셀 기하가 없다) 세로 병합 앵커는 **빈 칸이 이어지는 구간까지만** 되풀이한다
 - **쪽 경계가 셀 하나를 가로지르면 글자가 갈린다**: 시행령 PDF 24~25쪽의 `업무정보\n(4)` 한 셀(4행 세로 병합)이 24쪽 1행 `업무정보` + 25쪽 3행 `(4)` 로 갈렸다. `pdf.py:_join_split_cells()` 가 잇되 **판정은 기하다** — 앞 조각이 1행이고 뒤 조각이 다행 앵커일 때만. **`rows` 의 값 반복으로 판정하면 안 된다**: `구분` 열의 `선택`/`선택`·`필수`/`필수` 가 병합처럼 보여 실측 오검출 2건이다(기하 판정은 0건). `extract()` 만으로는 병합과 빈 칸이 안 갈린다는 것과 같은 이야기다. 이으면 **두 조각이 덮던 행 전부**에 넣고, 구분자는 `\n` 이다(같은 표의 안 갈린 형제 셀이 그 모양이라 마크다운에 `업무정보 (3)` 으로 렌더된다). 판정에 쓰는 셀 행 수는 되붙이기 시점에 표 객체가 없어 `metadata` 사설 키로 실어 나르는데, **첫 격자 행을 둘 담아야 한다** — 반복 헤더를 버리면 두 번째가 첫 데이터 행이다. **쪽 경계가 행 자체를 가르는 경우는 아직 못 잡는다**(학교기록물 23~24쪽, 표본 1건)
 - **쪽을 넘긴 요소의 끝 쪽은 `metadata["page_end"]` 다**: HWPX 로더가 싣고 splitter 가 `Chunk.page_end` 로 나르고 indexing 이 payload 에 넣는 **이미 있는 규약**이다. 다른 이름(`page_span` 등)으로 새 키를 만들면 그 포맷만 이 흐름에서 **에러 없이 조용히** 빠진다 — 실제로 PDF 쪽 넘김 표에서 그럴 뻔했다
+- **한컴 변환본은 본문을 통째로 도형으로 만들 수 있다**: 신뢰가능 AI 가이드의 변환본(`_fixed.hwpx`)은 `hp:tbl` 이 **0개**이고 `hp:drawText` 가 376→**860** 개, 섹션이 14→**1** 개다. `_is_layout_box` 가 표를 강등한 것이 아니라 **표가 문서에 없다** — 강등이면 `metadata["layout_table"]` 이 남는데 그것도 0이라 둘이 갈린다. **본문 대조로는 이 붕괴가 안 보인다**: 요소 텍스트 기준 PDF 커버리지가 오히려 96.8%→**100%** 로 올라가고(PDF 쪽 미검출 10개는 전부 마크다운 표 요소인데 그 셀 내용은 문단으로 100% 살아 있다) 자수도 18,489→19,192 로 는다. 실파일을 받았을 때 **표 리전 수와 쪽 수를 함께 봐야** 한다 — `tests/ingestion/loader/document/test_hwpx_real.py` 가 이 셋(표 0 · 쪽 1 · 머리말 잔류 55)을 일부러 잠가 두었다
 - **HWPX 가로 쪽**: 한컴은 가로 쪽에서도 `hp:pagePr` 의 `width`/`height` 에 물리 용지(세로) 치수를 그대로 넣고 방향은 `landscape` 속성으로만 표시한다. **이름과 반대로 `NARROWLY` 가 가로, `WIDELY` 가 세로다**(실측: 시행령 개정안 안내서 가로쪽 판 — 두 섹션 모두 width=59528 height=84188 인데 WIDELY 섹션의 최상위 문단 vertpos 가 69898 까지 올라가 71435=height-여백 에 육박한다. 가로였다면 46775 를 넘을 수 없다). 그래서 가로 섹션의 본문 높이는 `width` 에서 얻는다. 안 가르면 53% 과대평가해 쪽 넘긴 표를 한 쪽으로 세고 이후 쪽 번호가 밀린다
-- **HWPX 쪽 수를 분모로 쓰지 말 것** (미해결): 로더가 세는 HWPX 쪽 수가 문서에 따라 크게 부풀어 있다. 실측 — 신뢰가능 AI 가이드는 PDF 판이 28쪽(파일 구조에서 직접 확인)인데 HWPX 판을 97쪽으로 센다. 본문 분량은 20,895자 vs 21,843자로 거의 같다. 쪽당 요소 수 중앙값이 PDF 19 / HWPX 5 이고 요소가 1개뿐인 쪽이 21개다. 섹션은 14개뿐이라 `start_section()` 만으로는 설명이 안 되고 `vertpos` 감소 휴리스틱의 과다 발화로 보인다. 시행령 문서는 사람이 확인한 26쪽과 맞으므로 일률적으로 깨진 것은 아니다. **깨지는 문서가 어느 쪽인지는 실측으로 좁혀졌다** — 정답 질의 세트를 만들며 두 판의 쪽을 대조하니 시행령·중등 기초학력은 HWPX 와 PDF 쪽이 **정확히 같고**, 학교기록물은 **+1 로 일정하며**(표지 한 장), 신뢰가능 AI 가이드만 −1~−56 으로 벌어진다. 즉 부풀림은 문서별이고 그 문서 안에서는 일정하지 않다 — **보정 상수로 못 고친다.** **쪽 수로 비율을 계산하는 판정(머리말 등)을 만들 때 이 값을 분모로 쓰면 문서마다 결과가 뒤집힌다** — `cleaner/headers.py` 가 등장 횟수 비율 대신 걸친 폭을 쓰는 이유다
+- **HWPX 쪽 수를 분모로 쓰지 말 것** (미해결): 로더가 세는 HWPX 쪽 수가 문서에 따라 크게 부풀어 있다. 실측 — 신뢰가능 AI 가이드는 PDF 판이 28쪽(파일 구조에서 직접 확인)인데 HWPX 판을 97쪽으로 센다. 본문 분량은 20,895자 vs 21,843자로 거의 같다. 쪽당 요소 수 중앙값이 PDF 19 / HWPX 5 이고 요소가 1개뿐인 쪽이 21개다. 섹션은 14개뿐이라 `start_section()` 만으로는 설명이 안 되고 `vertpos` 감소 휴리스틱의 과다 발화로 보인다. 시행령 문서는 사람이 확인한 26쪽과 맞으므로 일률적으로 깨진 것은 아니다. **깨지는 문서가 어느 쪽인지는 실측으로 좁혀졌다** — 정답 질의 세트를 만들며 두 판의 쪽을 대조하니 시행령·중등 기초학력은 HWPX 와 PDF 쪽이 **정확히 같고**, 학교기록물은 **+1 로 일정하며**(표지 한 장), 신뢰가능 AI 가이드만 −1~−56 으로 벌어진다. 즉 부풀림은 문서별이고 그 문서 안에서는 일정하지 않다 — **보정 상수로 못 고친다.** **쪽 수로 비율을 계산하는 판정(머리말 등)을 만들 때 이 값을 분모로 쓰면 문서마다 결과가 뒤집힌다** — `cleaner/headers.py` 가 등장 횟수 비율 대신 걸친 폭을 쓰는 이유다. **반대쪽 끝도 있다** — 같은 문서를 한컴에서 다시 저장한 변환본(`_fixed.hwpx`)은 `vertpos` 888개가 **전부 0** 이라 쪽이 **1로 붕괴**한다. 부풀림(97)과 붕괴(1)는 같은 축의 두 끝이고, 붕괴 쪽에서는 파생 피해가 더 크다 — 걸칠 쪽이 하나뿐이라 `cleaner/headers.py` 의 머리말 제거가 25건→**0건**이 되어 반복 머리말 55개가 본문에 그대로 실린다
 - **요소는 청크가 아니다 — 아주 잘다**: 실측으로 요소 자수 중앙값이 PDF 23 / HWPX 15 / 시행령 40 이고, **1200자를 넘는 텍스트 요소가 세 문서 전부 0개**다. PDF 는 PyMuPDF 블록 단위라 707개 중 349개(49%)가 20자 미만이다. 그래서 청크 상한은 텍스트에서 사실상 발화하지 않고 **큰 표에서만** 걸린다(시행령의 67행 표 3,243자). 청킹을 "자르는 일"로 설계하면 20자짜리 청크가 절반이 된다
 - **한국어 청크는 문자 ≈ 토큰이다**: cl100k_base(`text-embedding-3-*`)로 잰 청크의 문자/토큰 비율이 중앙값 1.03~1.09 / 최소 0.90 이다. 한글 낱글자는 UTF-8 바이트로 쪼개져 글자당 2~3토큰이지만, 청크에는 공백·숫자·영문·마크다운 표가 섞여 있어 희석된다. **그래서 `max_chunk_chars` 를 문자로 두는 것이 토큰 상한까지 지켜준다** — 실측 최대 청크가 1,201토큰으로 모델 입력 상한 8191 의 15% 다. 낱글자 비율(2~3토큰)을 그대로 적용해 상한을 잡으면 청크가 3배로 잘아진다
 - **HWPX 제목은 스타일로 못 찾는다**: 한컴이 서식을 문단 스타일이 아니라 `charPr` 로 직접 박는 문서가 흔하다. 실측으로 신뢰가능 AI 가이드 HWPX 의 `Contents/header.xml` 에는 스타일이 `Normal` **하나뿐**이었다(글자 높이는 240~2617 로 살아 있다). 그래서 `headings.py` 가 글자 크기를 쓴다. 판정 규칙 셋(문서별 최빈값 / 배율 아닌 부등호 / `min` 이지 `max` 가 아님)은 그 파일 docstring에 근거와 함께 있다 — **되돌리면 강조가 제목이 되거나 제목이 통째로 사라진다**
@@ -145,7 +148,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
-- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. `.qdrant/` 는 `.gitignore` 에 있다
+- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `get_store()` 로 **자기 클라이언트를 직접 열므로**, 업로드를 실연결하는 순간 같은 uvicorn 안에서 자기 자신과 충돌한다(그래서 지금 업로드 버튼이 목업이다). `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. `.qdrant/` 는 `.gitignore` 에 있다
 
 ## 새 포맷 추가
 
@@ -161,7 +164,7 @@ cleaner가 실제로 밟은 경로다.
 1. `rag_pipeline/ingestion/<stage>/` 에 모듈을 만든다. 공개 진입 함수는 하나이고 HTTP를 모른다
 2. `config.py` 에 `<Stage>Config` 를 만들고 `IngestConfig` 에 lazy 프로퍼티로 붙인다
 3. `.env.example` 에 밖으로 열 설정을 추가한다
-4. 합성 지점을 정한다. **`ingest()` 에 끼우는 것이 기본값이 아니다** — 그 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다. splitter·embedding·indexing 셋 다 `ingest()` 밖에 있고, 대신 `pipeline.py:index_document()` 라는 **두 번째 진입점**을 만들어 이었다. 새 단계도 소비자가 어디에 있는지부터 본다
+4. 합성 지점을 정한다. **`ingest()` 에 끼우는 것이 기본값이 아니다** — 그 반환은 곧 공개 HTTP 응답 스키마라 바꾸는 순간 API 결정이 된다. splitter·embedding·indexing 셋 다 `ingest()` 밖에 있고, 대신 `pipeline.py:index_document()` 라는 **두 번째 진입점**을 만들어 이었다. retrieval·generation 도 같은 판단으로 **세 번째**(`query.py:answer_question()`)로 갔다 — 적재 단계가 아니라 `ingestion/` 아래도 아니다. 새 단계도 소비자가 어디에 있는지부터 본다
 5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다. **`ingest()` 에 안 끼운 단계도 마찬가지다** — 설정 객체가 `.env` 를 직접 읽으므로 안 지우면 개발자 머신의 실키가 픽스처에 실린다
 6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 
@@ -199,9 +202,9 @@ cleaner가 실제로 밟은 경로다.
 
 ## plan mode 면담 게이트
 
-plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라고 말한 뒤에만** 통과한다. `plan_interview_check.py` 가 그전의 호출을 `deny` 로 막고, 대신 `AskUserQuestion` 으로 라운드를 더 돌라는 사유를 돌려준다. 진행 방식은 `plan-interview` 스킬에 있다.
+plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라고 말하거나 면담 문항에서 작성을 고른 뒤에만** 통과한다. `plan_interview_check.py` 가 그전의 호출을 `deny` 로 막고, 대신 `AskUserQuestion` 으로 라운드를 더 돌라는 사유를 돌려준다. 진행 방식은 `plan-interview` 스킬에 있다.
 
-**게이트는 `UserPromptSubmit` 에서만 열린다** — 사용자가 프롬프트에 직접 친 글만 마커를 만든다. `AskUserQuestion` 의 선택지에 그 문구를 넣어 사용자가 골라도 **안 열린다.** 선택지 답은 도구 결과라 그 이벤트가 아예 안 생긴다(실측: 2026-08-22 에 그렇게 시도했다가 `deny` 를 받았다). 마지막 라운드는 문구를 **말해 달라고 청하고 기다리는** 것으로 끝나야 한다.
+**게이트는 두 곳에서 열린다** — 사용자가 프롬프트에 친 글(`UserPromptSubmit`)과 `AskUserQuestion` 답변(`PostToolUse`). 뒤엣것의 판정 규칙 둘은 전사 실측(`AskUserQuestion` 결과 114건·답 236개)에서 나왔다. **답(`tool_response.answers`)만 보고 질문·선택지 텍스트는 안 본다** — 같이 훑으면 문구를 *논의하는* 문항이 전부 열린다(9건 중 오탐 5). **그리고 그 문항에 문구에 안 맞는 선택지가 하나라도 있을 때만 연다** — 남은 오탐 1건이 선택지 둘 다 문구를 담아 *어느 쪽을 골라도 열리는* 문항이었다. 이 가드가 재는 것은 "사용자가 진짜 갈림길에서 골랐는가"이고, 실측으로 4→3 · **오탐 0 · 누락 0** 이다. 그래서 마지막 문항의 대안은 **진짜 대안**(`라운드 더`)이어야 한다 — 선택지를 전부 "작성" 쪽으로 채우면 게이트가 **안 열린다.** 답을 고르는 것도 문구를 말하는 것도 사용자라, "모델이 대신 열 수 없다"는 그대로다.
 
 **게이트는 스킬 호출과 무관하게 산다** — `plan_log_check` 는 "이 세션이 설계 논의인가"를 코드 변경으로 알 수 없어 스킬 마커가 필요했지만, 여기서는 `ExitPlanMode` 가 불렸다는 것 자체가 plan mode 라는 증거다. 표시(READY)는 `PostToolUse` 에서 지운다 — `PreToolUse` 에서 지우면 사용자가 계획을 **거절하고 수정을 요청했을 때** 다시 막히고, 일을 하고도 막히는 게이트는 `SKIP_*=1` 을 습관으로 만든다. 건너뛰려면 `SKIP_PLANINTERVIEW=1`.
 

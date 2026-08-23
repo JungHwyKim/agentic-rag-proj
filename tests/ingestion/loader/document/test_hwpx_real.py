@@ -34,6 +34,10 @@ SCHOOL_GUIDE = "학교기록물"
 DECREE_GUIDE = "시행령 개정안 안내서(정보시스템의무사항알림)"
 # 같은 문서를 가로 쪽 섹션이 들어가게 고친 판. 쪽 기하 판정을 검증하는 데 쓴다
 DECREE_LANDSCAPE = "시행령 개정안 안내서(정보시스템의무사항알림)_가로쪽"
+# 2026-08-23 에 들어온 신뢰가능 AI 가이드의 한컴 변환본. 여기도 조각이 아니라 파일명
+# 전체다 — 옛 HWPX 판의 이름이 이 이름의 **접두사**라, 짧은 조각(`신뢰가능`)으로 두면
+# _find 가 두 파일을 함께 집는다. 시행령/가로쪽 짝과 같은 상황이다
+AI_GUIDE_FIXED = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드_fixed"
 
 # 시행령 개정안 안내서를 사람이 직접 열어 확인한 쪽 번호. 로더 결과를 여기에 맞춘다
 DECREE_TABLE_PAGES = [1, 4, 6, 7, 11, 13, 14, 15, 24, 25, 26]
@@ -280,6 +284,46 @@ def test_decree_landscape_section_uses_width(structure_only_config: IngestConfig
 
     # 세로(WIDELY)는 84188-12753, 가로(NARROWLY)는 59528-12753 이어야 한다
     assert geometry == {"WIDELY": 71435, "NARROWLY": 46775}
+
+
+# 한컴 변환본은 본문을 통째로 도형으로 만들어 놓았다. **나쁜 상태를 일부러 잠근다.**
+#
+# 이 파일은 `hp:tbl` 이 **0개**다 — 표가 강등된 것이 아니라 문서에 없다(`hp:drawText` 가
+# 옛 판 376 → 860 개, 섹션 14 → 1 개). 그리고 `vertpos` 888개가 **전부 0** 이라 쪽 계산
+# 휴리스틱이 한 번도 발화하지 못해 쪽이 1로 붕괴한다.
+#
+# 값을 잠그는 이유는 `_is_layout_box` 나 쪽 계산을 손댈 때 **이 테스트가 먼저 울리게**
+# 하려는 것이다. 그래야 조용한 변화가 '의도한 변화'로 불린다 — 표 9·강등 17 을 잠그는
+# test_decree_guide_layout_boxes_demoted 와 같은 모양이다
+def test_ai_guide_fixed_has_no_tables_and_collapses_to_one_page(
+    structure_only_config: IngestConfig,
+) -> None:
+    path = _find(AI_GUIDE_FIXED)
+    loader = HwpxLoader(structure_only_config)
+    regions = loader.detect_regions(path, LoadContext(config=structure_only_config.content))
+
+    # 둘 다 0 이어야 "강등됐다"와 "처음부터 없다"의 구분이 남는다
+    assert [r for r in regions if r.content_type is ContentType.TABLE] == []
+    assert [r for r in regions if r.metadata.get("layout_table")] == []
+
+    # 쪽이 1로 붕괴한다. 쪽을 넘긴 리전이 있을 수 없는 상태다
+    assert loader.extract_metadata(path)["page_count"] == 1
+    assert {r.page for r in regions} == {1}
+    assert all(r.metadata.get("page_end") is None for r in regions)
+
+
+# 쪽이 1로 붕괴하면 반복 머리말 제거가 통째로 죽는다. 그 대가를 수치로 남긴다.
+# cleaner/headers.py 는 '걸친 폭'으로 판정하는데 걸칠 쪽이 하나뿐이기 때문이다 —
+# 같은 문서의 옛 HWPX 판(97쪽)과 PDF 판(28쪽)은 똑같이 25개를 지운다
+def test_ai_guide_fixed_cannot_remove_running_headers(
+    structure_only_config: IngestConfig,
+) -> None:
+    document = ingest(_find(AI_GUIDE_FIXED), config=structure_only_config)
+    texts = [e.text.strip() for e in document.elements]
+
+    assert document.metadata.removed_elements == 0
+    assert texts.count("공공기관 신뢰가능 AI 구현 실용가이드") == 28
+    assert texts.count("DNA플러스 2019") == 27
 
 
 # ---------------------------------------------------------------- .hwp 거부

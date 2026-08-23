@@ -54,3 +54,16 @@ class EmbeddingError(RagPipelineError):
 # 표를 훑으므로 종류를 늘리면 순서 문제만 는다. 무엇이 틀렸는지는 user_message 가 말한다
 class IndexingError(RagPipelineError):
     pass
+
+
+# 답변을 만들지 못했다 — 키 없음 / API 실패 / 빈 응답 (HTTP 503)
+#
+# **왜 예외인가.** EmbeddingError·IndexingError 와 같은 이유다. 로더 쪽 외부 API 핸들러가
+# 빈 결과를 돌려주는 것은 내려갈 폴백 층이 있어서 성립하는 규약인데(LlamaParse -> PyMuPDF,
+# Vision -> OCR) 생성에는 그 층이 없다. 빈 답변을 돌려주면 화면에 빈 말풍선이 뜨고
+# 사용자는 "근거를 못 찾았다"와 "생성이 실패했다"를 구분할 수 없다 — 할 일이 서로 다른데도.
+#
+# 검색 결과가 0건인 것은 여기 해당하지 않는다. 그건 정상 경로이고 Answer.sources 가
+# 빈 리스트로 나간다 (plan_log/frontend.md 1회차)
+class GenerationError(RagPipelineError):
+    pass

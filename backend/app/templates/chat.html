@@ -1,0 +1,98 @@
+{# 채팅 화면 전체. 부분 갱신은 _answer.html · _documents.html 이 맡는다 #}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>문서 질의</title>
+  <link rel="stylesheet" href="/static/app.css">
+  {# CDN 이 아니라 벤더링이다 — 오프라인에서 화면이 죽으면 안 된다 #}
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <section class="panel">
+      <h2 class="panel-title">문서</h2>
+      {# 업로드는 이번 회차에서 목업이다. index_document() 가 자기 store 를 직접 열어
+         startup 싱글턴과 충돌하기 때문 — 근거와 해결 후보는 plan_log/frontend.md 미결 #}
+      <button class="upload-btn" type="button" disabled
+              title="이번 단계에서는 스크립트로 색인합니다">파일 업로드</button>
+      <div id="documents" hx-get="/api/v1/documents" hx-trigger="load" hx-swap="innerHTML">
+        <p class="muted small">불러오는 중…</p>
+      </div>
+    </section>
+
+    {# 대화 히스토리: rDBMS 가 붙을 자리다. 자리를 비워두면 화면에서 사라져 잊히므로
+       모양만 그려두고 비활성으로 둔다 (사용자 결정) #}
+    <section class="panel">
+      <h2 class="panel-title">대화 히스토리</h2>
+      <ul class="history" aria-disabled="true">
+        <li class="history-item is-active">
+          <span class="history-title">위약금 조항 문의</span>
+          <span class="history-time">3일 전</span>
+        </li>
+        <li class="history-item">
+          <span class="history-title">매출 항목 질문</span>
+          <span class="history-time">1주 전</span>
+        </li>
+        <li class="history-item">
+          <span class="history-title">설치 방법 문의</span>
+          <span class="history-time">2주 전</span>
+        </li>
+      </ul>
+      <p class="muted small">저장은 아직 준비 중입니다</p>
+    </section>
+
+    {# 예시화면에서 이 문구는 히스토리 **아래**, 사이드바 맨 밑에 있다. 목록 조각 안에 두면
+       문서 목록 바로 밑에 붙으므로, 자리를 여기 두고 _documents.html 이 hx-swap-oob 로
+       채운다 — 목록 응답 하나가 두 자리를 갱신한다 #}
+    <p class="sidebar-foot muted small" id="doc-count"></p>
+  </aside>
+
+  <main class="main">
+    <div id="messages" class="messages">
+      <p class="muted center">문서에 대해 궁금한 것을 물어보세요.</p>
+    </div>
+
+    <form class="composer"
+          hx-post="/api/v1/query"
+          hx-target="#messages"
+          hx-swap="beforeend"
+          hx-disabled-elt="find button, find input"
+          hx-on::after-request="if(event.detail.successful) this.reset();
+                                document.getElementById('messages').lastElementChild
+                                  ?.scrollIntoView({behavior:'smooth'})">
+      <input type="text" name="query" placeholder="질문을 입력하세요" autocomplete="off" required>
+      <button type="submit" aria-label="보내기">→</button>
+    </form>
+
+    {# 검색+생성이 3~6초 걸린다. 스트리밍을 안 하기로 해서(예외 매핑이 SSE 에서 죽는다)
+       그동안 화면이 멈춘 것처럼 보이지 않게 이 표시가 필요하다 #}
+    <div class="pending htmx-indicator" id="pending">답변을 만드는 중…</div>
+  </main>
+</div>
+
+{# 이 파일을 브라우저로 직접 열면(file://) CSS 도 htmx 도 문서 목록도 전부 안 돈다 —
+   서버가 렌더해야 하는 템플릿이기 때문이다. 그런데 그 화면은 "스타일이 깨진 앱" 처럼 보여서
+   원인을 짐작할 수가 없다(실제로 두 번 그렇게 헤맸다). 조용히 깨진 화면 대신 이유를 말한다.
+
+   **스타일이 인라인인 것이 요점이다** — CSS 가 안 왔다는 것을 알리는 배너인데 그 스타일을
+   app.css 에 두면 배너까지 스타일 없이 뜬다.
+
+   backend/preview.py 가 이 script 를 id 로 찾아 지운다. preview.html 도 file:// 로 열리므로
+   안 지우면 거기에도 배너가 뜬다 — id 를 바꾸면 그 앵커가 빗나가므로 테스트로 잠가 뒀다 #}
+<script id="file-warning">
+  if (location.protocol === 'file:') {
+    document.body.insertAdjacentHTML('afterbegin',
+      '<p style="margin:0;padding:14px 18px;background:#fff4d6;border-bottom:1px solid #e6d29a;' +
+      'font:14px/1.6 system-ui,sans-serif;color:#5c4a12">' +
+      '이 파일은 <b>서버가 렌더하는 템플릿</b>입니다. 직접 열면 CSS·문서 목록이 동작하지 않습니다.<br>' +
+      '저장소 루트의 <b>preview.html</b> 을 열거나, ' +
+      '<code>uvicorn backend.app.main:app</code> 으로 띄워 ' +
+      '<b>http://127.0.0.1:8000/</b> 을 보세요.</p>');
+  }
+</script>
+</body>
+</html>

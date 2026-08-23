@@ -25,7 +25,7 @@ class BaseDocumentLoader(ABC):
 
     def __init__(self, config: IngestConfig | None = None) -> None:
         self.config = config or IngestConfig()
-        self.router = ContentRouter(self.config.content)
+        self.router = ContentRouter()
 
     # 문서를 열어 콘텐츠 리전 목록을 만든다. 포맷별로 구현한다
     @abstractmethod

@@ -75,11 +75,19 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/ingestion/embedding/", "tests/ingestion/embedding"),
     ("rag_pipeline/ingestion/indexing/", "tests/ingestion/indexing"),
     ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
+    # 질의 쪽 셋. 적재와 갈라 둔 것은 실제로 다른 테스트가 도는 영역이라서다 —
+    # 검색·생성을 고쳤을 때 로더 테스트 수백 개를 돌릴 이유가 없다
+    ("rag_pipeline/retrieval/", "tests/retrieval"),
+    ("rag_pipeline/generation/", "tests/generation"),
+    ("rag_pipeline/query.py", "tests/test_query.py"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
     # 평가 하네스. rag_pipeline 이 아니라 **그것을 재는 자**라 최상위에 있다.
     # 여기가 조용히 깨지면 검색 품질 수치가 전부 못 믿을 값이 된다
     ("evaluation/", "tests/evaluation"),
+    # 회귀 기준선을 재는 도구. 같은 이유로 최상위에 있고, 같은 이유로 매핑이 필요하다 —
+    # 이것이 틀리면 대조 결과가 통째로 못 믿을 값이 되는데 **아무 에러도 안 난다**
+    ("regression/", "tests/regression"),
 )
 
 # **일부러 매핑하지 않는 것.** 여기 있는 경로는 전 영역에 영향을 주므로 부분 실행이

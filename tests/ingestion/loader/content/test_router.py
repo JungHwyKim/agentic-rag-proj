@@ -47,7 +47,7 @@ def test_native_table_skips_llamaparse(mocker) -> None:
     config = _online_config()
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=False), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=False), ctx)
 
     spy.assert_not_called()
     assert elements[0].metadata["table_source"] == "native"
@@ -83,7 +83,7 @@ def test_pdf_table_uses_llamaparse(mocker) -> None:
     config = _online_config()
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     assert elements[0].metadata["table_source"] == "llamaparse"
     assert "| 1 | 2 |" in elements[0].text
@@ -101,7 +101,7 @@ def test_llamaparse_joins_pages_and_skips_failed(mocker) -> None:
     config = _online_config()
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     assert elements[0].text == "| A |\n| --- |\n\n| B |"
     assert ctx.llamaparse_calls == 1
@@ -120,7 +120,7 @@ def test_llamaparse_bad_response_shape_falls_back(mocker) -> None:
     config = _online_config()
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     assert elements[0].metadata["table_source"] == "native"
     assert any("폴백" in w for w in ctx.warnings)
@@ -139,7 +139,7 @@ def test_llamaparse_failure_falls_back_to_rows(mocker) -> None:
     config = _online_config()
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     assert elements[0].metadata["table_source"] == "native"
     assert "| 홍길동 | 95 |" in elements[0].text
@@ -151,7 +151,7 @@ def test_missing_key_falls_back_silently() -> None:
     config = _online_config(llama_cloud_api_key=None)
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     assert elements[0].metadata["table_source"] == "native"
     assert any("LLAMA_CLOUD_API_KEY" in w for w in ctx.warnings)
@@ -163,7 +163,7 @@ def test_config_can_disable_llamaparse(mocker) -> None:
     config = _online_config(table_pdf_handler="pymupdf")
     ctx = LoadContext(config=config)
 
-    elements = ContentRouter(config).route(_table_region(with_blob=True), ctx)
+    elements = ContentRouter().route(_table_region(with_blob=True), ctx)
 
     spy.assert_not_called()
     assert elements[0].metadata["table_source"] == "native"
@@ -180,7 +180,7 @@ def test_text_passthrough() -> None:
         metadata={"element_type": ElementType.TITLE},
     )
 
-    elements = ContentRouter(config).route(region, LoadContext(config=config))
+    elements = ContentRouter().route(region, LoadContext(config=config))
 
     assert elements[0].text == "본문입니다."
     assert elements[0].type is ElementType.TITLE
@@ -192,7 +192,7 @@ def test_empty_text_dropped() -> None:
     config = _online_config()
     region = ContentRegion(content_type=ContentType.TEXT, order=0, source_format="docx", text="   ")
 
-    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+    assert ContentRouter().route(region, LoadContext(config=config)) == []
 
 
 # 작은 이미지는 로고로 보고 건너뛴다. PDF에 널린 아이콘을 전부 Vision에 보내면 비용이 터진다
@@ -206,7 +206,7 @@ def test_tiny_image_skipped(png_bytes) -> None:
         blob_kind="png",
     )
 
-    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+    assert ContentRouter().route(region, LoadContext(config=config)) == []
 
 
 # Vision 응답을 검색 가능한 텍스트로 합쳐야 한다
@@ -239,7 +239,7 @@ def test_vision_builds_searchable_text(mocker, png_bytes) -> None:
         blob_kind="png",
     )
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     assert elements[0].type is ElementType.IMAGE_TEXT
     assert "막대그래프" in elements[0].text
@@ -267,7 +267,7 @@ def test_vision_failure_falls_back_to_ocr(mocker, korean_image_file) -> None:
         blob_kind="png",
     )
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     assert any("폴백" in w for w in ctx.warnings)
     if elements:
@@ -287,7 +287,7 @@ def test_vision_call_cap(mocker, png_bytes) -> None:
         blob_kind="png",
     )
 
-    ContentRouter(config).route(region, ctx)
+    ContentRouter().route(region, ctx)
 
     spy.assert_not_called()
     assert any("상한" in w for w in ctx.warnings)
@@ -304,7 +304,7 @@ def test_image_skip_mode(png_bytes) -> None:
         blob_kind="png",
     )
 
-    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+    assert ContentRouter().route(region, LoadContext(config=config)) == []
 
 
 # 깨진 이미지 바이트가 들어와도 예외로 죽지 않아야 한다
@@ -319,7 +319,7 @@ def test_corrupt_image_is_warned_not_raised() -> None:
         blob_kind="png",
     )
 
-    assert ContentRouter(config).route(region, ctx) == []
+    assert ContentRouter().route(region, ctx) == []
     assert any("이미지를 열 수 없어" in w for w in ctx.warnings)
 
 
@@ -332,13 +332,16 @@ def test_unknown_content_type() -> None:
         source_format="pdf",
     )
 
-    assert ContentRouter(config).route(region, LoadContext(config=config)) == []
+    assert ContentRouter().route(region, LoadContext(config=config)) == []
 
 
 # --- 승급(hybrid) 경로 ---
 #
 # 여기서 보는 것은 **언제 올리지 않는가**다. 트리거가 실측으로 오검출 0 이어도,
-# 라우터가 신호를 안 보고 올리면 그 실측이 아무 의미가 없다
+# 라우터가 신호를 안 보고 올리면 그 실측이 아무 의미가 없다.
+#
+# `mark_cells` 에 **자리 목록**을 넣는다. 개수(int)로 두면 라우터가 `> 0` 으로 되돌아가도
+# 통과해서, 실제 생산자(`pdf.py:_marks_within()`)가 주는 타입에서 터지는 것을 못 잡는다
 
 
 # 신호가 없는 표는 hybrid 여도 올리지 않는다. 표 94개 중 88개가 이 경로다
@@ -347,9 +350,9 @@ def test_hybrid_without_marks_stays_native(mocker) -> None:
     config = _online_config(table_pdf_handler="hybrid")
     ctx = LoadContext(config=config)
     region = _table_region(with_blob=True)
-    region.mark_cells = 0
+    region.mark_cells = []
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     spy.assert_not_called()
     assert elements[0].metadata["table_source"] == "native"
@@ -362,9 +365,9 @@ def test_hybrid_without_blob_stays_native(mocker) -> None:
     config = _online_config(table_pdf_handler="hybrid")
     ctx = LoadContext(config=config)
     region = _table_region(with_blob=False)
-    region.mark_cells = 5
+    region.mark_cells = [(1, 1)]
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     spy.assert_not_called()
     assert elements[0].metadata["table_source"] == "native"
@@ -376,9 +379,9 @@ def test_default_handler_never_escalates(mocker) -> None:
     config = _online_config(table_pdf_handler="pymupdf")
     ctx = LoadContext(config=config)
     region = _table_region(with_blob=True)
-    region.mark_cells = 5
+    region.mark_cells = [(1, 1)]
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     spy.assert_not_called()
     assert elements[0].metadata["table_source"] == "native"
@@ -390,8 +393,8 @@ def test_hybrid_falls_back_when_escalation_fails(mocker) -> None:
     config = _online_config(table_pdf_handler="hybrid")
     ctx = LoadContext(config=config)
     region = _table_region(with_blob=True)
-    region.mark_cells = 5
+    region.mark_cells = [(1, 1)]
 
-    elements = ContentRouter(config).route(region, ctx)
+    elements = ContentRouter().route(region, ctx)
 
     assert elements[0].metadata["table_source"] == "native"

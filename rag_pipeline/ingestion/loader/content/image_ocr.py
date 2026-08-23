@@ -135,18 +135,29 @@ def open_image(blob: bytes) -> Image.Image:
 
 
 # 이미지 리전을 OCR로 처리해 Element로 만든다.
-# classify 단계에서 이미 지표를 구했다면 precomputed로 넘겨 신뢰도 계산을 재사용한다
+# classify 단계에서 이미 지표를 구했다면 precomputed로 넘겨 신뢰도 계산을 재사용한다.
+#
+# **`image` 는 라우터가 판정하려고 이미 연 것을 그대로 받는 자리다.** 안 받으면 같은 blob 을
+# 두 번 디코드한다 — `classify()` 의 `run_ocr()` 가 `preprocess()` 로 한 번, 여기 `extract_text()`
+# 가 또 한 번. PIL 은 한 번 `load()` 한 픽셀을 들고 있으므로 같은 객체를 넘기면 두 번째가
+# 사라진다. 인자를 필수로 안 만든 이유는 이 함수를 라우터를 거치지 않고 직접 부르는 경로가
+# 있어서다(`test_handler_failure_paths.py`)
 def handle(
-    region: ContentRegion, ctx: LoadContext, *, precomputed: OcrResult | None = None
+    region: ContentRegion,
+    ctx: LoadContext,
+    *,
+    precomputed: OcrResult | None = None,
+    image: Image.Image | None = None,
 ) -> list[Element]:
     if not region.blob:
         return []
 
-    try:
-        image = open_image(region.blob)
-    except OSError:
-        ctx.warn("이미지를 열 수 없어 건너뛰었습니다.")
-        return []
+    if image is None:
+        try:
+            image = open_image(region.blob)
+        except OSError:
+            ctx.warn("이미지를 열 수 없어 건너뛰었습니다.")
+            return []
 
     # 판정용 지표는 재사용하되, 최종 텍스트는 띄어쓰기가 살아있는 쪽으로 다시 뽑는다
     metrics = precomputed if precomputed is not None else run_ocr(image, ctx.config, ctx=ctx)
