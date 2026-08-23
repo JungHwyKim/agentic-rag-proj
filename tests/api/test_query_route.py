@@ -19,7 +19,10 @@ from rag_pipeline.schemas.answer import Answer
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
-# list_documents 와 search 만 가진 가짜 저장소
+# list_documents 와 열거만 가진 가짜 저장소.
+# **iter_chunks() 는 Protocol 에 있어 빼면 안 된다** — 질의 라우트가 첫 질의에 BM25 를 지으며
+# 이걸 부르고, 없으면 AttributeError 가 그대로 500 이 된다. list_documents 와 달리
+# 이쪽은 계약이라 관대하게 넘어가지 않는다 (rag_pipeline/ingestion/indexing/base.py)
 class FakeStore:
     def __init__(self, documents=None, error: Exception | None = None) -> None:
         self._documents = documents or []
@@ -31,12 +34,19 @@ class FakeStore:
             raise self._error
         return self._documents
 
+    def iter_chunks(self):  # noqa: ANN201 - Iterator[StoredChunk]. 여기서는 늘 비어 있다
+        return iter(())
+
     def close(self) -> None:
         self.closed = True
 
 
-# list_documents 가 아예 없는 저장소. Protocol 만 지키는 두 번째 구현체를 흉내낸다
+# list_documents 가 아예 없는 저장소. Protocol 만 지키는 두 번째 구현체를 흉내낸다 —
+# 그래서 Protocol 에 있는 iter_chunks() 는 있고 없는 list_documents() 만 없다
 class ProtocolOnlyStore:
+    def iter_chunks(self):  # noqa: ANN201 - Iterator[StoredChunk]
+        return iter(())
+
     def close(self) -> None:
         pass
 

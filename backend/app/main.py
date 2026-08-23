@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ingest_config = config
     app.state.store = get_store(config.indexing, config.embedding)
     app.state.embedder = None  # 첫 질의에 만든다 — 키가 없어도 서버는 떠야 한다
+    # BM25 도 첫 질의에 짓는다. 여기서 지으면 색인이 아직 없을 때 저장소를 헛되이 열고,
+    # 무엇보다 store 의 게으름을 깨는 것이 위 주석이 피하려는 바로 그 일이다
+    app.state.bm25 = None
     try:
         yield
     finally:

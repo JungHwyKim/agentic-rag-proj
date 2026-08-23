@@ -15,6 +15,17 @@
 `get_embedder()` 는 키가 없으면 **그 자리에서 예외**다(embedding 의 실패 계약). startup 에서
 만들면 키 없는 개발 환경에서 **서버가 아예 안 뜬다** — 화면도 문서 목록도 못 본다.
 첫 질의까지 미루면 그때 503 과 한국어 메시지로 떨어진다.
+
+## BM25 인덱스도 같은 패턴이다
+
+`build_bm25_index()` 는 저장소를 전량 훑는다. startup 에서 지으면 **색인이 아직 없는 상태**
+에서 저장소를 여는 셈이라 `lifespan` 이 일부러 지킨 게으름이 깨진다. 첫 질의에 지어
+`app.state` 에 두면 그 뒤로는 공짜다.
+
+**딸린 감수 사항**: 서버가 사는 동안 색인이 바뀌면 이 인덱스가 낡는다. 지금은 문제가 아니다 —
+backend 가 `index_document()` 를 안 불러(위 `main.py` 주석의 잠금 제약) 컬렉션이 안 바뀐다.
+그 미결이 닫혀 backend 가 색인하게 되면 **그때 무효화가 함께 필요하다**
+(`plan_log/검색-생성.md` 2회차 미결).
 """
 
 from __future__ import annotations
@@ -26,6 +37,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
+from rag_pipeline.retrieval import build_bm25_index
 
 router = APIRouter(tags=["query"])
 
@@ -38,6 +50,17 @@ def _embedder(request: Request):  # noqa: ANN202 - Embedder Protocol 은 런타�
         embedder = get_embedder(config.embedding)
         request.app.state.embedder = embedder
     return embedder
+
+
+# 앱 수명 동안 하나뿐인 BM25 인덱스를 얻는다. 없으면 이때 짓는다 (모듈 docstring 참고).
+# **예외를 안 던진다** — build_bm25_index() 가 실패를 빈 인덱스 + 경고로 바꿔 주므로,
+# 색인 전이라도 질의는 dense 로 돈다
+def _bm25(request: Request):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처에 노출하지 않는다
+    index = getattr(request.app.state, "bm25", None)
+    if index is None:
+        index = build_bm25_index(request.app.state.store)
+        request.app.state.bm25 = index
+    return index
 
 
 # 질문 하나를 받아 답변 말풍선 조각을 돌려준다
@@ -56,6 +79,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         store=request.app.state.store,
         embedder=_embedder(request),
         config=request.app.state.ingest_config,
+        bm25=await run_in_threadpool(_bm25, request),
     )
     return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
 

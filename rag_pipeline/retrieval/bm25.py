@@ -26,6 +26,17 @@ qdrant 의 sparse 벡터로 얹으면 `VectorStore` Protocol 과 컬렉션 스�
 `warnings` 를 읽어 무슨 일이 있었는지 알 수 있다 — `Embedder.usage` 를 밖에서 읽는 것과
 같은 모양이고, 그래서 `retrieve()` 의 반환 계약을 안 바꿔도 된다.
 
+## 후보 판정을 점수 부호로 하면 안 된다
+
+*"점수가 0 이면 안 겹친 것"* 이 그럴듯해 보이지만 **틀렸다.** BM25 의 IDF 는 낱말이 흔할수록
+작아지고, `rank_bm25` 의 BM25Okapi 는 문서 절반에 나오는 낱말에 **0 을 준다**(실측: 문서 2개
+코퍼스에서 한쪽에만 있는 낱말의 IDF 가 정확히 0 이라, 낱말이 겹치는 청크가 통째로 버려졌다).
+코퍼스가 커도 흔한 낱말에서 같은 일이 난다.
+
+그래서 **낱말이 겹치는가**를 직접 본다. 점수는 순위를 매기는 값이지 후보인지 아닌지를
+가르는 값이 아니다 — `row.cells[j] is None` 하나로 두 가지를 판정하려다 갈렸던 것과
+같은 종류의 혼동이다(CLAUDE.md).
+
 ## 왜 `k1`·`b` 를 설정으로 안 여나
 
 `rank_bm25` 기본값(1.5 / 0.75)을 쓴다. 이 코퍼스에서 무엇이 나은지 잰 적이 없어 지금
@@ -51,12 +62,15 @@ class Bm25Index:
     def __init__(self, chunks: list[StoredChunk], warnings: list[str] | None = None) -> None:
         self.warnings: list[str] = list(warnings or [])
         self._chunks: list[StoredChunk] = []
+        # 후보 판정에 쓴다. 점수로는 못 가른다 (모듈 docstring 참고)
+        self._token_sets: list[set[str]] = []
         corpus: list[list[str]] = []
         for chunk in chunks:
             tokens = tokenize(chunk.text)
             if not tokens:
                 continue
             self._chunks.append(chunk)
+            self._token_sets.append(set(tokens))
             corpus.append(tokens)
         # 빈 코퍼스로 BM25Okapi 를 만들면 평균 길이가 0 이라 점수 계산에서 죽는다
         self._bm25 = BM25Okapi(corpus) if corpus else None
@@ -65,8 +79,9 @@ class Bm25Index:
     def __len__(self) -> int:
         return len(self._chunks)
 
-    # 질의와 맞는 청크를 점수 높은 순으로 top_k 개. **점수 0 은 후보가 아니다** —
-    # 겹치는 낱말이 하나도 없다는 뜻이라, 넣으면 RRF 가 임의의 순서를 순위로 대접한다
+    # 질의와 낱말이 겹치는 청크를 점수 높은 순으로 top_k 개.
+    # **후보 판정은 낱말 겹침이고 점수가 아니다** (모듈 docstring 참고) —
+    # 안 겹치는 것까지 넣으면 RRF 가 임의의 순서를 순위로 대접한다
     def search(self, query: str, top_k: int) -> list[tuple[StoredChunk, float]]:
         if self._bm25 is None or top_k <= 0:
             return []
@@ -74,13 +89,15 @@ class Bm25Index:
         if not tokens:
             return []
 
+        wanted = set(tokens)
         scores = self._bm25.get_scores(tokens)
-        ranked = sorted(
-            ((chunk, float(score)) for chunk, score in zip(self._chunks, scores, strict=True)),
-            key=lambda pair: pair[1],
-            reverse=True,
-        )
-        return [pair for pair in ranked[:top_k] if pair[1] > 0.0]
+        matched = [
+            (chunk, float(score))
+            for chunk, score, seen in zip(self._chunks, scores, self._token_sets, strict=True)
+            if wanted & seen
+        ]
+        matched.sort(key=lambda pair: pair[1], reverse=True)
+        return matched[:top_k]
 
 
 # 저장소를 한 번 훑어 인덱스를 짓는다. **수명은 부르는 쪽이 정한다** —

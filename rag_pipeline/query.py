@@ -18,10 +18,19 @@ backend 는 startup 에 하나 열어 앱 수명 내내 들고 있고, 스크립
 **여기서 열지 않는 것이 곧 계약이다.** 편의로 기본값을 만들어 두면(없으면 열어준다) 그
 경로를 밟은 두 번째 호출이 잠금 오류로 죽는데, 원인이 이 함수에 안 보인다.
 
+## `bm25` 도 같은 이유로 인자다
+
+BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **질의마다 다시 훑는다.**
+`store`·`embedder` 와 나란히 두어 수명을 부르는 쪽이 정하게 한다 — backend 는 첫 질의에
+지어 들고 있고, 평가 러너는 실행마다 새로 짓는다.
+
+`None` 이면 dense 한 갈래로 돈다(`retrieval/hybrid.py` 가 그 동등성을 계약으로 박아 뒀다).
+그래서 이 인자를 더해도 **기존 호출은 한 줄도 안 바뀐다.**
+
 ## 여기서 안 하는 것
 
-Evaluator·Rewriter 재검색 루프 · semantic cache · hybrid · reranker. 전부
-`plan_log/검색-생성.md` 의 Phase 4~5 와 마지막 단계이고, 붙는 자리는 `retrieve()` 와
+Evaluator·Rewriter 재검색 루프 · semantic cache · reranker. 전부
+`plan_log/검색-생성.md` 의 Phase 3~5 와 마지막 단계이고, 붙는 자리는 `retrieve()` 와
 `generate_answer()` 사이다.
 """
 
@@ -31,7 +40,7 @@ from rag_pipeline.config import IngestConfig
 from rag_pipeline.generation import generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
-from rag_pipeline.retrieval import retrieve
+from rag_pipeline.retrieval import Bm25Index, retrieve
 from rag_pipeline.schemas.answer import Answer
 
 __all__ = ["answer_question"]
@@ -45,10 +54,18 @@ def answer_question(
     embedder: Embedder,
     config: IngestConfig | None = None,
     top_k: int | None = None,
+    bm25: Bm25Index | None = None,
 ) -> Answer:
     cfg = config or IngestConfig()
     limit = top_k if top_k is not None else cfg.generation.generation_top_k
 
-    chunks = retrieve(query, store=store, embedder=embedder, top_k=limit)
+    chunks = retrieve(
+        query,
+        store=store,
+        embedder=embedder,
+        top_k=limit,
+        bm25=bm25,
+        config=cfg.retrieval,
+    )
     text = generate_answer(query, chunks, cfg.generation)
     return Answer(query=query, text=text, sources=chunks)
