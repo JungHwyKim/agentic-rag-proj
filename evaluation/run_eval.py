@@ -127,6 +127,7 @@ def run_dense(
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
+    from rag_pipeline.retrieval import retrieve
 
     qa = load_qa_set()
     if not qa.items:
@@ -170,8 +171,9 @@ def run_dense(
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
         for item in items:
-            vector = embedder.embed_query(item.query)
-            texts = [hit.text for hit in store.search(vector, top_k=k)]
+            # **top_k=k 를 반드시 넘긴다.** retrieve() 의 기본값 5 가 실리면 by_axis[10]·
+            # [20] 만 후보 부족으로 조용히 낮아져 검색 품질이 나빠진 것처럼 보인다
+            texts = [hit.text for hit in retrieve(item.query, store=store, embedder=embedder, top_k=k)]
             for axis in axes:
                 by_axis[axis].append(score_query(item.query_id, texts, item.gold_spans, axis))
     finally:
