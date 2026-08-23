@@ -222,7 +222,9 @@ plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라�
 
 여기에 현재 상태를 적지 않는다. 적는 순간 낡기 때문이다. 각각의 출처는 이렇다.
 
-- **구현된 단계** — `rag_pipeline/ingestion/` 아래 디렉터리가 전부다
+- **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다 (`ingestion/` · `retrieval/` · `generation/`)
+- **품질을 무엇으로 재나** — **검색**은 `evaluation/README.md`(정답 질의 세트와 러너),
+  **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
 - **어떻게 여기까지 왔나** — `task_log/INDEX.md`
 - **아직 논의 중인 설계** — `plan_log/INDEX.md`

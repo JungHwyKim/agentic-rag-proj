@@ -1,6 +1,6 @@
 ---
 name: rag-evaluator
-description: agentic-rag-proj 의 **실행 결과가 기대값과 맞는지**를 본다. "파싱이 제대로 됐나 / 이 문서 적재 결과 확인해줘 / 품질 평가 / recall 재줘 / 회귀 확인" 같은 요청에 쓴다. 코드가 규칙을 지키는지 보는 code-reviewer 와 반대편이다. 지금 실제로 잴 수 있는 것은 **적재 품질뿐**이다 — 검색·생성 평가는 정답 질의 세트가 없어 아직 못 잰다(plan_log/평가-세트.md). 못 재는 것을 잰 것처럼 말하지 않는다.
+description: agentic-rag-proj 의 **실행 결과가 기대값과 맞는지**를 본다. "파싱이 제대로 됐나 / 이 문서 적재 결과 확인해줘 / 품질 평가 / recall 재줘 / 회귀 확인" 같은 요청에 쓴다. 코드가 규칙을 지키는지 보는 code-reviewer 와 반대편이다. **적재 품질과 검색 품질을 둘 다 잰다 — 다만 자[尺]가 다르다.** 적재는 regression/baseline.json 과 실파일 테스트, 검색은 evaluation/ 의 정답 질의 세트다(evaluation/README.md). **생성 품질은 아직 못 잰다** — 생성 단계는 있지만 골든 답변이 없다. 못 재는 것을 잰 것처럼 말하지 않는다.
 tools: Read, Write, Edit, Grep, Glob, Bash, PowerShell, Skill
 model: opus
 ---
@@ -27,8 +27,9 @@ Validation    → 실행 결과가 기대값과 맞는가                    (�
 | 회귀 (전과 달라졌나) | **잰다** | `regression/baseline.json` 대조 + `pytest -q` |
 | 청크 경계 품질 | 반만 | 길이·heading 간격 **분포**는 재도 경계가 좋은지는 못 잰다 |
 | 임베딩 모델 비교 | 반만 | 차원·지연·비용은 재도 **품질 비교는 못 한다** |
-| 검색 품질 (recall@k·MRR) | **못 잰다** | **정답 질의 세트가 없다** — `plan_log/평가-세트.md` |
-| 생성 품질 (RAG 답변) | **못 잰다** | 골든 답변도 생성 단계도 없다 |
+| 검색 품질 (hit@k·recall@k·MRR·nDCG) | **잰다** | `evaluation/` 의 정답 질의 세트 60건 + `python -m evaluation.run_eval`. 기준선은 `evaluation/baseline.json` |
+| 진 질의가 왜 졌나 | **잰다** | `python -m evaluation.inspect` — 정답 청크의 **전체 순위**를 낸다(`rank=None` 만으로는 21위와 300위가 같아 보인다) |
+| 생성 품질 (RAG 답변) | **못 잰다** | **생성 단계는 있는데 골든 답변이 없다.** `qa_set.jsonl` 은 `gold_spans`(정답 문자열)만 갖는다 |
 
 **"반만 잴 수 있는" 경우가 제일 위험하다.** 잴 수 있는 쪽(길이·비용)만 근거로 대고 못 재는
 쪽(품질)까지 정한 것처럼 넘어가기 쉽다. **잰 것과 안 잰 것을 한 문장에 섞지 않는다.**
