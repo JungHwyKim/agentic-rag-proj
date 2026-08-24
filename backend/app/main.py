@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -91,14 +90,8 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
+    # CORS 미들웨어는 없다. 화면을 이 앱이 직접 서빙하므로 브라우저가 교차 출처 요청을
+    # 아예 안 낸다 — 되살릴 조건은 plan_log/backend.md "안 하기로 한 것" 에 있다
     app.include_router(documents.router, prefix=settings.api_prefix)
     app.include_router(query.router, prefix=settings.api_prefix)
     # 화면 라우터에는 api_prefix 를 안 붙인다 — 사람이 여는 주소이지 API 가 아니다

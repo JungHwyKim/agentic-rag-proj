@@ -19,8 +19,6 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     # 업로드 크기 상한. 스트리밍 중 누적 검사로 메모리 폭발을 막는다
     max_upload_size_mb: int = 50
-    # 프론트엔드 개발 서버에서 호출할 수 있도록 허용할 오리진
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
     # 바이트 단위 업로드 상한
     @property

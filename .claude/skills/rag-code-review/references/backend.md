@@ -38,7 +38,7 @@
 
 | 파일 | 담당 |
 |---|---|
-| `backend/app/core/config.py` | 웹 (업로드 상한, CORS 등) |
+| `backend/app/core/config.py` | 웹 (앱 이름, `api_prefix`, 업로드 상한) |
 | `rag_pipeline/config.py` | 파싱 (핸들러 선택, API 키, 비용 상한) |
 
 둘 다 `PROJECT_ROOT/.env` 를 읽는다. 파싱 설정이 backend 쪽으로 넘어오면 `ingest()` 를
