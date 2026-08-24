@@ -4,12 +4,21 @@
 {% endif %}
 
 {% if answer %}
-  {# 정적 표시 둘. Semantic Cache(Phase 마지막)와 Rewriter 루프(Phase 4~5)가 붙을 자리를
-     화면에서 잃지 않으려고 모양만 남긴다 — 지금은 아무것도 판정하지 않는다 #}
-  <div class="badge-row is-placeholder" title="준비 중인 기능입니다">
-    <span class="badge">3일 전 비슷한 질문에 답변한 적 있어요 —</span>
-    <span class="badge-link">이전 답변 보기 &gt;</span>
-  </div>
+  {# 캐시에서 온 답일 때만 그린다. **cached_from 하나가 판정의 전부다** —
+     boolean 과 시각을 따로 두면 "캐시인데 시각이 없는" 조합을 여기서 방어해야 한다
+     (schemas/answer.py). 없으면 줄 자체를 안 그린다 — 빈 배지가 남으면 사용자는
+     캐시가 켜져 있다고 읽는다.
+
+     **원 질문을 그대로 보여주는 것이 이 배지의 요점이다.** 임계값이 살짝 헐거워도
+     오답이 아니라 사용자가 알아볼 수 있는 오류가 된다. 긴 질문은 CSS 가 자르므로
+     원본은 title 에 담는다 — 출처 태그의 파일명이 쓰는 규칙과 같다 #}
+  {% if answer.cached_from %}
+    <div class="badge-row" title="{{ answer.cached_from.query }}">
+      <span class="badge">{{ answer.cached_from.created_at | relative_time }} 물어보신 &ldquo;{{ answer.cached_from.query }}&rdquo; 의 답변입니다</span>
+      <span class="badge-link" title="유사도 {{ '%.3f' | format(answer.cached_from.score) }}">유사 질문 &gt;</span>
+    </div>
+  {% endif %}
+  {# Rewriter 루프(Phase 4~5)가 붙을 자리. 모양만 남긴다 — 지금은 아무것도 판정하지 않는다 #}
   <div class="rewrite-row is-placeholder" title="준비 중인 기능입니다">
     <span class="dots"><i></i><i></i><i></i></span>
     <span>관련 조항 재검색 중 (1 / 3)</span>

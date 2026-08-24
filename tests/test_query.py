@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from rag_pipeline import query as query_module
 from rag_pipeline.config import GenerationConfig, IngestConfig
 from rag_pipeline.query import answer_question
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, CacheOrigin
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -94,3 +95,68 @@ def test_store_and_embedder_are_passed_through(mocker, config):
 
     assert retrieve.call_args.kwargs["store"] is store
     assert retrieve.call_args.kwargs["embedder"] is embedder
+
+
+# --- 답변 캐시 ----------------------------------------------------------------
+
+
+# 캐시 자리. lookup 이 무엇을 돌려줄지만 정하면 된다
+class _FakeCache:
+    def __init__(self, hit: Answer | None = None) -> None:
+        self._hit = hit
+        self.put_calls: list[Answer] = []
+
+    def lookup(self, query: str, *, embedder: object) -> Answer | None:
+        return self._hit
+
+    def put(self, answer: Answer, *, embedder: object) -> bool:
+        self.put_calls.append(answer)
+        return True
+
+
+# **캐시를 안 넘기면 기존 경로가 한 줄도 안 바뀐다.** 안 넘기는 것이 곧 끄는 스위치라
+# 이 성질이 깨지면 설정 없이 끄는 방법이 사라진다
+def test_without_cache_the_path_is_unchanged(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert retrieve.call_count == 1
+    assert generate.call_count == 1
+    assert answer.cached_from is None
+
+
+# 히트하면 **검색도 생성도 안 돈다.** 이것이 이 기능의 절약 전부다 —
+# retrieve() 뒤에 두면 아끼는 것이 LLM 호출 하나뿐이다
+def test_cache_hit_skips_retrieval_and_generation(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(
+        query="옛 질문",
+        text="옛 답변",
+        sources=[_chunk()],
+        cached_from=CacheOrigin(query="옛 질문", created_at=datetime.now(UTC), score=0.97),
+    )
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=_FakeCache(cached)
+    )
+
+    assert answer.text == "옛 답변"
+    assert retrieve.call_count == 0
+    assert generate.call_count == 0
+
+
+# 미스면 평소대로 돌고, 만든 답을 캐시에 넣는다
+def test_cache_miss_runs_normally_and_stores(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    cache = _FakeCache(hit=None)
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=cache
+    )
+
+    assert answer.text == "답변"
+    assert cache.put_calls == [answer]

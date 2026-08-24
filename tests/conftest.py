@@ -19,6 +19,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from rag_pipeline.config import (
+    AnswerCacheConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
     GenerationConfig,
@@ -84,6 +85,14 @@ def offline_config(tmp_path: Path) -> IngestConfig:
         config,
         "_generation",
         GenerationConfig(openai_api_key=None),
+    )
+    # 답변 캐시도 같은 이유로 덮어쓴다. **기본값이 이미 꺼짐(threshold=None)인데도 덮는
+    # 이유**는 AnswerCacheConfig() 가 .env 를 직접 읽어서다 — 개발자가 .env 에 임계값을
+    # 넣어 두면 그 값이 픽스처에 실려 테스트가 사람마다 다르게 돈다
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_threshold=None),
     )
     return config
 

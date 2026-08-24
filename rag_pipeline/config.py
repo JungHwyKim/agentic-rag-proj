@@ -252,6 +252,28 @@ class GenerationConfig(BaseSettings):
     generation_top_k: int = 5
 
 
+# 비슷한 질문에 이전 답변을 되돌려줄 때 쓰는 설정. **과금을 줄이는 쪽이라 켜는 것이 비용이
+# 아니라 틀리는 것이 비용이다** — 임계값이 헐거우면 다른 질문에 옛 답을 준다
+class AnswerCacheConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 캐시 컬렉션 이름의 앞부분. 실제 이름은 IndexingConfig.collection_name 과 **같은 함수**
+    # (qdrant_store.collection_name_for)로 파생해 모델·차원이 뒤에 붙는다. 고정 이름을 쓰면
+    # 임베딩 모델을 바꿨을 때 옛 모델 벡터가 든 캐시에 새 모델 질의 벡터로 유사도를 재게 된다
+    answer_cache_collection_name: str = "qa_cache"
+
+    # 이 값 이상이면 "같은 질문"으로 본다. **기본값이 없는 것이 설계다.**
+    # None 이면 get_answer_cache() 가 None 을 돌려줘 캐시가 통째로 꺼진다 — 이 저장소의
+    # 임계값은 전부 분포의 틈에서 나왔는데(표 되붙이기 12pt, 표시 면적비 0.08 vs 1.00)
+    # 이 축은 아직 안 쟀다. 근거 없는 수를 기본값으로 두면 그 사실이 조용히 묻힌다.
+    # 재는 방법은 plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
+    answer_cache_threshold: float | None = None
+
+
 # 적재 파이프라인 전체 설정
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -322,6 +344,16 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_generation"):
             object.__setattr__(self, "_generation", GenerationConfig())
         return self._generation  # type: ignore[attr-defined]
+
+
+    # 답변 캐시 설정. 같은 lazy 형태라 테스트에서 _answer_cache 로 덮어쓸 수 있다.
+    # **generation 과 같은 이유로 lazy 여야 한다** — AnswerCacheConfig() 가 .env 를 직접
+    # 읽으므로, 안 덮으면 개발자 머신의 임계값이 픽스처에 실려 테스트가 사람마다 달라진다
+    @property
+    def answer_cache(self) -> AnswerCacheConfig:
+        if not hasattr(self, "_answer_cache"):
+            object.__setattr__(self, "_answer_cache", AnswerCacheConfig())
+        return self._answer_cache  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

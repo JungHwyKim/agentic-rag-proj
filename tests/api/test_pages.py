@@ -79,17 +79,29 @@ def test_history_is_placeholder(client: TestClient):
     assert "저장은 아직 준비 중입니다" in body
 
 
-# 재검색 표시와 유사질문 배지는 화면에 있되 아무것도 판정하지 않는다 —
-# Phase 4~5 와 마지막 단계가 붙을 자리다. 답변 조각 쪽에 산다
-def test_placeholders_marked_in_answer_fragment():
+# 재검색 표시는 화면에 있되 아무것도 판정하지 않는다 — Phase 4~5 가 붙을 자리다.
+# **유사질문 배지는 여기서 빠졌다** — 답변 캐시가 실제로 붙어 placeholder 가 아니게 됐다
+def test_rewrite_row_still_placeholder_in_answer_fragment():
     from backend.app.core.templates import TEMPLATES_DIR
 
     fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
 
     assert "재검색 중" in fragment
-    assert "비슷한 질문에 답변한 적 있어요" in fragment
     # 흐리게 + 클릭 불가로 표시해야 진짜 기능으로 오인되지 않는다
     assert "is-placeholder" in fragment
+
+
+# 캐시 배지는 **cached_from 이 있을 때만** 그린다. 조건 없이 그리면 캐시가 꺼져 있어도
+# 배지가 남아, 사용자가 "이전 답변"으로 읽는다
+def test_cache_badge_is_conditional_in_answer_fragment():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
+
+    assert "{% if answer.cached_from %}" in fragment
+    # 배지가 placeholder 흐림을 물려받으면 진짜 값인데도 클릭이 막힌다
+    badge = fragment.split("{% if answer.cached_from %}", 1)[1].split("{% endif %}", 1)[0]
+    assert "is-placeholder" not in badge
 
 
 # 문서 수 문구가 들어갈 자리가 사이드바 **맨 아래**에 있어야 한다. 자리가 없으면

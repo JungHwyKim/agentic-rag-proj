@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes import documents, pages, query
 from backend.app.core.config import get_settings
+from rag_pipeline.answer_cache import get_answer_cache
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.exceptions import (
     CorruptedFileError,
@@ -74,6 +75,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # BM25 도 첫 질의에 짓는다. 여기서 지으면 색인이 아직 없을 때 저장소를 헛되이 열고,
     # 무엇보다 store 의 게으름을 깨는 것이 위 주석이 피하려는 바로 그 일이다
     app.state.bm25 = None
+    # 답변 캐시. **임계값이 없으면 None 이고 그것이 곧 꺼진 상태다** (answer_cache/__init__.py).
+    # 여기서 만들어도 store 를 참조만 하므로 위 게으름이 안 깨진다 — 클라이언트는 첫 질의에
+    # 열린다. 닫을 것도 여전히 store 하나뿐이라 finally 가 안 늘어난다
+    app.state.answer_cache = get_answer_cache(app.state.store, config)
     try:
         yield
     finally:

@@ -16,6 +16,12 @@
 만들면 키 없는 개발 환경에서 **서버가 아예 안 뜬다** — 화면도 문서 목록도 못 본다.
 첫 질의까지 미루면 그때 503 과 한국어 메시지로 떨어진다.
 
+## 답변 캐시는 왜 startup 에서 만드나
+
+`get_answer_cache()` 는 `store` 를 **참조만 하고 클라이언트를 안 당긴다.** 그래서 embedder·
+BM25 와 달리 게으름을 깨지 않는다. 임계값이 없으면 `None` 이 돌아와 캐시 없이 도는데,
+그 판정은 설정 하나를 읽는 일이라 첫 질의까지 미룰 이유가 없다.
+
 ## BM25 인덱스도 같은 패턴이다
 
 `build_bm25_index()` 는 저장소를 전량 훑는다. startup 에서 지으면 **색인이 아직 없는 상태**
@@ -80,6 +86,11 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         embedder=_embedder(request),
         config=request.app.state.ingest_config,
         bm25=await run_in_threadpool(_bm25, request),
+        # 임계값이 없으면 None 이라 캐시 없이 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **getattr 인 것은 lifespan 을 안 거치고 app 을 세우는 호출부가 있어서**다 —
+        # 그때 여기서 죽으면 캐시가 없다는 이유로 질의 전체가 죽는다
+        cache=getattr(request.app.state, "answer_cache", None),
     )
     return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
 

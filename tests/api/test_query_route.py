@@ -7,6 +7,7 @@ store 는 가짜를 app.state 에 직접 꽂는다. TestClient 를 `with` 없이
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import create_app
 from rag_pipeline.config import GenerationConfig, IngestConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, CacheOrigin
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -333,3 +334,44 @@ def test_existing_routes_survive():
 @pytest.mark.parametrize("path", ["/api/v1/", "/api/v1"])
 def test_page_is_not_under_api_prefix(path: str):
     assert _client().get(path).status_code == 404
+
+
+# --- 캐시 배지 ----------------------------------------------------------------
+
+
+# 캐시에서 온 답이면 배지에 **원 질문**이 그대로 실린다. 임계값이 살짝 헐거워도
+# 오답이 아니라 사용자가 알아볼 수 있는 오류가 되는 것이 이 표시의 목적이다
+def test_cached_answer_renders_badge_with_original_question(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="유예기간 언제까지죠?",
+            text="6개월입니다.",
+            sources=[_chunk()],
+            cached_from=CacheOrigin(
+                query="유예기간이 언제까지인가요?",
+                created_at=datetime.now(UTC) - timedelta(days=3),
+                score=0.964,
+            ),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "유예기간 언제까지죠?"}).text
+
+    assert "유예기간이 언제까지인가요?" in body
+    assert "3일 전" in body
+    # 진짜 값인데 흐림·클릭 불가를 물려받으면 안 된다
+    badge = body.split("badge-row", 1)[1].split("</div>", 1)[0]
+    assert "is-placeholder" not in badge
+
+
+# 캐시가 아니면 배지 줄 자체가 없다. 빈 배지가 남으면 사용자는 캐시가 켜져 있다고 읽는다
+def test_fresh_answer_has_no_cache_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[_chunk()]),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "badge-row" not in body

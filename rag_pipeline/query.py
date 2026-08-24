@@ -27,15 +27,28 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 `None` 이면 dense 한 갈래로 돈다(`retrieval/hybrid.py` 가 그 동등성을 계약으로 박아 뒀다).
 그래서 이 인자를 더해도 **기존 호출은 한 줄도 안 바뀐다.**
 
+## `cache` 도 같은 모양이다
+
+답변 캐시 역시 인자이고 `None` 이면 캐시 없이 돈다 — `bm25` 와 같은 이유이자 같은 스위치다.
+
+**붙는 자리는 `retrieve()` 앞이다.** 이 docstring 이 한동안 *"`retrieve()` 와
+`generate_answer()` 사이"* 라고 적어 뒀는데 틀렸다. 거기 두면 검색은 이미 돌아버려 아끼는
+것이 LLM 호출 하나뿐이다. 앞에 두면 검색·생성이 통째로 빠진다.
+
+미스일 때 질의 임베딩이 두 번 일어난다(캐시 조회 + `search_dense`). 그대로 두는 이유는
+`_embed_all()` 이 `ResultCache` 를 거쳐 **같은 문자열이면 API 를 다시 안 타서**다. 그것
+하나 때문에 `retrieve()`·`hybrid`·`search_dense` 셋의 시그니처를 넓히면, 벡터를 넘기는
+경로와 안 넘기는 경로가 갈려 어느 쪽이 실제로 돌았는지 호출부마다 달라진다.
+
 ## 여기서 안 하는 것
 
-Evaluator·Rewriter 재검색 루프 · semantic cache · reranker. 전부
-`plan_log/검색-생성.md` 의 Phase 3~5 와 마지막 단계이고, 붙는 자리는 `retrieve()` 와
-`generate_answer()` 사이다.
+Evaluator·Rewriter 재검색 루프 · reranker. 둘 다 `plan_log/검색-생성.md` 의 Phase 3~5 이고,
+붙는 자리는 `retrieve()` 와 `generate_answer()` 사이다.
 """
 
 from __future__ import annotations
 
+from rag_pipeline.answer_cache import QdrantAnswerCache
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.generation import generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
@@ -55,9 +68,16 @@ def answer_question(
     config: IngestConfig | None = None,
     top_k: int | None = None,
     bm25: Bm25Index | None = None,
+    cache: QdrantAnswerCache | None = None,
 ) -> Answer:
     cfg = config or IngestConfig()
     limit = top_k if top_k is not None else cfg.generation.generation_top_k
+
+    # 캐시가 먼저다. 히트하면 검색도 생성도 안 돈다 (모듈 docstring 참고)
+    if cache is not None:
+        cached = cache.lookup(query, embedder=embedder)
+        if cached is not None:
+            return cached
 
     chunks = retrieve(
         query,
@@ -68,4 +88,9 @@ def answer_question(
         config=cfg.retrieval,
     )
     text = generate_answer(query, chunks, cfg.generation)
-    return Answer(query=query, text=text, sources=chunks)
+    answer = Answer(query=query, text=text, sources=chunks)
+
+    # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
+    if cache is not None:
+        cache.put(answer, embedder=embedder)
+    return answer

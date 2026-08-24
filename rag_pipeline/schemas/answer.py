@@ -12,6 +12,17 @@
 **검색 내부의 이야기**이고 여기는 축이 다르다 — `Answer` 는 라우트와 템플릿이 렌더하는
 **공개 계약**이라, BM25 가 붙는 날 원소 타입이 바뀌면 그 둘을 함께 고쳐야 한다.
 
+## 왜 `cached_from` 이 필드 하나인가
+
+캐시가 답을 되돌려줄 때 화면은 셋을 함께 쓴다 — **원 질문**(사용자가 뜻이 같은지 직접
+판단한다) · **시각**("3일 전") · **점수**(임계값이 어디쯤에서 걸렸나). 이것을
+`cached: bool` + `cached_query` + `cached_at` 처럼 나란한 필드로 쪼개면 *`cached=True` 인데
+`cached_at` 이 없는* 못 쓰는 조합이 생기고, 그 조합을 템플릿이 매번 방어해야 한다.
+
+한 덩어리를 `None` 로 두면 **"캐시가 아니다"가 한 곳에서만 판정된다.** 이 저장소가 두 번
+같은 선택을 했다 — `RetrievedChunk` 의 경로별 점수를 `float | None` 로 둔 것,
+`StoredChunk` 와 `SearchResult` 를 가른 것. 둘 다 *"0.0 과 없음은 다르다"* 였다.
+
 ## 왜 `sources` 가 비어 있을 수 있나
 
 **근거를 못 찾은 것은 실패가 아니다.** 관련 청크가 없으면 생성 쪽은 "문서에서 찾지
@@ -22,11 +33,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["Answer"]
+__all__ = ["Answer", "CacheOrigin"]
+
+
+# 이 답변이 캐시에서 왔을 때 그 출처. **셋이 늘 함께 있거나 통째로 없다** (모듈 docstring 참고)
+class CacheOrigin(BaseModel):
+    # 캐시에 저장될 때의 원래 질문. 지금 질문과 다르다 — 그 다름을 사람이 보고 판단한다
+    query: str
+    created_at: datetime
+    # 지금 질문과 원 질문의 유사도. 임계값 판정에 쓴 그 값이다
+    score: float
 
 
 # 질문 하나에 대한 답변과 그 근거
@@ -35,3 +57,5 @@ class Answer(BaseModel):
     text: str
     # 답변이 근거로 삼은 청크들. **비어 있을 수 있다** (모듈 docstring 참고)
     sources: list[RetrievedChunk] = Field(default_factory=list)
+    # 캐시에서 왔으면 그 출처, 새로 만들었으면 None. **이것이 캐시 여부의 유일한 판정**이다
+    cached_from: CacheOrigin | None = None

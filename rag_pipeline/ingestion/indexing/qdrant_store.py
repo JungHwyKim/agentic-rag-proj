@@ -61,10 +61,20 @@ _DOCUMENT_ID_KEY = "document_id"
 _SCROLL_BATCH = 256
 
 
-# 설정 두 개에서 실제 컬렉션 이름을 파생한다. 모델이 바뀌면 다른 컬렉션이 된다
-def collection_name_for(indexing: IndexingConfig, embedding: EmbeddingConfig) -> str:
+# 설정 두 개에서 실제 컬렉션 이름을 파생한다. 모델이 바뀌면 다른 컬렉션이 된다.
+#
+# `prefix` 는 **네임스페이스일 뿐 벡터를 가르는 축이 아니다** — 같은 클라이언트가 보는 다른
+# 컬렉션(답변 캐시 등)이 모델·차원 파생을 **다시 구현하지 않고** 이 함수를 거치게 하려고
+# 열어 뒀다. 캐시가 자기 이름 규칙을 따로 지어내면, 모델을 갈아탄 뒤 옛 모델 벡터가 든
+# 캐시에 새 모델 질의 벡터로 유사도를 재는 사고가 난다 — 검색 품질만 조용히 나빠져 늦게 발각된다
+def collection_name_for(
+    indexing: IndexingConfig,
+    embedding: EmbeddingConfig,
+    *,
+    prefix: str | None = None,
+) -> str:
     dimensions = embedding.embedding_dimensions or "default"
-    raw = f"{indexing.collection_name}_{embedding.embedding_model}_{dimensions}"
+    raw = f"{prefix or indexing.collection_name}_{embedding.embedding_model}_{dimensions}"
     return _UNSAFE.sub("_", raw)
 
 
@@ -125,6 +135,19 @@ class QdrantStore:
     @property
     def collection(self) -> str:
         return self._collection
+
+    # 같은 저장 경로의 **다른 컬렉션**을 볼 소비자에게 클라이언트를 빌려준다.
+    #
+    # **두 번째 클라이언트를 만들면 안 되기 때문에 있는 것이다** — 로컬 파일 모드가 디렉터리에
+    # 배타 잠금을 걸어, get_store() 를 한 번 더 부르면 같은 프로세스 안에서 자기 자신과
+    # 충돌한다(backend 는 lifespan 에서 이미 하나 열어 들고 있다). 한 클라이언트가 여러
+    # 컬렉션을 보는 것은 qdrant 의 정상 사용이고, 닫을 것도 여전히 이 store 하나뿐이다.
+    #
+    # **게으름이 유지된다** — 여기서 새로 여는 것이 아니라 _qdrant 를 그대로 통과시키므로,
+    # 참조만 들고 안 쓰면 파일은 안 열린다. lifespan 이 지켜온 성질이다
+    @property
+    def client(self) -> Any:
+        return self._qdrant
 
     # 클라이언트를 처음 쓸 때 만든다. 파일 잠금 실패를 IndexingError 로 바꿔 올린다 —
     # 날것의 RuntimeError 는 backend 매핑표에 없어 500 이 된다
@@ -380,6 +403,34 @@ class QdrantStore:
                 yield _to_stored(point)
             if offset is None:
                 return
+
+    # point id 로 골라 온다. **찾은 것만 돌려주므로 길이가 입력보다 짧을 수 있다** —
+    # 그 차이가 곧 "그 사이 지워졌다"는 신호라, 없는 것을 빈 자리로 채우면 그 신호가 사라진다.
+    #
+    # **Protocol(base.py)에는 안 올린다** — list_documents() 와 같은 잣대이고, 소비자가
+    # retriever 가 아니라서다(그쪽은 *"VectorStore Protocol 만 받는다"* 가 확정이다).
+    # 벡터는 안 받는다. 이 메서드의 소비자는 텍스트만 본다
+    def fetch_by_ids(self, ids: list[str]) -> list[StoredChunk]:
+        if not ids:
+            return []
+
+        client = self._qdrant
+        try:
+            if not client.collection_exists(self._collection):
+                return []
+            points = client.retrieve(
+                collection_name=self._collection,
+                ids=list(ids),
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - 원인을 IndexingError로 바꿔 올린다
+            raise IndexingError(
+                f"청크를 id 로 읽지 못했습니다: {type(exc).__name__}: {exc}",
+                user_message="저장된 청크를 확인할 수 없습니다.",
+            ) from exc
+
+        return [_to_stored(point) for point in points]
 
     # 컬렉션에 든 point 수. 컬렉션이 없으면 0
     def count(self) -> int:
