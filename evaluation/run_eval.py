@@ -65,7 +65,12 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from evaluation.config import EVAL_SETTINGS, eval_config
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    EVAL_SETTINGS,
+    embedding_profile,
+    eval_config,
+)
 from evaluation.corpus import build_corpus
 from evaluation.documents import DOCUMENT_GROUPS, FIXTURES_DIR
 from evaluation.qa_set import load_qa_set, validate_items, validate_spans_across_formats
@@ -130,6 +135,7 @@ def run_dense(
     groups: list[str] | None = None,
     use_bm25: bool = False,
     qa_path: Path | None = None,
+    embedding: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
@@ -142,7 +148,9 @@ def run_dense(
 
     # **개발자 `.env` 가 아니라 고정 설정이다** (evaluation/config.py).
     # 실행마다 저장 경로를 가르는 것은 배타 잠금 때문이다 (모듈 docstring 참고)
-    config = eval_config(qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}")
+    config = eval_config(
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding
+    )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
     items = [item for item in qa.items if item.source_doc in wanted]
@@ -213,7 +221,12 @@ def run_dense(
         "report_k": report_k,
         # **`per_query` 는 `--k` 채점이다** (모듈 docstring 참고)
         "per_query_k": k,
-        "settings": EVAL_SETTINGS,
+        # **어느 임베딩 프로필로 쟀나.** 이름과 실제 값을 함께 남긴다 — 이름만 남기면
+        # 나중에 그 프로필의 내용이 바뀌었을 때 옛 결과가 무엇으로 쟀는지 알 수 없다
+        "embedding_profile": embedding,
+        # **`EVAL_SETTINGS` 를 그대로 실으면 안 된다** — 그 안의 `embedding` 은 기본
+        # 프로필이라, 다른 프로필로 돌린 실행이 자기가 안 쓴 모델을 기록하게 된다
+        "settings": {**EVAL_SETTINGS, "embedding": embedding_profile(embedding)},
         # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
         # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
         # dense 폴백이라, 안 남기면 "그냥 효과가 없었다"와 구분이 안 되기 때문이다
@@ -238,7 +251,14 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         "무엇인가": "dense 검색의 기준값. 이후 모든 검색 비교가 이 값과의 차이로 판정된다.",
         "재는 방법": (
             f"python -m evaluation.run_eval --dense --format {report['format']} "
-            f"--k {report['k']} --report-k {report['report_k']} --save-baseline"
+            f"--k {report['k']} --report-k {report['report_k']}"
+            + (
+                ""
+                if report.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+                == DEFAULT_EMBEDDING_PROFILE
+                else f" --embedding {report['embedding_profile']}"
+            )
+            + " --save-baseline"
         ),
         "설정": "settings 블록이 그 실행의 고정 설정이다 (evaluation/config.py).",
         "갱신 규칙": (
@@ -255,6 +275,7 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "label",
         "format",
+        "embedding_profile",
         "groups",
         "k",
         "report_k",
@@ -275,6 +296,18 @@ def compare_to_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> lis
         return [
             f"  (기준선은 '{baseline.get('format')}' 판이라 "
             f"'{report.get('format')}' 과 직접 비교하지 않습니다)"
+        ]
+
+    # **포맷과 같은 이유로 임베딩 프로필도 가른다.** 다른 모델로 잰 순위를 승·패로 세면
+    # 검색이 좋아진 것인지 모델이 다른 것인지 못 가른다 — 60건 요약과 45건 요약을 견주는
+    # 사고를 막는 그 가드와 같은 종류다. **프로필 축이 생기기 전의 기준선에는 이 키가 없고,
+    # 그때는 실제로 기본 프로필이었으므로** 없으면 기본으로 본다
+    old_profile = baseline.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+    new_profile = report.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+    if old_profile != new_profile:
+        return [
+            f"  (기준선은 '{old_profile}' 임베딩이라 "
+            f"'{new_profile}' 과 직접 비교하지 않습니다)"
         ]
 
     before = {row["query_id"]: row["rank"] for row in baseline.get("per_query", [])}
@@ -339,6 +372,14 @@ def main() -> int:
     parser.add_argument("--report-k", type=int, default=10, help="summary 의 주지표 k")
     parser.add_argument("--label", default="dense-baseline")
     parser.add_argument(
+        "--embedding",
+        default=DEFAULT_EMBEDDING_PROFILE,
+        help=(
+            "임베딩 프로필 이름 (evaluation/config.py 의 EVAL_EMBEDDINGS). "
+            "**모델이 바뀌면 캐시 salt 와 컬렉션이 함께 갈려 전량 재임베딩이다**"
+        ),
+    )
+    parser.add_argument(
         "--qa-set",
         type=Path,
         help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
@@ -368,6 +409,7 @@ def main() -> int:
         groups=args.groups,
         use_bm25=args.hybrid,
         qa_path=args.qa_set,
+        embedding=args.embedding,
     )
     out = RESULTS_DIR / f"{args.label}-{args.fmt}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")

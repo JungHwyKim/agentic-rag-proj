@@ -15,7 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.config import EVAL_SETTINGS, eval_config
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    EVAL_EMBEDDINGS,
+    EVAL_SETTINGS,
+    embedding_profile,
+    eval_config,
+)
 from rag_pipeline.config import (
     CleanerConfig,
     ContentRoutingConfig,
@@ -120,3 +126,63 @@ def test_evaluation_never_builds_its_own_ingest_config(module) -> None:
     }
     assert "IngestConfig" not in called, f"{module} 는 eval_config() 를 써야 한다"
     assert "eval_config" in called
+
+
+# ---------------------------------------------------------------------------
+# 임베딩 프로필 축 — 고정 중에 이것 하나만 이름으로 갈아끼울 수 있다
+# ---------------------------------------------------------------------------
+
+
+# **두 곳에 안 적는다.** EVAL_SETTINGS 가 기본 프로필을 그대로 가리켜야, baseline.json 의
+# settings 와 실제로 실린 설정이 갈릴 수 없다
+def test_fixed_settings_point_at_the_default_profile() -> None:
+    assert EVAL_SETTINGS["embedding"] is EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE]
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다 —
+# 기본 프로필만 보면 나중에 더한 프로필의 오타가 그대로 산다
+@pytest.mark.parametrize("profile", sorted(EVAL_EMBEDDINGS))
+def test_every_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_EMBEDDINGS[profile]) - set(EmbeddingConfig.model_fields)
+    assert not unknown, f"프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 아무것도 안 주면 지금까지와 같은 실행이어야 한다. 축이 산출을 바꾸면 축이 아니라 변경이다
+def test_default_is_the_same_as_naming_the_default_profile() -> None:
+    assert eval_config().embedding.model_dump() == (
+        eval_config(embedding=DEFAULT_EMBEDDING_PROFILE).embedding.model_dump()
+    )
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_EMBEDDINGS))
+def test_named_profile_actually_lands(profile: str) -> None:
+    config = eval_config(embedding=profile)
+    for key, value in EVAL_EMBEDDINGS[profile].items():
+        assert getattr(config.embedding, key) == value, f"{profile}.{key}"
+
+
+# **없는 이름이면 조용히 기본값으로 안 돌아간다.** 돌아가면 대조군을 두 번 재고, 두 실행이
+# 같은 수치를 내는 것이 "모델이 안 움직였다"로 읽힌다 — 물으려던 질문에 가짜 답이 나온다
+def test_unknown_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(embedding="없는프로필")
+    assert "없는프로필" in str(err.value)
+    assert DEFAULT_EMBEDDING_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 여전히 못 이긴다. 고정의 목적이 프로필 축으로 새면 안 된다
+def test_env_cannot_move_a_named_profile(monkeypatch) -> None:
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "3")
+
+    config = eval_config(embedding=DEFAULT_EMBEDDING_PROFILE)
+
+    assert config.embedding.embedding_model == "text-embedding-3-small"
+    assert config.embedding.embedding_batch_size == 100
+
+
+# 프로필 조회는 사본이 아니라 그 딕셔너리를 준다. 호출부가 고치면 다음 실행이 오염되므로
+# **읽기만 한다는 것**을 여기서 못 박아 둔다 (지금 호출부는 ** 로 펴서 넘긴다)
+def test_lookup_returns_the_registered_block() -> None:
+    assert embedding_profile(DEFAULT_EMBEDDING_PROFILE) == EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE]

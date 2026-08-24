@@ -14,6 +14,13 @@
 없다. 그렇다고 `embed_documents(texts, ctx)` 로 인자를 늘리면 확정된 시그니처를 벗어나므로
 인스턴스에 둔다. **누적되므로 문서당으로 읽으려면 호출부가 `reset()` 한다.**
 
+## 캐시 salt 가 왜 구현체 밖에 있나
+
+`cache_salt_for()` 를 보라. 원래 이것은 `OpenAIEmbedder` 의 사설 프로퍼티였는데, 그러면
+**두 번째 구현체가 salt 를 자기가 다시 짜야 하고 빠뜨려도 아무 에러가 안 난다** — 모델을
+바꿨는데 옛 벡터가 나오는 상황이 조용히 만들어진다. `collection_name_for()` 는 처음부터
+모듈 수준 공개 함수라 그 위험이 없었고, 이쪽에만 그 대칭이 없었다.
+
 ## LoadContext 를 재사용하지 않는 이유
 
 `LoadContext` 는 `ContentRoutingConfig` 와 loader 전용 카운터(`vision_calls`·`ocr_applied`)
@@ -26,6 +33,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+
+from rag_pipeline.config import EmbeddingConfig
+
+
+# 임베딩 캐시 키의 salt. **`indexing.collection_name_for()` 의 거울이다** — 저쪽은 벡터가
+# *저장되는* 자리를, 이쪽은 벡터가 *캐시되는* 자리를 가른다. 둘이 갈리면 한쪽만 새 모델을
+# 알아보는데, 그 상태는 에러가 아니라 나쁜 검색 결과로만 드러난다.
+#
+# **여기 들어가는 것은 벡터를 바꾸는 설정 전부다.** 지금 실재하는 축은 (모델, 차원) 둘뿐이고
+# 나머지 필드(배치 크기·토큰 상한·캐시 on/off·키)는 같은 입력에 같은 벡터를 준다.
+#
+# **provider 와 질의 접두사 정책은 아직 안 넣는다** — 구현체가 하나라 합법값이 하나뿐인 죽은
+# 축이 되고, 그것은 `embedding.provider` 설정을 기각한 그 잣대다(plan_log/embedding.md).
+# 로컬 구현체가 생기면 **이 함수 한 곳에** 더한다. 같은 모델 이름이어도 질의 접두사나 풀링이
+# 다르면 벡터가 달라지므로, 그때는 그것들이 곧 "벡터를 바꾸는 설정" 이 된다
+def cache_salt_for(embedding: EmbeddingConfig) -> str:
+    dimensions = embedding.embedding_dimensions or "default"
+    return f"embed:{embedding.embedding_model}:{dimensions}"
 
 
 # 임베딩을 만드는 동안 쌓이는 비용. 문서당으로 읽으려면 호출부가 reset() 한다

@@ -46,10 +46,10 @@ embedding 결정이 아니라 API 결정이다. 청크 285~721개 × 1536차원�
 from __future__ import annotations
 
 from rag_pipeline.config import EmbeddingConfig
-from rag_pipeline.ingestion.embedding.base import Embedder, EmbeddingUsage
+from rag_pipeline.ingestion.embedding.base import Embedder, EmbeddingUsage, cache_salt_for
 from rag_pipeline.ingestion.embedding.openai_api import OpenAIEmbedder
 
-__all__ = ["Embedder", "EmbeddingUsage", "get_embedder"]
+__all__ = ["Embedder", "EmbeddingUsage", "cache_salt_for", "get_embedder"]
 
 
 # 설정에 맞는 임베딩 구현체를 만든다. 공개 진입점이고 HTTP 를 모른다.
