@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "최종갱신": "2026-08-23",
+    "최종갱신": "2026-08-24",
     "무엇인가": "회귀 판정의 기준값. 코드를 고친 뒤 이 값과 대조해 '의도한 변화'와 '회귀'를 가른다.",
     "재는 방법": ".\\.venv\\Scripts\\python.exe -m regression.measure — 두 블록을 재서 이 파일과 대조하고 달라진 항목만 표로 낸다. **읽기 전용이라 이 파일을 쓰지 않는다**(--save-baseline 이 없는 이유는 regression/measure.py 모듈 docstring 에). documents 는 detect_regions() 단독이라 외부 API 호출도 과금도 없다. --json 은 잰 값만, --skip-tests 는 문서만 잰다.",
     "설정": {
@@ -30,7 +30,7 @@
     "설정을 왜 싣나": "detect_regions() 가 실제로 설정을 읽는다 — 지금 닿는 것은 max_excel_rows · pdf_scan_text_threshold · pdf_render_dpi 셋이고, 뒤의 둘은 스캔 PDF 를 통째 이미지 리전으로 만들지를 갈라 **리전 수를 직접 바꾼다**. 안 박으면 개발자 .env 를 타 같은 명령이 머신마다 다른 값을 낸다. 닿는 셋보다 넓게 박은 것은 나중에 다른 필드를 읽어도 .env 가 안 새게 하려는 것이다. 뺀 것은 머신마다 달라야 하는 API 키와 tesseract_cmd 뿐이다.",
     "픽스처 없는 환경": {
       "무엇인가": "tests/fixtures/ 가 없는 클론에서 이 기준선이 어떻게 동작하는지. 2026-08-23 에 픽스처를 안 복사한 워크트리로 두 번 실측했다 — 한 번은 문제를 찾으려고, 한 번은 고친 뒤 확인하려고.",
-      "tests": "**by_area 가 그대로다.** 픽스처 0개 · 6개 · 7개에서 모두 같은 값이 나온다(tests/ingestion/loader/document 146 고정, 실행하면 41 skipped). 그래서 픽스처 없는 클론에서도 tests 블록은 그대로 대조된다.",
+      "tests": "**by_area 가 그대로다.** 픽스처 0개 · 6개 · 7개에서 모두 같은 값이 나온다(tests/ingestion/loader/document 146 고정, 실행하면 41 skipped). 그래서 픽스처 없는 클론에서도 tests 블록은 그대로 대조된다. **2026-08-24 재확인**: 새 테스트 파일 아홉이 들어온 뒤에도 픽스처 0개 워크트리가 본 트리와 같은 by_area 와 같은 950 을 냈다.",
       "documents": "10건 전부 '없어서 못 잼'. 회귀가 아니다 — measure 가 조용히 skip 한다.",
       "한때 흔들렸다": "처음 실측했을 때 tests/ingestion/loader/document 가 146 -> **121** 이었다(-25). test_hwpx_real.py 만 FIXTURES.glob('*.hwpx') 로 parametrize 해 **수집 시점에** 파일 시스템을 봤기 때문이다 — 파일이 6개면 파라미터 6개, 없으면 skip 마크 1개로 접혀 테스트 5개 x 5 = 25 가 사라졌다. 실파일 모듈 다섯 중 이 하나만 그랬고, 나머지 넷은 처음부터 정적 목록 + 런타임 skip 이었다. **같은 날 그 모듈을 정적 목록(COMMON_HWPX)으로 바꿔 닫았다.** 되돌리면 이 항목의 수치가 다시 갈린다."
     },
@@ -57,7 +57,8 @@
       "2026-08-23: **미뤄 뒀던 새 영역과 증가분 +73 을 확정했다**(691 -> 764, 커밋 04e3f4d 기준). 1294509 때 '어느 커밋에도 없다'며 diff 로만 띄워 뒀던 것이 전부 커밋됐다. **여섯 영역이 각각 커밋 하나에 정확히 대응한다** — tests/retrieval 8(bb1e4dd) · tests/generation 11(eba77f7) · tests(test_query.py) 5(73be307) · tests/api 7->40(55d379f) · tests/evaluation 30->40(f6c67f7) · tests/ingestion/indexing 82->88(e23a625). **측정 시점에 본 트리가 더러웠다** — tests/api/test_pages.py 와 tests/ingestion/indexing/test_qdrant_documents.py 가 미커밋 수정 상태였다. 그래서 **깨끗한 HEAD 워크트리를 따로 만들어 쟀고**(픽스처는 복사), 그 값이 본 트리와 같아 그 두 수정이 테스트 수를 안 바꾼다는 것이 확인됐다. 규칙('미커밋 상태는 안 싣는다')을 어긴 것이 아니라 HEAD 값을 오염 없이 얻은 것이다. run 은 본 저장소 관측값이다 — 워크트리 실행은 340.6s 였지만 임시 디스크라 대표값이 아니고, 통과/skip 은 762/2 로 양쪽이 같다. **새 테스트 73건은 키 없이 통과한다**(워크트리에 .env 가 없어 그 실행이 곧 그 확인이다).",
       "2026-08-23: tests 블록만 갱신했다(collected_total 764->814 · tests/retrieval 8->52 · tests/ingestion/indexing 88->94 · run.passed 762->812). **documents 블록은 10건 전부 불변이고 그것이 이 갱신의 판정 근거다** — hybrid 검색 배선은 retrieval/ 과 backend 만 건드려 detect_regions() 경로에 닿지 않으므로, 문서 쪽이 하나라도 움직였다면 배선이 파싱으로 샌 것이라 회귀로 봐야 했다. 늘어난 50 은 새 파일 넷의 수집 수(19+11+14+6)와 정확히 일치한다.",
       "2026-08-23: EVAL_SETTINGS 에 retrieval 블록이 들어가 tests/evaluation 40->41 이다(+1). **늘어난 하나는 새로 쓴 테스트가 아니라 기존 가드가 블록 하나를 더 잡은 것이다** — test_eval_config.py 가 EVAL_SETTINGS 의 블록마다 model_fields 대조를 parametrize 한다. documents 는 여전히 불변이다.",
-      "2026-08-23: **test_hwpx_real.py 를 정적 목록으로 바꿔 by_area 의 마지막 환경 의존을 없앴다.** 수치는 안 움직인다(픽스처가 있으면 예나 지금이나 146) — 바뀐 것은 **픽스처가 없을 때도 146** 이라는 것이다. 실측: hwpx 0개·6개·7개에서 모두 146. 대신 새 hwpx 를 fixtures 에 넣어도 자동으로 안 잡히니 COMMON_HWPX 에 한 줄을 적어야 한다 — 그 자동 편입이 값어치를 한 적은 없다(새 픽스처가 들어온 유일한 사례 8de5305 가 그 파일을 44줄 고쳤다)."
+      "2026-08-23: **test_hwpx_real.py 를 정적 목록으로 바꿔 by_area 의 마지막 환경 의존을 없앴다.** 수치는 안 움직인다(픽스처가 있으면 예나 지금이나 146) — 바뀐 것은 **픽스처가 없을 때도 146** 이라는 것이다. 실측: hwpx 0개·6개·7개에서 모두 146. 대신 새 hwpx 를 fixtures 에 넣어도 자동으로 안 잡히니 COMMON_HWPX 에 한 줄을 적어야 한다 — 그 자동 편입이 값어치를 한 적은 없다(새 픽스처가 들어온 유일한 사례 8de5305 가 그 파일을 44줄 고쳤다).",
+      "2026-08-24: **tests 블록만 갱신했다**(collected_total 815 -> 950 · +135). 새 영역 tests/answer_cache 32 가 생기고 다섯이 늘었다 — tests/api 40 -> 78 · tests/evaluation 41 -> 72 · tests/ingestion/embedding 46 -> 74 · tests/ingestion/indexing 94 -> 97 · tests 5 -> 8. 증가분 135 를 파일 14개로 나눠 총계와 맞췄다(근거 참고). 커밋 일곱에 대응한다 — 0a0deeb·6f5908a(답변 캐시) · 025f91c·dff109f(업로드->색인 배선) · 663e46e(평가 프로필 축) · 55fdd1f(패러프레이즈 쌍) · d9870e6(로컬 임베더). **documents 블록은 10건 전부 불변이고 그것이 이 갱신의 판정 근거다** — b3c6915 이후 rag_pipeline/ingestion/loader/ 를 건드린 커밋이 **하나도 없어서**, 문서 쪽이 하나라도 움직였다면 설명이 안 됐다. 줄어든 영역도 지워지거나 이름 바뀐 테스트 파일도 0개다(--diff-filter=DR 로 확인). **측정 도중 HEAD 가 움직였다** — 55fdd1f 에서 재기 시작했는데 다른 세션이 dff109f·8d742af 를 올려 tests/api 의 미커밋 +3 이 커밋됐다. 미커밋 상태를 안 싣는 규칙대로면 75/947 을 실을 뻔했고, 8d742af 의 깨끗한 워크트리에서 다시 재서 78/950 을 확정했다. **재기 전에 HEAD 를 다시 보는 것이 이 저장소에서는 절차의 일부다** — 같은 저장소에 세션이 여럿 붙는다. by_area 정렬도 fold_by_area 의 (-수, 이름) 순으로 되돌렸다 — in-place 수정으로 어긋나 있었다."
     ]
   },
   "tests": {
@@ -66,29 +67,30 @@
     "by_area": {
       "tests/hooks": 150,
       "tests/ingestion/loader/document": 146,
+      "tests/ingestion/indexing": 97,
       "tests/ingestion/loader/content": 89,
-      "tests/ingestion/indexing": 94,
+      "tests/api": 78,
+      "tests/ingestion/embedding": 74,
+      "tests/evaluation": 72,
       "tests/ingestion/splitter": 56,
-      "tests/ingestion/embedding": 46,
-      "tests/api": 40,
-      "tests/evaluation": 41,
+      "tests/retrieval": 52,
       "tests/ingestion/cleaner": 39,
+      "tests/answer_cache": 32,
       "tests/regression": 27,
       "tests/ingestion": 12,
       "tests/generation": 11,
-      "tests/retrieval": 52,
-      "tests/ingestion/loader": 7,
-      "tests": 5
+      "tests": 8,
+      "tests/ingestion/loader": 7
     },
-    "collected_total": 815,
+    "collected_total": 950,
     "run": {
-      "passed": 813,
+      "passed": 948,
       "skipped": 2,
       "failed": 0,
-      "duration_sec": 73.6,
-      "환경": "tests/fixtures/ 가 있는 머신 기준. 없는 클론에서는 이 셋만 달라지고 by_area 는 그대로다."
+      "duration_sec": 85.3,
+      "환경": "tests/fixtures/ 가 있는 머신 기준. 없는 클론에서는 이 셋만 달라지고 by_area 는 그대로다. **2026-08-24 실측**: 픽스처도 .env 도 없는 HEAD 워크트리에서 846 passed · 104 skipped · 0 failed · 25.8s 였다(수집은 같은 950). 픽스처 유무가 가르는 것은 skip 102건이고 실패는 0이다."
     },
-    "근거": "2026-08-23 에 총계 하나에서 영역별 표로 바꿨다. 이유는 _meta.갱신 이력에 있다. **영역 목록은 어디에도 안 박혀 있다** — measure.py 가 수집 결과를 디렉터리별로 접으므로 새 영역이 생기면 diff 에 '(기준선에 없음)' 으로 저절로 뜬다. 고정 목록이었다면 tests/hooks(141)와 tests/evaluation(30)이 근거에 한 번도 안 나온 채로 계속 갔을 것이다. 영역별 수가 줄면 항상 확인한다 — 지워졌는지 이름이 바뀌었는지는 다른 문제이고, Stop 훅의 전체 pytest 는 *실패*를 잡지 *삭제*를 못 잡는다. 그것이 이 블록이 남는 이유다. **2026-08-23 2차 갱신**: hybrid 검색에 테스트 50개가 붙어 tests/retrieval 8->52(+44) · tests/ingestion/indexing 88->94(+6) 이다. 파일별로 19+11+14=44 와 6 을 각각 세어 총계와 맞췄다 — 영역 합만 보면 '테스트가 늘었다' 와 '다른 영역에서 옮겨 왔다' 를 못 가른다. 네 파일 모두 tests/fixtures/ 를 안 쓰므로 _meta.픽스처 없는 환경 총계도 같은 폭으로 움직인다.",
+    "근거": "2026-08-23 에 총계 하나에서 영역별 표로 바꿨다. 이유는 _meta.갱신 이력에 있다. **영역 목록은 어디에도 안 박혀 있다** — measure.py 가 수집 결과를 디렉터리별로 접으므로 새 영역이 생기면 diff 에 '(기준선에 없음)' 으로 저절로 뜬다. 고정 목록이었다면 tests/hooks(141)와 tests/evaluation(30)이 근거에 한 번도 안 나온 채로 계속 갔을 것이다. 영역별 수가 줄면 항상 확인한다 — 지워졌는지 이름이 바뀌었는지는 다른 문제이고, Stop 훅의 전체 pytest 는 *실패*를 잡지 *삭제*를 못 잡는다. 그것이 이 블록이 남는 이유다. **2026-08-23 2차 갱신**: hybrid 검색에 테스트 50개가 붙어 tests/retrieval 8->52(+44) · tests/ingestion/indexing 88->94(+6) 이다. 파일별로 19+11+14=44 와 6 을 각각 세어 총계와 맞췄다 — 영역 합만 보면 '테스트가 늘었다' 와 '다른 영역에서 옮겨 왔다' 를 못 가른다. 네 파일 모두 tests/fixtures/ 를 안 쓰므로 _meta.픽스처 없는 환경 총계도 같은 폭으로 움직인다. **2026-08-24 3차 갱신**: 815 -> 950(+135). 파일별로 세어 총계와 맞췄다 — 새 파일 아홉이 test_answer_cache.py 32 · test_cache_salt.py 14 · test_local_embedder.py 14 · test_relative_time.py 11 · test_error_display.py 10 · test_index_route.py 10 · test_overlap.py 8 · test_paraphrase_pairs.py 7 · test_profile_axis.py 7 로 113 이고, 기존 파일 다섯 수정이 test_eval_config.py +9 · test_pages.py +5 · test_query.py +3 · test_indexing_pipeline.py +3 · test_query_route.py +2 로 22 다(113+22=135). **test_eval_config.py 의 +9 는 parametrize 확장이 아니라 새로 쓴 함수 7개다**(7 -> 14) — 2026-08-23 의 +1 이 순수 확장이었던 탓에 '프로필이 늘어 기존 가드가 더 잡았다'로 적을 뻔했다. 기전이 같아 보이는 자리일수록 함수 수를 직접 센다. **픽스처도 .env 도 없는 HEAD 워크트리에서 950 수집 · 846 passed · 104 skipped · 0 failed 를 확인했다** — 앞엣것이 by_area 환경 독립성의 재확인이고(새 파일 아홉이 들어온 뒤에도 유지), 뒤엣것이 '기본 테스트는 키 없이 통과한다'의 확인이다. 로컬 임베더 갈래가 붙은 회차라 뒤엣것을 실제로 재는 것이 특히 필요했다 — .env 의 EMBEDDING_PROVIDER=local 이 새면 가중치 2.27GB 를 조용히 내려받는 경로가 열린다.",
     "주의": "-m integration 은 제외된 값이다(pyproject 의 addopts). 유료 테스트는 이 기준선에 안 들어간다."
   },
   "documents": {
