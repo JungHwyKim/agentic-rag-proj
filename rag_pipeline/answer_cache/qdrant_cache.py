@@ -37,6 +37,27 @@ point 마다 벡터를 요구해 *아무도 검색하지 않는 답변에 임베
 
 TTL(시간)을 안 쓰는 것은 **축이 어긋나서**다. 코퍼스가 안 바뀌면 한 달 전 답도 옳고,
 바뀌면 1분 전 답도 틀리다. 시간은 그 둘을 못 가른다.
+
+## `clear()` 는 근거 대조를 대체하지 않는다
+
+둘은 **서로 다른 실패**를 막는다. 근거 대조는 *"이 답이 딛고 선 청크가 사라지거나 바뀌었다"*
+를 잡고, `clear()` 는 *"새 문서가 들어와 옛 답이 더는 최선이 아니다"* 를 맡는다. 뒤엣것은
+**근거 대조로 원리적으로 못 잡는다** — 사라진 것이 없으니 옛 답의 근거는 여전히 멀쩡하다.
+
+통째로 비우는 대가(문서 하나 추가에 캐시 전멸)를 받아들이는 근거는 **축의 비대칭**이다.
+색인은 드물고 질의는 잦으며, 캐시는 최적화라 비어도 시스템이 정상 동작한다 — 비운 캐시는
+다음 질의들이 도로 채운다. 색인 세대 번호를 박는 안은 전멸을 피하지도 못하면서 *세대를 어디
+저장하나* 라는 새 상태 축을 만든다(qdrant 컬렉션에 메타 자리가 없다).
+
+## 경고에 상한이 있는 이유
+
+이 객체는 backend `lifespan` 이 만들어 **앱 수명 내내 들고 있다.** 상한이 없으면 저장소가
+계속 실패할 때 `warnings` 가 무한히 는다. `Bm25Index.warnings` 는 같은 이름인데 안 물린다 —
+저쪽은 인덱스를 다시 지을 때마다 새 객체다. **같은 모양의 필드가 수명이 달라 다르게 행동한다.**
+
+`_MAX_WARNINGS` 는 **임계값이 아니다.** 이 저장소의 수는 대부분 분포의 틈에서 나왔는데 이건
+그 종류가 아니다 — 한 질의가 만드는 경고는 많아야 서넛이라, 그보다 충분히 크기만 하면 동작이
+같다. 재서 고른 값처럼 보이게 두면 다음 사람이 그것을 재려 든다.
 """
 
 from __future__ import annotations
@@ -68,6 +89,9 @@ _NAMESPACE = uuid.UUID("c3a7f21b-58d4-5e19-9f0a-2b7d4e6c8a13")
 # evaluation/scoring.py:squash() 가 공백을 통째로 지우는 것은 PDF 추출이 낱말 사이 공백을
 # 잃기 때문이고, 사용자가 친 질문에는 그 문제가 없다
 _SPACES = re.compile(r"\s+")
+
+# warnings 가 무한히 자라는 것만 막는다. **고른 값이 아니라 상한일 뿐이다** (모듈 docstring 참고)
+_MAX_WARNINGS = 100
 
 
 # 질문에서 캐시 point id 를 만든다. 같은 질문은 늘 같은 자리라 재질의가 중복이 아니라 갱신이다
@@ -122,6 +146,13 @@ class QdrantAnswerCache:
         )
         self.warnings: list[str] = []
 
+    # 경고를 쌓되 상한을 넘으면 **앞에서부터** 버린다 — 방금 실패를 읽으려는 것이므로
+    # 최근 것이 남아야 한다. append 를 직접 부르지 말고 전부 이리로 온다 (모듈 docstring 참고)
+    def _warn(self, message: str) -> None:
+        self.warnings.append(message)
+        if len(self.warnings) > _MAX_WARNINGS:
+            del self.warnings[: len(self.warnings) - _MAX_WARNINGS]
+
     # 이 캐시가 실제로 쓰는 컬렉션 이름. 문서 컬렉션과 반드시 다르다
     @property
     def collection(self) -> str:
@@ -141,7 +172,7 @@ class QdrantAnswerCache:
         try:
             vector = embedder.embed_query(text)
         except Exception as exc:  # noqa: BLE001 - 캐시 실패는 미스로 내린다. 질의는 계속 돈다
-            self.warnings.append(f"캐시 조회용 임베딩에 실패해 건너뜁니다: {type(exc).__name__}")
+            self._warn(f"캐시 조회용 임베딩에 실패해 건너뜁니다: {type(exc).__name__}")
             return None
 
         point = self._nearest(vector)
@@ -171,7 +202,7 @@ class QdrantAnswerCache:
         try:
             vector = embedder.embed_query(answer.query.strip())
         except Exception as exc:  # noqa: BLE001 - 저장 실패가 답변을 막으면 안 된다
-            self.warnings.append(f"캐시 저장용 임베딩에 실패해 건너뜁니다: {type(exc).__name__}")
+            self._warn(f"캐시 저장용 임베딩에 실패해 건너뜁니다: {type(exc).__name__}")
             return False
 
         if not vector:
@@ -190,7 +221,7 @@ class QdrantAnswerCache:
                 ],
             )
         except Exception as exc:  # noqa: BLE001 - 저장 실패가 답변을 막으면 안 된다
-            self.warnings.append(f"답변을 캐시에 저장하지 못했습니다: {type(exc).__name__}")
+            self._warn(f"답변을 캐시에 저장하지 못했습니다: {type(exc).__name__}")
             return False
         return True
 
@@ -229,7 +260,7 @@ class QdrantAnswerCache:
                 with_payload=True,
             )
         except Exception as exc:  # noqa: BLE001 - 캐시 실패는 미스로 내린다
-            self.warnings.append(f"캐시를 조회하지 못해 건너뜁니다: {type(exc).__name__}")
+            self._warn(f"캐시를 조회하지 못해 건너뜁니다: {type(exc).__name__}")
             return None
 
         points = list(getattr(response, "points", []) or [])
@@ -248,7 +279,7 @@ class QdrantAnswerCache:
         try:
             found = self._store.fetch_by_ids(ids)
         except Exception as exc:  # noqa: BLE001 - 판정 실패도 미스로 내린다
-            self.warnings.append(f"캐시 무효화를 판정하지 못해 건너뜁니다: {type(exc).__name__}")
+            self._warn(f"캐시 무효화를 판정하지 못해 건너뜁니다: {type(exc).__name__}")
             return False
 
         current = {chunk.id: _text_hash(chunk.text) for chunk in found}
@@ -267,7 +298,24 @@ class QdrantAnswerCache:
                 points_selector=models.PointIdsList(points=[point_id]),
             )
         except Exception as exc:  # noqa: BLE001 - 청소 실패가 질의를 막으면 안 된다
-            self.warnings.append(f"낡은 캐시 항목을 지우지 못했습니다: {type(exc).__name__}")
+            self._warn(f"낡은 캐시 항목을 지우지 못했습니다: {type(exc).__name__}")
+
+    # 캐시를 통째로 비운다. **새 문서가 색인됐을 때 부르는 것이 이 메서드의 유일한 용도**다
+    # (모듈 docstring 의 "clear() 는 근거 대조를 대체하지 않는다").
+    #
+    # 컬렉션을 지우고 다음 put() 의 _ensure_collection() 이 다시 만든다. **실패해도 안 던진다** —
+    # 색인이 캐시 청소 때문에 실패하면 본말이 뒤집힌다. 비운 캐시는 다음 질의들이 도로 채운다
+    def clear(self) -> bool:
+        try:
+            client = self._client
+            # 없는 것은 이미 비어 있는 것이다. 만들었다 지우지 않는다
+            if not client.collection_exists(self._collection):
+                return True
+            client.delete_collection(collection_name=self._collection)
+        except Exception as exc:  # noqa: BLE001 - 청소 실패가 색인을 막으면 안 된다
+            self._warn(f"캐시를 비우지 못했습니다: {type(exc).__name__}")
+            return False
+        return True
 
     # payload 를 Answer 로 되살린다. **query 는 지금 질문이고 원 질문은 cached_from 에 남는다** —
     # 화면이 그 둘을 나란히 보여줘야 사용자가 뜻이 같은지 직접 판단할 수 있다
@@ -277,14 +325,14 @@ class QdrantAnswerCache:
             try:
                 sources.append(RetrievedChunk.model_validate(raw))
             except Exception as exc:  # noqa: BLE001 - 스키마가 바뀐 옛 항목은 미스로 내린다
-                self.warnings.append(f"캐시 항목을 되살리지 못해 건너뜁니다: {type(exc).__name__}")
+                self._warn(f"캐시 항목을 되살리지 못해 건너뜁니다: {type(exc).__name__}")
                 return None
 
         created_at = payload.get("created_at")
         try:
             when = datetime.fromisoformat(str(created_at))
         except (TypeError, ValueError):
-            self.warnings.append("캐시 항목에 시각이 없어 건너뜁니다")
+            self._warn("캐시 항목에 시각이 없어 건너뜁니다")
             return None
 
         return Answer(

@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from rag_pipeline.answer_cache import get_answer_cache
+from rag_pipeline.answer_cache import get_answer_cache, qdrant_cache
 from rag_pipeline.answer_cache.qdrant_cache import QdrantAnswerCache, cache_point_id_for
 from rag_pipeline.config import AnswerCacheConfig, EmbeddingConfig, IndexingConfig, IngestConfig
 from rag_pipeline.schemas.answer import Answer
@@ -423,3 +423,84 @@ def test_building_cache_does_not_touch_the_client():
     object.__setattr__(config, "_answer_cache", AnswerCacheConfig(answer_cache_threshold=0.9))
 
     assert get_answer_cache(_Tripwire(), config) is not None
+
+
+# --- 경고 상한 ---------------------------------------------------------------
+
+
+# **warnings 는 무한히 자라면 안 된다.** 이 객체는 backend lifespan 이 앱 수명 내내 들고
+# 있어서, 저장소가 계속 실패하면 상한이 없을 때 메모리가 는다.
+# Bm25Index 는 같은 이름인데 안 물린다 — 저쪽은 다시 지을 때마다 새 객체다
+def test_warnings_stop_growing_at_the_cap():
+    class _Boom(_FakeClient):
+        def query_points(self, **_: Any):
+            raise RuntimeError("저장소가 죽었다")
+
+    cache = _cache(_FakeStore(_Boom()))
+    for _ in range(qdrant_cache._MAX_WARNINGS + 50):
+        cache.lookup("질문", embedder=_FakeEmbedder())
+
+    assert len(cache.warnings) == qdrant_cache._MAX_WARNINGS
+
+
+# **버리는 쪽은 앞이다.** 방금 실패를 읽으려고 있는 것이라 최근 것이 남아야 한다
+def test_warnings_keep_the_most_recent():
+    cache = _cache(_FakeStore(_FakeClient()))
+    for i in range(qdrant_cache._MAX_WARNINGS + 5):
+        cache._warn(f"경고 {i}")
+
+    assert cache.warnings[-1] == f"경고 {qdrant_cache._MAX_WARNINGS + 4}"
+    assert "경고 0" not in cache.warnings
+
+
+# --- clear() ------------------------------------------------------------------
+
+
+# 새 문서가 색인되면 통째로 비운다. **근거 대조로는 원리적으로 못 잡는 자리**라서다 —
+# 옛 답의 근거는 멀쩡한데 새 문서에 더 나은 답이 있을 수 있다
+def test_clear_deletes_the_cache_collection():
+    class _Deletable(_FakeClient):
+        def __init__(self, **kw: Any) -> None:
+            super().__init__(**kw)
+            self.dropped: list[str] = []
+
+        def delete_collection(self, collection_name: str) -> None:
+            self.dropped.append(collection_name)
+            self._exists = False
+
+    client = _Deletable(exists=True)
+    cache = _cache(_FakeStore(client))
+
+    assert cache.clear() is True
+    assert client.dropped == [cache.collection]
+
+
+# 컬렉션이 없으면 이미 비어 있는 것이다. 만들었다 지우지 않는다
+def test_clear_on_missing_collection_is_a_noop():
+    client = _FakeClient(exists=False)
+
+    assert _cache(_FakeStore(client)).clear() is True
+    assert client.created == []
+
+
+# **비운 뒤에는 미스여야 한다.** 이것이 clear() 가 실제로 맡은 일이다
+def test_lookup_after_clear_is_a_miss():
+    payload = _payload_of(_answer())
+    client = _FakeClient(point=_Point(payload, score=0.99))
+    cache = _cache(_FakeStore(client, [_stored()]))
+    assert cache.lookup("비슷한 질문", embedder=_FakeEmbedder()) is not None
+
+    client._exists = False  # delete_collection 뒤의 상태
+    assert cache.lookup("비슷한 질문", embedder=_FakeEmbedder()) is None
+
+
+# **청소 실패가 색인을 막으면 안 된다.** 이 모듈의 실패 계약 그대로 경고 + False 다
+def test_clear_failure_does_not_raise():
+    class _Boom(_FakeClient):
+        def delete_collection(self, collection_name: str) -> None:
+            raise RuntimeError("저장소가 죽었다")
+
+    cache = _cache(_FakeStore(_Boom(exists=True)))
+
+    assert cache.clear() is False
+    assert cache.warnings
