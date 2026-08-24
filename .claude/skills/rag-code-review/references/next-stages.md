@@ -19,7 +19,7 @@
 - `rag_pipeline/query.py:answer_question()` — 위 둘을 잇는 **세 번째 진입점**
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
-**나머지는 여전히 없다** — 리랭커 · 질의 재작성 루프 · semantic cache.
+**나머지는 여전히 없다** — 리랭커 · 질의 재작성 루프. **semantic cache 는 2026-08-24 에 생겼다**(`rag_pipeline/answer_cache/`) — 다만 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절).
 그래서 이 파일은 아직 `retriever.md` 로 승격하지 않았다(승격 규칙은 맨 아래). 있는 것에는
 아래 계약을 적용하고, 없는 것은 여전히 지적하지 않는다.
 

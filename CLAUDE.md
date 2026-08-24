@@ -33,7 +33,7 @@ uv pip install -r requirements.txt
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
-- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. `bm25` 는 안 넘기면 dense 한 갈래로 도는 것이 곧 스위치라 설정이 없다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`cache` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. `bm25`·`cache` 는 안 넘기면 그 갈래 없이 도는 것이 곧 스위치라 설정이 없다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 
@@ -150,7 +150,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
-- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `get_store()` 로 **자기 클라이언트를 직접 열므로**, 업로드를 실연결하는 순간 같은 uvicorn 안에서 자기 자신과 충돌한다(그래서 지금 업로드 버튼이 목업이다). `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. `.qdrant/` 는 `.gitignore` 에 있다
+- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `get_store()` 로 **자기 클라이언트를 직접 열므로**, 업로드를 실연결하는 순간 같은 uvicorn 안에서 자기 자신과 충돌한다(그래서 지금 업로드 버튼이 목업이다). `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. **다른 컬렉션이 필요할 때는 클라이언트를 빌린다** — `QdrantStore.client` 가 `_qdrant` 를 그대로 통과시키고(게으름 유지), 답변 캐시가 그것으로 같은 클라이언트에 `qa_cache_*` 컬렉션을 연다. 한 클라이언트가 여러 컬렉션을 보는 것은 qdrant 의 정상 사용이라 잠금이 안 걸리고 닫을 것도 하나뿐이다 — `get_store()` 를 한 번 더 부르는 것과 갈린다. `.qdrant/` 는 `.gitignore` 에 있다
 
 ## 새 포맷 추가
 
@@ -222,7 +222,7 @@ plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라�
 
 여기에 현재 상태를 적지 않는다. 적는 순간 낡기 때문이다. 각각의 출처는 이렇다.
 
-- **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다 (`ingestion/` · `retrieval/` · `generation/`)
+- **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다. 여기 이름을 옮겨 적지 않는다 — 옮기는 순간 다음 디렉터리가 생길 때 조용히 거짓이 된다(실제로 `answer_cache/` 가 생기며 그렇게 됐다)
 - **품질을 무엇으로 재나** — **검색**은 `evaluation/README.md`(정답 질의 세트와 러너),
   **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
