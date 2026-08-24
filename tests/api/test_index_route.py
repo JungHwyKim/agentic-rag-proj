@@ -1,8 +1,12 @@
 """색인 엔드포인트 — 업로드가 실제로 검색 가능한 벡터가 되는 자리.
 
 **여기서 확인하는 것은 라우트의 계약이지 색인 자체가 아니다.** `index_document()` 를 갈아끼워
-넷을 본다 — store 를 넘기는가 · BM25 를 무효화하는가 · 답변 캐시를 건드리지 **않는가** ·
-목록 갱신 신호를 보내는가. 색인의 의미(주입한 store 를 안 닫는다 등)는
+넷을 본다 — store 를 넘기는가 · BM25 를 무효화하는가 · 답변 캐시를 **비우되 갈아끼우지는
+않는가** · 목록 갱신 신호를 보내는가.
+
+**BM25 와 캐시가 대우가 다른 것이 요점이다.** BM25 는 스냅샷이라 객체를 버리고(`None`),
+캐시는 store 참조만 들고 질의마다 새로 읽으므로 **객체는 그대로 두고 내용만 비운다.**
+둘을 같게 다루면 캐시는 경고만 잃고 얻는 것이 없다. 색인의 의미(주입한 store 를 안 닫는다 등)는
 `tests/ingestion/indexing/test_indexing_pipeline.py` 가 덮는다.
 
 `app.state` 는 가짜를 직접 꽂는다. `TestClient` 를 `with` 없이 쓰면 lifespan 이 안 돌아
@@ -33,6 +37,16 @@ class FakeStore:
 
     def close(self) -> None:
         self.closed = True
+
+
+# 답변 캐시 자리. **clear() 가 불렸는지만 본다** — 비우는 의미는 tests/answer_cache/ 가 덮는다
+class FakeCache:
+    def __init__(self) -> None:
+        self.cleared = 0
+
+    def clear(self) -> bool:
+        self.cleared += 1
+        return True
 
 
 # 앱을 만들고 가짜 상태를 꽂는다. lifespan 은 일부러 안 돌린다 (모듈 docstring 참고)
@@ -101,14 +115,50 @@ def test_index_invalidates_bm25(mocker):
 
 # **답변 캐시는 건드리지 않는다.** 스냅샷이 아니라 store 참조만 들고 질의마다 새로 읽으며,
 # 낡은 항목은 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다. 리셋하면 warnings 만 잃는다
-def test_index_leaves_the_answer_cache_alone(mocker):
+def test_index_keeps_the_same_cache_object(mocker):
     mocker.patch("backend.app.api.routes.documents.index_document")
-    cache = object()
+    cache = FakeCache()
     client, app = _client(answer_cache=cache)
 
     client.post("/api/v1/documents/index", files=_files())
 
+    # BM25 와 달리 갈아끼우지 않는다 — 스냅샷이 아니라 새로 만들 이유가 없고 경고만 잃는다
     assert app.state.answer_cache is cache
+
+
+# **비우는 것은 따로 필요하다.** 조회 시점 근거 대조는 *"딛고 선 청크가 사라지거나 바뀌었다"*
+# 만 잡고, 새 문서가 들어온 경우는 원리적으로 못 잡는다 — 사라진 것이 없어 옛 답의 근거는
+# 여전히 멀쩡하다. 그 하나를 clear() 가 맡는다
+def test_index_clears_the_answer_cache(mocker):
+    mocker.patch("backend.app.api.routes.documents.index_document")
+    cache = FakeCache()
+    client, _ = _client(answer_cache=cache)
+
+    client.post("/api/v1/documents/index", files=_files())
+
+    assert cache.cleared == 1
+
+
+# 캐시가 꺼져 있으면(기본값) None 이라 아무 일도 안 일어나야 한다 — 여기서 죽으면
+# 임계값을 안 정한 개발 환경에서 업로드가 통째로 실패한다
+def test_index_works_when_the_cache_is_off(mocker):
+    mocker.patch("backend.app.api.routes.documents.index_document")
+    client, _ = _client(answer_cache=None)
+
+    assert client.post("/api/v1/documents/index", files=_files()).status_code == 204
+
+
+# 색인이 실패하면 캐시도 안 비운다 — 저장소가 안 바뀌었는데 비우면 헛되이 버린다
+def test_failed_index_does_not_clear_the_cache(mocker):
+    mocker.patch(
+        "backend.app.api.routes.documents.index_document", side_effect=_IndexingBoom("실패")
+    )
+    cache = FakeCache()
+    client, _ = _client(answer_cache=cache)
+
+    with pytest.raises(_IndexingBoom):
+        client.post("/api/v1/documents/index", files=_files())
+    assert cache.cleared == 0
 
 
 # 1차 검증은 색인 라우트도 똑같이 받는다. 확장자가 아니면 파싱까지 가지 않는다

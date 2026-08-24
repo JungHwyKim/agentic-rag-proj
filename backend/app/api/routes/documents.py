@@ -125,9 +125,19 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
 
     # BM25 는 저장소를 전량 훑어 만든 **스냅샷**이라 새 문서가 들어오면 낡는다. None 으로
     # 되돌리면 다음 질의가 다시 짓는다 (routes/query.py 의 _bm25).
-    # **답변 캐시는 건드리지 않는다** — 그쪽은 스냅샷이 아니라 store 참조만 들고 질의마다
-    # 새로 읽으며, 낡은 항목은 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다
     request.app.state.bm25 = None
+
+    # **답변 캐시는 객체를 갈아끼우지 않고 내용만 비운다.** 그쪽은 스냅샷이 아니라 store
+    # 참조만 들고 질의마다 새로 읽으므로 새로 만들 이유가 없다(경고만 잃는다).
+    #
+    # 그런데 **비우는 것은 따로 필요하다** — 조회 시점 근거 대조는 *"이 답이 딛고 선 청크가
+    # 사라지거나 바뀌었다"* 만 잡고, 지금처럼 **새 문서가 들어온 경우는 원리적으로 못 잡는다**
+    # (사라진 것이 없어 옛 답의 근거는 여전히 멀쩡하다). 그 하나를 clear() 가 맡는다.
+    # 캐시가 꺼져 있으면(기본값) None 이라 아무 일도 안 일어난다.
+    # clear() 는 실패해도 안 던지므로 try/except 가 필요 없다 (rag_pipeline/answer_cache/)
+    cache = getattr(request.app.state, "answer_cache", None)
+    if cache is not None:
+        cache.clear()
 
     # 목록 조각을 여기서 렌더하지 않는다 (모듈 docstring 참고). 사이드바가 이 이벤트를 듣고
     # GET /documents 를 다시 부른다
