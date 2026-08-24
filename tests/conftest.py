@@ -63,11 +63,20 @@ def offline_config(tmp_path: Path) -> IngestConfig:
     )
     # 임베딩은 ingest() 밖에 있어 이 픽스처로 호출될 일이 없다. 그래도 덮어쓰는 이유는
     # EmbeddingConfig() 가 .env 를 읽기 때문이다 — 개발자 머신의 실제 키가 픽스처로 새면
-    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다)
+    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다).
+    #
+    # **provider 를 함께 못 박는 이유는 키와 다르다**(3회차) — 로컬 갈래는 **키가 없어도
+    # 돈다.** 개발자 .env 에 EMBEDDING_PROVIDER=local 이 있으면 기본 pytest 가 모델 가중치
+    # 2.27GB 를 내려받는 경로가 열리는데 **아무 에러도 안 난다.** 키를 지우는 것으로는
+    # 이 갈래를 못 막는다
     object.__setattr__(
         config,
         "_embedding",
-        EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
+        EmbeddingConfig(
+            openai_api_key=None,
+            embedding_provider="openai",
+            embedding_cache_enabled=False,
+        ),
     )
     # 색인도 같은 이유로 덮어쓴다. 여기서 막는 것은 키가 아니라 **저장 위치**다 —
     # IndexingConfig() 의 기본 qdrant_path 가 PROJECT_ROOT/.qdrant 라, 안 덮으면 테스트가

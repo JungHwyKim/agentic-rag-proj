@@ -6,15 +6,24 @@
 벡터가 **저장되는** 자리를, 이쪽(`cache_salt_for`)은 벡터가 **캐시되는** 자리를 가른다.
 갈리면 한쪽만 새 모델을 알아보는데, **그 상태는 예외가 아니라 나쁜 검색 결과로만 드러난다.**
 
-로컬 임베딩 구현체가 붙을 때 `provider`·질의 접두사가 더해질 텐데, 한쪽에만 더하면
-이 테스트가 잡는다. 값을 대조하는 것이 아니라 **무엇에 반응하는가**를 대조하는 이유다 —
-두 파생의 문자열 모양은 원래 다르다.
+값을 대조하는 것이 아니라 **무엇에 반응하는가**를 대조한다 — 두 파생의 문자열 모양은
+원래 다르다. 한쪽에만 축을 더하면 이 테스트가 잡는다.
+
+## provider 는 일부러 어느 쪽에도 없다 (3회차, 2026-08-24)
+
+로컬 구현체가 실재하게 됐지만 `embedding_provider` 는 **두 파생 어디에도 안 들어간다.**
+provider 는 **모델 이름을 통해서만** 벡터를 바꾸고, 두 이름 공간이 안 겹치기 때문이다
+(OpenAI 는 `text-embedding-*`, 로컬은 `org/name` 꼴로 슬래시를 갖는다). 넣었다면
+`.cache/embedding` 이 전량 미스가 되고 개발자 `.qdrant` 컬렉션이 고아가 됐다.
+
+그래서 여기서 잠그는 것은 *"provider 가 둘 다 안 움직인다"* 이고, 위 대조가 **같이 안
+움직이는 것**까지 검사하므로 한쪽에만 몰래 더해지면 여전히 잡힌다.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Literal, get_args, get_origin
 
 import pytest
 
@@ -24,9 +33,33 @@ from rag_pipeline.ingestion.embedding.openai_api import OpenAIEmbedder
 from rag_pipeline.ingestion.indexing import collection_name_for
 
 
+# Literal 의 합법값 목록. Optional 로 감싸도 찾아낸다. Literal 이 아니면 None
+def _literal_choices(annotation: Any) -> tuple[Any, ...] | None:
+    if get_origin(annotation) is Literal:
+        return get_args(annotation)
+    for arg in get_args(annotation):
+        if get_origin(arg) is Literal:
+            return get_args(arg)
+    return None
+
+
 # 필드 하나를 "다른 값"으로 바꾼다. **모르는 타입이면 조용히 건너뛰지 않고 실패한다** —
 # 건너뛰면 새 필드가 이 대조에서 빠지는데 그것이 정확히 이 테스트가 막으려는 상황이다
 def _other_value(name: str, annotation: Any, default: Any) -> Any:
+    # Literal 은 타입이 아니라 **값 목록**이라 아래 규칙이 안 통한다. 지금 값이 아닌 것을
+    # 하나 고른다 — 합법값이 하나뿐이면 흔들 수 없으므로 그것도 실패로 본다.
+    #
+    # **`Literal[...] | None` 도 여기서 잡아야 한다** — 그러지 않으면 union 을 편 뒤
+    # `base` 가 타입이 아니라 리터럴 값이 되어, 아래 실패 메시지가 타입 이름 자리에 값을
+    # 찍는다("타입 openai 에 대한 규칙이 없습니다"). 그러면 *규칙을 더하라*는 뜻인지
+    # *필드가 잘못됐다*는 뜻인지 안 갈린다
+    literal = _literal_choices(annotation)
+    if literal is not None:
+        choices = [value for value in literal if value != default]
+        if not choices:
+            raise AssertionError(f"'{name}' 의 합법값이 하나뿐이라 흔들 수 없습니다")
+        return choices[0]
+
     args = [a for a in get_args(annotation) if a is not type(None)] or [annotation]
     base = args[0]
     if base is bool:
@@ -71,6 +104,28 @@ def test_vector_changing_fields_do_move_the_salt(field: str) -> None:
         update={field: _other_value(field, info.annotation, getattr(base, field))}
     )
     assert cache_salt_for(base) != cache_salt_for(moved)
+
+
+# **provider 는 어느 쪽도 안 움직인다.** 위 대조는 '같이 움직인다'만 보므로 방향을 못 박는다 —
+# 나중에 둘 다에 provider 를 더하면 위 테스트는 통과하지만 이것이 실패한다.
+# 그때는 이 테스트가 아니라 plan_log/embedding.md 3회차의 결정을 먼저 다시 본다
+def test_provider_moves_neither_derivation() -> None:
+    indexing = IndexingConfig(qdrant_path=Path("x"))
+    base = EmbeddingConfig(openai_api_key=None)
+    moved = base.model_copy(update={"embedding_provider": "local"})
+
+    assert cache_salt_for(base) == cache_salt_for(moved)
+    assert collection_name_for(indexing, base) == collection_name_for(indexing, moved)
+
+
+# **두 provider 의 모델 이름 공간이 안 겹친다**는 것이 위 결정의 유일한 근거다.
+# 겹치는 순간 같은 자리를 다른 벡터가 보게 되므로, 그 전제를 여기에 남겨 둔다
+def test_the_two_name_spaces_do_not_overlap() -> None:
+    openai_default = EmbeddingConfig.model_fields["embedding_model"].default
+    assert "/" not in openai_default, (
+        "OpenAI 모델 이름에 슬래시가 생기면 로컬(org/name)과 이름 공간이 겹칠 수 있다 — "
+        "그러면 cache_salt_for() 에 provider 를 넣어야 한다"
+    )
 
 
 # **값 자체를 잠근다.** 모양이 바뀌면 기존 캐시가 전부 빗나가 조용히 재과금된다 —

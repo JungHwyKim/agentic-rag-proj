@@ -153,12 +153,23 @@ class EmbeddingConfig(BaseSettings):
     # 각자 읽는 것이다 — 임베딩만 끄고 Vision 은 살리는 식의 조합이 가능해야 한다
     openai_api_key: str | None = None
 
+    # 어느 구현체로 임베딩하나. **구현체가 둘이 되어서 여는 설정이다** — 하나뿐일 때는
+    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(plan_log/embedding.md 3회차).
+    # `local` 은 sentence-transformers 경로이고 `requirements-local.txt` 가 필요하다.
+    # **키가 없어도 도는 갈래라** tests/conftest.py 의 offline_config 가 이 값을 못 박는다
+    embedding_provider: Literal["openai", "local"] = "openai"
+
     # **임시값이고 실측 전이다.** 모델 간 한국어 검색 품질은 지금 못 잰다 — 정답 질의 세트가
-    # 없다(plan_log/평가-세트.md). 싼 쪽에서 시작하고 캐시 salt 로 교체 가능하게 뒀다
+    # 없다(plan_log/평가-세트.md). 싼 쪽에서 시작하고 캐시 salt 로 교체 가능하게 뒀다.
+    # `provider="local"` 이면 HuggingFace 리포지터리 이름이다(예: nlpai-lab/KURE-v1)
     embedding_model: str = "text-embedding-3-small"
 
     # None 이면 모델 기본 차원. text-embedding-3-* 는 이 값으로 차원을 줄일 수 있어
-    # "차원은 모델이 정한다"가 반만 맞다 — 설정값이므로 캐시 salt 에 함께 들어간다
+    # "차원은 모델이 정한다"가 반만 맞다 — 설정값이므로 캐시 salt 에 함께 들어간다.
+    #
+    # **뜻은 provider 를 안 탄다 — "차원을 줄여라" 하나다.** OpenAI 는 할 수 있고 bge-m3
+    # 계열은 MRL 미학습이라 못 하므로, `provider="local"` 에서 값이 오면 예외로 거절한다.
+    # 앞 N 차원을 잘라 재정규화하는 것은 품질이 **조용히** 나빠지는 길이라 안 한다
     embedding_dimensions: int | None = None
 
     # 한 번에 보낼 텍스트 개수. 실측상 문서당 청크가 45~102개라 대부분 1회 호출로 끝난다.

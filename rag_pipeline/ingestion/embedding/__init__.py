@@ -15,12 +15,16 @@ embedding 결정이 아니라 API 결정이다. 청크 285~721개 × 1536차원�
 없을 때 예외를 던지는 설계가 기본 테스트를 깨지 않는다. 두 결정이 서로를 지탱한다.
 근거는 plan_log/embedding.md 의 "합성 지점" 절.
 
-## provider 설정이 없는 이유
+## provider 설정이 왜 이제 있나
 
-구현체가 하나뿐이라 `embedding.provider` 는 합법값이 하나뿐인 죽은 설정이 된다
-(`table_pdf_handler` 에 두 값이 있는 것은 두 경로가 **실재해서**다). 그래서 추상화
-(`Embedder` Protocol + 이 팩토리)는 두되 설정은 만들지 않았다. 로컬 구현체가 생기는 날
-아래 분기와 설정을 함께 더하면 된다.
+2회차까지는 없었다 — 구현체가 하나뿐이면 `embedding_provider` 는 합법값이 하나뿐인 죽은
+설정이기 때문이다(`table_pdf_handler` 에 두 값이 있는 것은 두 경로가 **실재해서**다).
+**3회차에 `LocalEmbedder` 가 생기며 그 전제가 사라졌다.** 추상화를 먼저 두고 설정을 나중에
+연 것이 실제로 값을 했다 — 호출부는 한 줄도 안 바뀐다.
+
+**로컬 갈래는 키가 없어도 돈다.** 그래서 기본 `pytest` 방어가 *"키를 지운다"* 로는 부족해
+두 겹이 됐다 — `tests/conftest.py` 의 `offline_config` 가 provider 를 `openai` 로 못 박고,
+`torch`·`sentence-transformers` 가 `requirements-local.txt` 에만 있다.
 
 ## 이 단계가 잰 것 — 뒤 단계가 쓰고 있다
 
@@ -47,12 +51,23 @@ from __future__ import annotations
 
 from rag_pipeline.config import EmbeddingConfig
 from rag_pipeline.ingestion.embedding.base import Embedder, EmbeddingUsage, cache_salt_for
+from rag_pipeline.ingestion.embedding.local_st import LocalEmbedder
 from rag_pipeline.ingestion.embedding.openai_api import OpenAIEmbedder
 
-__all__ = ["Embedder", "EmbeddingUsage", "cache_salt_for", "get_embedder"]
+__all__ = [
+    "Embedder",
+    "EmbeddingUsage",
+    "LocalEmbedder",
+    "OpenAIEmbedder",
+    "cache_salt_for",
+    "get_embedder",
+]
 
 
 # 설정에 맞는 임베딩 구현체를 만든다. 공개 진입점이고 HTTP 를 모른다.
-# 지금은 분기가 없다 — 로컬 구현체가 생길 때 여기에 붙는다 (모듈 docstring 참고)
+# **분기는 여기 하나뿐이다** — 두 구현체가 같은 Protocol 을 만족하므로 호출부는 모른다
 def get_embedder(config: EmbeddingConfig | None = None) -> Embedder:
-    return OpenAIEmbedder(config or EmbeddingConfig())
+    config = config or EmbeddingConfig()
+    if config.embedding_provider == "local":
+        return LocalEmbedder(config)
+    return OpenAIEmbedder(config)

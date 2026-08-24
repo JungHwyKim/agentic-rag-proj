@@ -86,6 +86,24 @@ EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
         "max_embedding_tokens_per_doc": 200_000,
         "embedding_cache_enabled": True,
     },
+    # 로컬 한국어 모델. **모델 비교의 실험군이고 운영 기본값이 아니다** — 갈아탈지는
+    # 60건·20건을 **겹침 구간별로** 읽은 뒤 사람이 정한다(plan_log/embedding.md 3회차).
+    #
+    # 고른 근거는 순위표가 아니라 모델 카드의 사실이다 — 1024차원 · 8192컨텍스트 · 2.27GB ·
+    # MIT · 접두사 없음(`prompts: {}`) · bge-m3 를 한국어 검색으로 파인튜닝.
+    # `multilingual-e5-large` 는 컨텍스트 상한 512 인데 실측 최대 청크가 1,201토큰이라 뺐다.
+    #
+    # **`embedding_dimensions` 를 안 적는 것이 맞다** — bge-m3 계열은 MRL 미학습이라 못 줄이고,
+    # LocalEmbedder 가 값이 오면 예외를 던진다. 캐시 salt 와 컬렉션 이름은 **모델 이름이
+    # 이미 갈라** baseline 과 섞이지 않는다
+    "kure-v1": {
+        "embedding_provider": "local",
+        "embedding_model": "nlpai-lab/KURE-v1",
+        "embedding_dimensions": None,
+        "embedding_batch_size": 100,
+        "max_embedding_tokens_per_doc": 200_000,
+        "embedding_cache_enabled": True,
+    },
 }
 
 # 아무것도 안 주면 이것. 지금까지와 같은 실행이 된다

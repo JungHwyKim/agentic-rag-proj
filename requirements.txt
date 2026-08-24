@@ -50,5 +50,10 @@ httpx                     # FastAPI TestClient
 # ---- 개발 도구 ----
 ruff
 
+# ---- 로컬 임베딩 갈래 - 기본 설치에 안 들어간다 ----
+# torch + sentence-transformers 는 `requirements-local.txt` 에 있다. 안 쓰는 사람에게
+# 가중치 2.27GB 를 지우지 않으려는 것도 있지만, **기본 pytest 환경에 torch 가 없으면
+# 가중치를 조용히 내려받는 경로가 구조적으로 없다**는 쪽이 더 크다. 이유는 그 파일 머리에
+
 # ---- 추후 단계 - 지금은 설치하지 않음 ----
 # (없음)
