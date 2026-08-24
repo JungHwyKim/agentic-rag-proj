@@ -122,3 +122,55 @@ def test_index_document_without_a_key_raises(docx_file, offline_config):
     """가짜를 안 끼우면 키가 없어 실패해야 한다. 빈 벡터로 넘어가면 안 된다."""
     with pytest.raises(EmbeddingError):
         index_document(docx_file, original_name="안내서.docx", config=offline_config)
+
+
+# ── store 주입 ─────────────────────────────────────────────────────────────
+# **소유권 규칙: 연 쪽이 닫는다.** 이 두 테스트가 규칙의 양쪽 끝을 잠근다 —
+# 거꾸로 잡으면 한쪽이 반드시 죽는다. 주입받은 것을 닫으면 backend 가 다음 요청에서 죽고,
+# 자기가 연 것을 안 닫으면 evaluation/run_eval.py 가 색인 직후 검색하려다 잠금으로 죽는다.
+# 실파일 테스트(test_indexing_real.py)가 뒤엣것을 이미 지키지만 **픽스처가 없으면 조용히
+# skip** 하므로, 합성으로도 잠가 둔다
+
+
+# 주입한 store 는 닫지 않는다. 호출자가 앱 수명 동안 들고 있는 것이라 여기서 닫으면
+# 다음 요청이 배타 잠금으로 죽는다
+def test_injected_store_is_not_closed(docx_file, offline_config, fake_embedding_api):
+    store = get_store(offline_config.indexing, offline_config.embedding)
+    try:
+        result = index_document(
+            docx_file, original_name="안내서.docx", config=offline_config, store=store
+        )
+
+        assert result.indexed_count == result.chunk_count
+        # 닫혔으면 이 호출이 죽는다 — 같은 인스턴스를 계속 쓸 수 있어야 한다
+        assert store.count() == result.chunk_count
+    finally:
+        store.close()
+
+
+# 주입한 store 로 연달아 두 번 색인해도 산다. backend 가 실제로 밟는 경로다 —
+# 요청마다 새로 열지 않고 같은 싱글턴을 계속 넘긴다
+def test_injected_store_survives_repeated_indexing(docx_file, offline_config, fake_embedding_api):
+    store = get_store(offline_config.indexing, offline_config.embedding)
+    try:
+        first = index_document(
+            docx_file, original_name="안내서.docx", config=offline_config, store=store
+        )
+        second = index_document(
+            docx_file, original_name="안내서.docx", config=offline_config, store=store
+        )
+
+        # 같은 문서를 다시 넣은 것이라 재색인이다. 청크가 두 배가 되면 delete 가 안 돈 것이다
+        assert second.chunk_count == first.chunk_count
+        assert store.count() == first.chunk_count
+    finally:
+        store.close()
+
+
+# store 를 안 넘기면 예전 그대로 자기가 열고 **반드시 닫는다**. 평가 러너가 색인 루프 직후
+# 자기 get_store() 를 열어 검색하므로 이 닫힘에 기대고 있다
+def test_own_store_is_still_closed(docx_file, offline_config, fake_embedding_api, reopen):
+    index_document(docx_file, original_name="안내서.docx", config=offline_config)
+
+    # 닫혔어야 열린다. 안 닫혔으면 여기서 RuntimeError 로 죽는다
+    assert reopen().count() > 0

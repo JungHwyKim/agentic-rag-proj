@@ -23,7 +23,12 @@ from pathlib import Path
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.ingestion.cleaner import clean
 from rag_pipeline.ingestion.embedding import EmbeddingUsage, get_embedder
-from rag_pipeline.ingestion.indexing import document_id_for, get_store, to_records
+from rag_pipeline.ingestion.indexing import (
+    VectorStore,
+    document_id_for,
+    get_store,
+    to_records,
+)
 from rag_pipeline.ingestion.loader.detect import detect_format
 from rag_pipeline.ingestion.loader.registry import get_loader
 from rag_pipeline.ingestion.splitter import split
@@ -75,6 +80,7 @@ def index_document(
     *,
     original_name: str | None = None,
     config: IngestConfig | None = None,
+    store: VectorStore | None = None,
 ) -> IndexResult:
     config = config or IngestConfig()
 
@@ -89,7 +95,16 @@ def index_document(
     vectors = embedder.embed_documents([chunk.text for chunk in chunks])
     records = to_records(chunks, vectors, document_id=document_id)
 
-    store = get_store(config.indexing, config.embedding)
+    # **소유권 규칙: 연 쪽이 닫는다.** 인자로 받은 store 는 호출자(backend 의 startup
+    # 싱글턴)가 앱 수명 동안 들고 있으므로 여기서 닫으면 다음 요청이 죽는다. 반대로 우리가
+    # 연 것은 반드시 닫아야 한다 — evaluation/run_eval.py 가 색인 루프 **직후** 자기
+    # get_store() 를 열어 검색하는데, 안 닫으면 거기서 배타 잠금으로 죽는다.
+    # store 를 안 넘겼을 때 config.indexing 을 그대로 쓰는 것도 계약이다 — 평가가 실행마다
+    # qdrant_path 를 갈라 주는데 기본 경로로 떨어지면 실행들이 한 디렉터리를 물어
+    # 기준선이 에러 없이 수치로만 오염된다
+    owns_store = store is None
+    if store is None:
+        store = get_store(config.indexing, config.embedding)
     try:
         # 레코드가 0개여도 delete 는 부른다. 있던 문서가 빈 문서로 바뀌었을 때
         # 건너뛰면 옛 청크가 통째로 남는다. 컬렉션이 없으면 delete 는 조용히 넘어간다
@@ -100,8 +115,9 @@ def index_document(
         collection = store.collection
     finally:
         # 로컬 파일 모드는 저장 디렉터리에 배타 잠금을 건다. 안 닫으면 다음 색인이 통째로
-        # 실패하므로 예외로 빠져나갈 때도 반드시 푼다
-        store.close()
+        # 실패하므로 예외로 빠져나갈 때도 반드시 푼다. **우리가 연 것만** 닫는다
+        if owns_store:
+            store.close()
 
     return IndexResult(
         document_id=document_id,

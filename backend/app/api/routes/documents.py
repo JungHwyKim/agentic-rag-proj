@@ -1,7 +1,19 @@
-"""문서 업로드 엔드포인트.
+"""문서 업로드·색인 엔드포인트.
 
 여기서 하는 일은 업로드 수신 / 1차 검증 / 임시 저장 / 정리뿐이다.
-파싱은 전부 rag_pipeline.ingestion.pipeline.ingest() 가 한다.
+파싱은 `ingest()` 가, 색인은 `index_document()` 가 한다.
+
+## 왜 업로드와 색인이 두 엔드포인트인가
+
+`upload` 의 `response_model` 이 `ParsedDocument` 라 **그 반환이 곧 공개 API 스키마**다.
+거기에 색인을 얹으면 파싱만 원하던 소비자의 응답이 바뀐다. 그래서 색인은 옆에 새로 냈고,
+화면의 업로드 버튼이 부르는 것은 이쪽이다.
+
+## 왜 색인 쪽은 HTML 조각이 아니라 204 인가
+
+돌려줄 것이 문서 목록인데 그 조각은 `routes/query.py` 의 `GET /documents` 가 이미 만든다.
+여기서 다시 렌더하면 같은 목록의 두 번째 진실이 생긴다. 대신 `HX-Trigger` 로 이벤트만
+보내고 사이드바가 자기 갱신을 하게 한다 — 목록 로직은 한 곳에 남는다.
 """
 
 from __future__ import annotations
@@ -11,12 +23,12 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 
 from backend.app.core.config import get_settings
 from rag_pipeline.ingestion.loader.registry import SUPPORTED_EXTENSIONS
-from rag_pipeline.ingestion.pipeline import ingest
+from rag_pipeline.ingestion.pipeline import index_document, ingest
 from rag_pipeline.schemas.document import ParsedDocument
 
 router = APIRouter(tags=["documents"])
@@ -58,15 +70,10 @@ async def _save_upload(upload: UploadFile, limit: int) -> Path:
     return temp_path
 
 
-# 파일을 업로드해 파싱된 문서를 돌려준다
-@router.post("/documents/upload", response_model=ParsedDocument)
-async def upload_document(file: Annotated[UploadFile, File()]) -> ParsedDocument:
-    settings = get_settings()
-
-    original_name = file.filename or "unnamed"
+# 1차 검증: 확장자 화이트리스트. 실제 포맷은 매직바이트로 로더가 다시 검증한다.
+# **두 라우트가 나눠 쓴다** — 복사해 두면 지원 목록이 한쪽만 늘어난다
+def _reject_unsupported_extension(original_name: str) -> None:
     suffix = Path(original_name).suffix.lower()
-
-    # 1차 검증: 확장자 화이트리스트. 실제 포맷은 매직바이트로 다시 검증한다
     if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -77,12 +84,54 @@ async def upload_document(file: Annotated[UploadFile, File()]) -> ParsedDocument
             ),
         )
 
+
+# 파일을 업로드해 파싱된 문서를 돌려준다. **색인은 안 한다** (모듈 docstring 참고)
+@router.post("/documents/upload", response_model=ParsedDocument)
+async def upload_document(file: Annotated[UploadFile, File()]) -> ParsedDocument:
+    settings = get_settings()
+
+    original_name = file.filename or "unnamed"
+    _reject_unsupported_extension(original_name)
+
     temp_path = await _save_upload(file, settings.max_upload_bytes)
     try:
         # 로더는 동기·CPU 바운드라 스레드풀로 넘겨 이벤트 루프를 막지 않는다
         return await run_in_threadpool(ingest, temp_path, original_name=original_name)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+# 파일을 업로드해 파싱·청킹·임베딩까지 마치고 벡터 저장소에 색인한다.
+# 화면의 업로드 버튼이 부르는 자리다 (모듈 docstring 참고)
+@router.post("/documents/index", status_code=status.HTTP_204_NO_CONTENT)
+async def index_upload(request: Request, file: Annotated[UploadFile, File()]) -> Response:
+    settings = get_settings()
+    original_name = file.filename or "unnamed"
+    _reject_unsupported_extension(original_name)
+
+    temp_path = await _save_upload(file, settings.max_upload_bytes)
+    try:
+        # store 를 **인자로 넘긴다.** index_document() 가 스스로 열면 startup 싱글턴이 잡은
+        # 배타 잠금과 같은 프로세스 안에서 부딪힌다 (rag_pipeline/ingestion/pipeline.py)
+        await run_in_threadpool(
+            index_document,
+            temp_path,
+            original_name=original_name,
+            config=request.app.state.ingest_config,
+            store=request.app.state.store,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    # BM25 는 저장소를 전량 훑어 만든 **스냅샷**이라 새 문서가 들어오면 낡는다. None 으로
+    # 되돌리면 다음 질의가 다시 짓는다 (routes/query.py 의 _bm25).
+    # **답변 캐시는 건드리지 않는다** — 그쪽은 스냅샷이 아니라 store 참조만 들고 질의마다
+    # 새로 읽으며, 낡은 항목은 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다
+    request.app.state.bm25 = None
+
+    # 목록 조각을 여기서 렌더하지 않는다 (모듈 docstring 참고). 사이드바가 이 이벤트를 듣고
+    # GET /documents 를 다시 부른다
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"HX-Trigger": "documents-changed"})
 
 
 # 서비스 상태 확인용

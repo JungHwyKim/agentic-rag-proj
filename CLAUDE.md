@@ -94,10 +94,10 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 
 ### backend ↔ rag_pipeline 분리
 
-- `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
+- `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 `ingest()`, 색인은 `index_document()` 가 한다. **업로드와 색인이 두 엔드포인트인 이유**: `upload` 의 반환이 곧 공개 API 스키마(`ParsedDocument`)라 거기에 색인을 얹으면 파싱만 원하던 소비자의 응답이 바뀐다. 화면의 업로드 버튼은 색인 쪽을 부른다. **색인 쪽은 HTML 조각이 아니라 204 + `HX-Trigger` 를 돌려준다** — 문서 목록 조각은 `routes/query.py` 의 `GET /documents` 가 이미 만들고, 여기서 다시 렌더하면 같은 목록의 두 번째 진실이 생긴다. 색인 뒤 `app.state.bm25` 는 되돌리고(저장소를 전량 훑은 **스냅샷**이라 낡는다) **답변 캐시는 안 건드린다**(스냅샷이 아니라 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다)
 - 화면은 서버 렌더다(Jinja2 + 벤더링한 htmx, Node 툴체인 없음). `routes/pages.py` 가 화면을, `routes/query.py` 가 HTMX 가 부를 **HTML 조각**을 돌려준다 — JSON 을 주고 브라우저에서 다시 조립하면 템플릿이 두 벌이 된다. 빈 `frontend/` 는 이 결정 이후로 쓰이지 않는다
 - 로더는 동기·CPU 바운드라 `run_in_threadpool` 로 넘긴다
-- `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다
+- `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다. **화면에서 온 요청(`HX-Request` 헤더)에는 같은 상태코드로 HTML 조각을 준다** — htmx 가 4xx/5xx 를 swap 안 하는 것을 200 으로 낮춰 피하면 그 계약이 화면 경로만 우회하는데, 그것이 SSE 를 기각한 자리와 같다. 뒤집는 것은 `chat.html` 의 `htmx:beforeSwap` 한 줄이다. **업로드가 제일 자주 낼 415·413 은 이 매핑을 안 탄다** — `routes/documents.py` 가 던지는 `HTTPException` 이라 `StarletteHTTPException` 핸들러가 따로 같은 규칙을 태운다. 그쪽을 빼먹으면 나머지가 전부 통과하는 채로 **확장자 오류만 화면에서 조용하다**
 - 설정도 둘로 나뉜다: `backend/app/core/config.py`(웹) vs `rag_pipeline/config.py`(파싱). 둘 다 `PROJECT_ROOT/.env` 를 읽는다
 
 ## 코드 컨벤션
@@ -150,7 +150,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
-- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `get_store()` 로 **자기 클라이언트를 직접 열므로**, 업로드를 실연결하는 순간 같은 uvicorn 안에서 자기 자신과 충돌한다(그래서 지금 업로드 버튼이 목업이다). `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. **다른 컬렉션이 필요할 때는 클라이언트를 빌린다** — `QdrantStore.client` 가 `_qdrant` 를 그대로 통과시키고(게으름 유지), 답변 캐시가 그것으로 같은 클라이언트에 `qa_cache_*` 컬렉션을 연다. 한 클라이언트가 여러 컬렉션을 보는 것은 qdrant 의 정상 사용이라 잠금이 안 걸리고 닫을 것도 하나뿐이다 — `get_store()` 를 한 번 더 부르는 것과 갈린다. `.qdrant/` 는 `.gitignore` 에 있다
+- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `store` 를 **안 넘기면** `get_store()` 로 자기 클라이언트를 열어, 같은 uvicorn 안에서 자기 자신과 충돌한다. 그래서 색인 라우트가 `store=` 로 싱글턴을 넘긴다. **소유권 규칙은 "연 쪽이 닫는다"이고 방향을 거꾸로 잡으면 한쪽이 반드시 죽는다** — 주입받은 것을 닫으면 backend 가 다음 요청에서 죽고, 자기가 연 것을 안 닫으면 `evaluation/run_eval.py` 가 색인 루프 **직후** 자기 `get_store()` 를 열다가 죽는다. 같은 이유로 `store=` 를 안 넘겼을 때 `config.indexing.qdrant_path` 가 계속 존중돼야 한다 — 평가가 실행마다 경로를 가르는데 기본 경로로 떨어지면 기준선이 에러 없이 **수치로만** 오염된다. `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. **다른 컬렉션이 필요할 때는 클라이언트를 빌린다** — `QdrantStore.client` 가 `_qdrant` 를 그대로 통과시키고(게으름 유지), 답변 캐시가 그것으로 같은 클라이언트에 `qa_cache_*` 컬렉션을 연다. 한 클라이언트가 여러 컬렉션을 보는 것은 qdrant 의 정상 사용이라 잠금이 안 걸리고 닫을 것도 하나뿐이다 — `get_store()` 를 한 번 더 부르는 것과 갈린다. `.qdrant/` 는 `.gitignore` 에 있다
 
 ## 새 포맷 추가
 

@@ -32,12 +32,13 @@ def test_page_has_three_regions(client: TestClient):
     assert "질문을 입력하세요" in body
 
 
-# 문서 목록은 화면이 실린 뒤 따로 불러온다
+# 문서 목록은 화면이 실린 뒤 따로 불러오고, **색인이 끝나면 다시 불러온다**.
+# documents-changed 는 색인 라우트가 HX-Trigger 로 보내는 이벤트다 (routes/documents.py)
 def test_documents_loaded_via_htmx(client: TestClient):
     body = client.get("/").text
 
     assert 'hx-get="/api/v1/documents"' in body
-    assert 'hx-trigger="load"' in body
+    assert "load, documents-changed from:body" in body
 
 
 # 질의는 POST /api/v1/query 로 가고 결과를 대화 끝에 덧붙인다
@@ -61,13 +62,16 @@ def test_htmx_is_vendored(client: TestClient):
     assert len(served.content) > 10_000
 
 
-# 업로드 버튼은 이번 회차에서 목업이다. 눌리면 index_document() 가 자기 store 를 열어
-# startup 싱글턴과 충돌하므로 **비활성이어야 한다** (plan_log/backend.md 미결)
-def test_upload_button_is_disabled(client: TestClient):
+# 업로드는 더 이상 목업이 아니다. index_document() 가 store 를 인자로 받게 되면서
+# startup 싱글턴과의 충돌이 풀렸다 (plan_log/backend.md 3회차).
+# 파일을 고르는 즉시 보내므로 트리거가 change 이고, 별도 전송 버튼이 없다
+def test_upload_posts_to_index_endpoint(client: TestClient):
     body = client.get("/").text
 
     assert "파일 업로드" in body
-    assert "disabled" in body
+    assert 'hx-post="/api/v1/documents/index"' in body
+    assert 'hx-encoding="multipart/form-data"' in body
+    assert 'hx-trigger="change from:#upload-input"' in body
 
 
 # 히스토리는 자리만 두고 비활성이다 — rDBMS 가 붙을 자리를 화면에서 잃지 않기 위해서다
@@ -150,3 +154,51 @@ def test_rendered_page_has_no_jinja_comments(client: TestClient):
 def test_stylesheet_served(client: TestClient):
     assert "/static/app.css" in client.get("/").text
     assert client.get("/static/app.css").status_code == 200
+
+
+# 업로드 실패를 그릴 자리가 화면에 있고, 폼이 거기를 겨눈다.
+#
+# **성공 204 는 본문이 비어 있어 이 자리를 저절로 비운다** — 그래서 hx-swap 이 none 이 아니라
+# innerHTML 이어야 한다. none 으로 되돌리면 오류가 그려질 자리가 없어져 다시 조용해진다
+def test_upload_form_targets_the_error_slot(client: TestClient):
+    body = client.get("/").text
+
+    assert 'id="upload-error"' in body
+    assert 'hx-target="#upload-error"' in body
+    assert 'hx-swap="innerHTML"' in body
+
+
+# **reset 비대칭은 의도다** — 업로드 폼은 조건 없이, composer 는 successful 일 때만 비운다.
+# file input 을 안 비우면 같은 파일을 다시 골라도 change 가 안 떠서 재시도도 재색인도 막히고,
+# 질문 글자는 실패 때 남아야 한다. '일관성' 을 이유로 한쪽에 맞추면 조용히 망가진다
+def test_upload_resets_unconditionally_but_composer_does_not():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
+    upload_form = chat.split("<form hx-post=\"/api/v1/documents/index\"")[1].split("</form>")[0]
+    composer = chat.split('<form class="composer"')[1].split("</form>")[0]
+
+    assert 'hx-on::after-request="this.reset()"' in upload_form
+    assert "successful" not in upload_form
+    assert "if(event.detail.successful) this.reset();" in composer
+
+
+# htmx 는 4xx/5xx 를 기본적으로 swap 하지 않는다 — 이 리스너가 그것을 뒤집는다.
+# 없으면 서버가 오류 조각을 보내도 화면에는 아무것도 안 뜬다 (main.py · plan_log/backend.md 5회차)
+def test_error_swap_listener_present(client: TestClient):
+    body = client.get("/").text
+
+    assert 'id="error-swap"' in body
+    assert "htmx:beforeSwap" in body
+    assert "shouldSwap = true" in body
+
+
+# **isError 는 안 건드린다.** false 로 만들면 htmx:responseError 가 안 떠서 콘솔 진단이
+# 사라진다 — 그리는 것과 실패로 남기는 것은 다른 축이다
+def test_error_swap_keeps_the_error_signal():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
+    script = chat.split('<script id="error-swap">')[1].split("</script>")[0]
+
+    assert "isError" not in script

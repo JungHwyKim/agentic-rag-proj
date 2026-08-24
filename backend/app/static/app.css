@@ -14,6 +14,10 @@
   --lavender-ink: #4a3fb0;
   --user-bubble: #dfe4fb;
   --sunken: #fafafc;
+  /* 실패 표시. 기존 팔레트에 경고색이 없어 둘만 더한다 — 화면 어디서도 빨강을 안 쓰므로
+     이 둘이 곧 "무언가 잘못됐다"의 유일한 신호다 */
+  --danger: #b4232b;
+  --danger-bg: #fdf0f0;
   --r: 10px;
   --r-sm: 6px;
 }
@@ -51,7 +55,10 @@ body {
 
 .panel-title { font-size: 12px; font-weight: 700; margin: 0 0 9px; letter-spacing: -.2px; }
 
+/* button 이 아니라 file input 을 여는 label 이다 — 그래서 display·text-align 을 직접 준다
+   (button 은 기본이 inline-block + 가운데 정렬이라 안 적어도 됐다) */
 .upload-btn {
+  display: block;
   width: 100%;
   padding: 7px;
   margin-bottom: 11px;
@@ -60,9 +67,10 @@ body {
   background: #fff;
   font: inherit;
   font-size: 12px;
+  text-align: center;
+  cursor: pointer;
 }
-/* 목업이라는 것이 눈에 보여야 한다 */
-.upload-btn[disabled] { color: var(--muted); cursor: not-allowed; }
+.upload-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .doc-list, .history { list-style: none; margin: 0; padding: 0; }
 
@@ -215,6 +223,35 @@ body {
 /* htmx 가 요청 중에만 보여준다 */
 .pending { display: none; font-size: 11.5px; color: var(--muted); }
 .htmx-request.pending, .htmx-request .pending { display: block; }
+
+/* 실패 조각(_error.html). **조각은 한 벌이고 모양은 자리가 결정한다** — 템플릿에 variant
+   인자를 두면 예외 핸들러가 어느 라우트인지 알아야 해서 HX-Request 한 축으로 가른 이유가
+   사라진다 (main.py). 기본형은 사이드바용 한 줄이다 */
+.error {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* **성공 204 는 본문이 비어 이 자리를 저절로 비운다.** 그때 테두리만 남지 않도록 자리째
+   감춘다 — .sidebar-foot:empty 와 같은 규약이다 (chat.html) */
+#upload-error:empty { display: none; }
+
+/* 질의 실패는 대화 흐름 안에 남아야 "어느 질문이 실패했는지" 가 보인다. 그래서 답변
+   말풍선과 같은 치수를 덧입힌다 — .bubble.assistant 를 그대로 따른다 */
+#messages .error {
+  margin: 0;
+  align-self: stretch;
+  padding: 11px 14px;
+  border-radius: var(--r);
+  font-size: 13px;
+}
 
 .muted { color: var(--muted); }
 .small { font-size: 10.5px; }

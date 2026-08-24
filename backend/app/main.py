@@ -6,12 +6,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.app.api.routes import documents, pages, query
 from backend.app.core.config import get_settings
+from backend.app.core.templates import templates
 from rag_pipeline.answer_cache import get_answer_cache
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.exceptions import (
@@ -50,6 +53,26 @@ def _status_for(exc: RagPipelineError) -> int:
     return status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
+# 이 요청이 화면(htmx)에서 왔는가. htmx 가 모든 요청에 붙이는 표준 헤더다.
+#
+# **가르는 축이 헤더인 이유**: 라우트마다 try/except 로 갈랐다면 415 를 던지는
+# `_reject_unsupported_extension()` 이 try **이전**이라 거기까지 감싸야 하고, 상태코드를
+# 알려면 아래 `_status_for()` 를 라우트가 끌어써 매핑의 두 번째 진실이 생긴다.
+# 헤더면 아래 두 핸들러가 같은 규칙 한 줄을 나눠 쓴다 (plan_log/backend.md 5회차)
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("HX-Request") is not None
+
+
+# 실패 한 건을 화면용 HTML 조각으로 그린다. **상태코드는 그대로 싣는다** —
+# 200 으로 내리면 htmx 가 그냥 swap 해서 편하지만, 그것이 frontend.md 1회차가 스트리밍을
+# 기각한 바로 그 자리다(200 을 먼저 보내면 _STATUS_BY_EXCEPTION 이 죽는다).
+# 대신 chat.html 의 htmx:beforeSwap 한 줄이 4xx/5xx 도 그리게 한다
+def _error_fragment(request: Request, message: str, status_code: int) -> Response:
+    return templates.TemplateResponse(
+        request, "_error.html", {"message": message}, status_code=status_code
+    )
+
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -62,9 +85,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 # **열기를 startup 에서 시도하지 않는다.** QdrantStore 는 처음 쓸 때 클라이언트를 만들도록
 # 늦춰져 있고, 그 게으름을 여기서 깨면 색인이 아직 없는 상태에서 서버가 아예 안 뜬다.
 #
-# 딸린 제약: index_document() 는 get_store() 로 **자기 클라이언트를 직접 열어** finally 에서
-# 닫는다. 그래서 업로드 버튼을 진짜로 붙이는 순간 같은 프로세스 안에서 이 싱글턴과 충돌한다.
-# 그때 첫 후보는 도커가 아니라 index_document(store=...) 주입이다 (plan_log/backend.md 미결)
+# 이 store 는 색인 라우트에도 그대로 넘어간다. index_document() 는 store 를 안 받으면
+# get_store() 로 자기 클라이언트를 열고 finally 에서 닫는데, 업로드 라우트가 그 경로를 타면
+# 같은 프로세스 안에서 이 싱글턴과 충돌한다. 그래서 routes/documents.py 가 store= 로 넘긴다
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config = IngestConfig()
@@ -99,13 +122,28 @@ def create_app() -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    # 파이프라인 예외를 사용자용 메시지가 담긴 JSON 응답으로 변환
+    # 파이프라인 예외를 사용자용 메시지가 담긴 응답으로 변환한다.
+    # 화면에서 온 요청이면 HTML 조각, 아니면 지금까지처럼 JSON 이다 — 공개 API 소비자의
+    # 응답 모양은 한 자도 안 바뀐다 (tests/api 의 503 매핑 테스트가 그 갈래를 잠근다)
     @app.exception_handler(RagPipelineError)
-    async def handle_pipeline_error(request: Request, exc: RagPipelineError) -> JSONResponse:
-        return JSONResponse(
-            status_code=_status_for(exc),
-            content={"detail": exc.user_message},
-        )
+    async def handle_pipeline_error(request: Request, exc: RagPipelineError) -> Response:
+        code = _status_for(exc)
+        if _is_htmx(request):
+            return _error_fragment(request, exc.user_message, code)
+        return JSONResponse(status_code=code, content={"detail": exc.user_message})
+
+    # **업로드가 제일 자주 낼 오류는 여기로 온다.** 415(확장자)·413(용량)은
+    # RagPipelineError 가 아니라 HTTPException 이다 — routes/documents.py 의
+    # _reject_unsupported_extension() 과 _save_upload() 가 직접 던진다.
+    # 위 핸들러만 고치면 그 둘이 여전히 JSON 으로 나가 화면에 아무것도 안 뜬다.
+    #
+    # 화면 요청이 아니면 FastAPI 기본 핸들러에 그대로 위임한다 — 여기서 JSONResponse 를
+    # 직접 만들면 기본 동작(헤더 처리 등)의 두 번째 진실이 생긴다
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_error(request: Request, exc: StarletteHTTPException) -> Response:
+        if _is_htmx(request):
+            return _error_fragment(request, str(exc.detail), exc.status_code)
+        return await http_exception_handler(request, exc)
 
     return app
 
