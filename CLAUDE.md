@@ -21,13 +21,10 @@ Windows + uv + Python 3.11.9. `.venv` 는 프로젝트 루트에 있다.
 # 린트
 .\.venv\Scripts\python.exe -m ruff check .
 
-# 의존성 설치
+# 의존성 설치. **torch·sentence-transformers 가 여기 들어 있다** —
+# 기본 임베더가 로컬 KURE-v1 이라 선택 사항이 아니다(첫 색인에 가중치 2.27GB 를 받는다).
+# GPU 로 가려면 PyPI 밖 --index-url 로 cu 빌드 torch 를 따로 깔고 EMBEDDING_DEVICE 를 바꾼다
 uv pip install -r requirements.txt
-
-# 로컬 임베딩 갈래(EMBEDDING_PROVIDER=local)를 쓸 때만. **기본 설치에 안 들어간다** —
-# 안 쓰는 사람에게 가중치 2.27GB 를 지우지 않으려는 것도 있지만, 기본 pytest 환경에
-# torch 가 없으면 **모델 가중치를 조용히 내려받는 경로가 구조적으로 없다**는 쪽이 더 크다
-uv pip install -r requirements-local.txt
 ```
 
 기본 테스트는 **API 키 없이 전부 통과**해야 한다. `pyproject.toml` 의 `addopts = "-m 'not integration'"` 이 외부 호출 테스트를 기본 실행에서 뺀다. `-m integration` 으로 돌리면 **LlamaParse/OpenAI에 실제 과금이 발생**하므로 사용자 허락 없이 실행하지 않는다.
@@ -115,7 +112,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 테스트 패턴
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
-- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **거기에 더해 `embedding_provider="openai"` 를 못 박는다 — 이건 키와 다른 축이다.** 로컬 갈래는 **키가 없어도 돌아서**, 개발자 `.env` 에 `EMBEDDING_PROVIDER=local` 이 있으면 기본 pytest 가 모델 가중치 2.27GB 를 내려받는 경로가 **아무 에러 없이** 열린다. `requirements-local.txt` 로 의존성을 가른 것이 두 번째 겹이다(기본 설치에 `torch` 가 없으면 그 경로가 애초에 없다). **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다. **생성 설정도 임베딩과 같은 이유로 키를 지운다** — `IngestConfig.generation` 이 lazy 프로퍼티인 것이 그 덮어쓰기를 가능하게 하는 전제라, lazy 를 없애면 이 차단이 조용히 사라진다. **저장 위치를 덮어야 하는 곳이 하나 더 있다** — `Settings.originals_dir` 기본값이 `PROJECT_ROOT/original_files` 라 색인 라우트를 부르는 테스트가 개발자의 실제 보관함에 파일을 쓴다(실제로 `test_index_route.py` 가 22바이트짜리를 남겼고 **아무 에러도 안 났다**). `tests/api/conftest.py` 의 **autouse** 픽스처가 `ORIGINALS_DIR` 환경변수로 덮는다 — 각 테스트가 손으로 덮는 규약이면 새 테스트가 잊는 순간 다시 새고, 환경변수인 것은 `get_settings()` 에 `lru_cache` 가 없어 한 줄이 모든 호출부에 먹기 때문이다(모듈별 patch 는 새 호출부가 생길 때마다 빠뜨린다)
+- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **거기에 더해 `embedding_provider="openai"` 를 못 박는다 — 이건 키와 다른 축이고, 2026-08-25 부터 유일한 방어다.** 로컬 갈래는 **키가 없어도 돌아서** 기본 pytest 가 모델 가중치 2.27GB 를 내려받는 경로가 **아무 에러 없이** 열린다. 전에는 `requirements-local.txt` 로 의존성을 가른 것이 두 번째 겹이었는데, **기본 임베더가 로컬 KURE-v1 이 되면서 `torch` 가 본체로 와 그 겹이 사라졌다.** 게다가 이제는 `.env` 와 무관하게 **코드 기본값 자체가 `local`** 이라, 핀이 없으면 기본 상태가 곧 가중치 적재다. **그 한 겹은 실제로 뚫린 적이 있다** — 이관 당일 `tests/ingestion/embedding/conftest.py` 가 provider 를 안 박고 기본값에 기대고 있어 OpenAI 갈래 테스트 27개가 로컬로 새어 2.2GB 를 적재했다(그 폴더가 241초). **새 픽스처를 만들 때 provider 를 빠뜨리면 같은 일이 난다.** **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다. **생성 설정도 임베딩과 같은 이유로 키를 지운다** — `IngestConfig.generation` 이 lazy 프로퍼티인 것이 그 덮어쓰기를 가능하게 하는 전제라, lazy 를 없애면 이 차단이 조용히 사라진다. **저장 위치를 덮어야 하는 곳이 하나 더 있다** — `Settings.originals_dir` 기본값이 `PROJECT_ROOT/original_files` 라 색인 라우트를 부르는 테스트가 개발자의 실제 보관함에 파일을 쓴다(실제로 `test_index_route.py` 가 22바이트짜리를 남겼고 **아무 에러도 안 났다**). `tests/api/conftest.py` 의 **autouse** 픽스처가 `ORIGINALS_DIR` 환경변수로 덮는다 — 각 테스트가 손으로 덮는 규약이면 새 테스트가 잊는 순간 다시 새고, 환경변수인 것은 `get_settings()` 에 `lru_cache` 가 없어 한 줄이 모든 호출부에 먹기 때문이다(모듈별 patch 는 새 호출부가 생길 때마다 빠뜨린다)
 - `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다. **설정 클래스가 전부 `extra="ignore"` 라 필드 이름을 틀리면 예외 없이 그 항목만 조용히 안 먹는다** — 덮어썼다고 믿는 값이 실은 `.env` 를 탄다. 이름을 코드에 못 박는 곳(`evaluation/config.py` 의 `EVAL_SETTINGS` 와 `EVAL_EMBEDDINGS`)은 `model_fields` 와 대조해 막는다 — **프로필을 더할 때 기본 프로필만 대조하면 새 프로필의 오타가 그대로 산다**
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
 - 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 다섯이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율), `indexing/test_indexing_real.py`(청크 수백 개에서의 자리 밀림·실제 한글 파일명). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
