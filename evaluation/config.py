@@ -84,6 +84,13 @@ __all__ = [
 EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
     # 지금까지의 모든 수치가 이 프로필로 나왔다. **바꾸면 기준선이 무효가 된다**
     "baseline": {
+        # **provider 를 못 박는다.** 안 박으면 코드 기본값을 타는데, 그 기본값이 2026-08-25 에
+        # `openai` -> `local` 로 뒤집히면서(`cba8e8d`) 이 프로필이 조용히 *로컬
+        # text-embedding-3-small* 을 뜻하게 됐다 — 그런 HF 리포는 없다. **프로필은 자기
+        # 자신만으로 실행을 결정해야 한다**: 그래야 `--embedding baseline` 이 언제 돌려도
+        # 같은 실행이고, `baseline.json` 이 재현될 때만 기준선이라는 말이 성립한다.
+        # `offline_config` 가 provider 를 못 박는 것과 같은 이유다 (CLAUDE.md)
+        "embedding_provider": "openai",
         "embedding_model": "text-embedding-3-small",
         "embedding_dimensions": None,
         "embedding_batch_size": 100,

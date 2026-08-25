@@ -152,6 +152,20 @@ def test_every_profile_key_is_a_real_field(profile: str) -> None:
     assert not unknown, f"프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
 
 
+# **프로필은 자기 자신만으로 provider 를 결정해야 한다.** 안 박으면 코드 기본값을 타는데,
+# 그 기본값은 움직인다 — 2026-08-25 에 `openai` -> `local` 로 뒤집히면서(`cba8e8d`)
+# `baseline` 이 조용히 *로컬 text-embedding-3-small* 을 뜻하게 됐고, 그런 HF 리포는 없다.
+# **어느 테스트도 그걸 못 잡았다.** 이름 대조(`_is_a_real_field`)는 있는 키만 보고,
+# 기본값 fallback 은 키가 아예 없는 자리라 그 그물에 안 걸린다
+@pytest.mark.parametrize("profile", sorted(EVAL_EMBEDDINGS))
+def test_every_profile_pins_its_provider(profile: str) -> None:
+    assert "embedding_provider" in EVAL_EMBEDDINGS[profile], (
+        f"프로필 '{profile}' 이 embedding_provider 를 안 박았습니다 — "
+        "코드 기본값이 바뀌면 이 프로필의 뜻이 아무 에러 없이 바뀝니다. "
+        "실제로 2026-08-25 에 그렇게 됐습니다 (evaluation/config.py 의 baseline 주석)"
+    )
+
+
 # 아무것도 안 주면 지금까지와 같은 실행이어야 한다. 축이 산출을 바꾸면 축이 아니라 변경이다
 def test_default_is_the_same_as_naming_the_default_profile() -> None:
     assert eval_config().embedding.model_dump() == (

@@ -55,6 +55,7 @@
    "include_heading_in_text": true
   },
   "embedding": {
+   "embedding_provider": "openai",
    "embedding_model": "text-embedding-3-small",
    "embedding_dimensions": null,
    "embedding_batch_size": 100,
