@@ -106,9 +106,19 @@ def rerank_cache_key(query: str, candidates: list[RetrievedChunk], *, salt: str)
 
 
 # 캐시 salt. **규칙을 구현체가 갖지 않는다** — `embedding/base.py:cache_salt_for()` 가 밟은
-# 길 그대로다. 구현체마다 다시 짜면 한쪽이 빠뜨려도 아무 에러가 안 난다
+# 길 그대로다. 구현체마다 다시 짜면 한쪽이 빠뜨려도 아무 에러가 안 난다.
+#
+# **`rerank_device` 가 들어가는 것이 요점이다.** 그 필드가 존재하는 이유 자체가 *"CPU 와
+# GPU 가 미세하게 다른 점수를 낸다"* 이므로(`config.py`), 안 실으면 GPU 로 돌린 실행이
+# **CPU 때 캐시를 그대로 읽어** 품질이 같게 나오고 속도만 빨라 보인다 — 지연을 재려던
+# 실행이 아무것도 안 재고 통과한다. 프롬프트를 키에 넣은 것과 같은 잣대다(위 함수 주석).
+# `provider="openai"` 는 device 를 안 쓰지만 **같은 규칙을 탄다** — 갈래마다 규칙이 다르면
+# 한쪽이 빠져도 아무 에러가 안 난다
 def rerank_cache_salt_for(config: RerankConfig, *, prompt_version: str) -> str:
-    return f"rerank:{config.rerank_provider}:{config.rerank_model}:{prompt_version}"
+    return (
+        f"rerank:{config.rerank_provider}:{config.rerank_model}"
+        f":{config.rerank_device}:{prompt_version}"
+    )
 
 
 # 점수를 후보에 얹어 정렬한다. **전부 아니면 전무다** (모듈 docstring 참고).

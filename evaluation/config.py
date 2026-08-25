@@ -154,6 +154,24 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
         "rerank_candidates": 50,
         "rerank_cache_enabled": True,
     },
+    # 같은 모델을 GPU 에서. **`local` 을 갈아끼지 않고 더하는 것이 요점이다** — 이름이 곧
+    # 실험의 정체라, 갈아끼면 이미 나온 E2·E4 수치가 어느 장치로 재졌는지를 파일이 더 이상
+    # 말하지 못한다(`kure-v1` 이 `embedding_device` 를 못 박은 것과 같은 잣대다).
+    #
+    # **재려는 것은 품질이 아니라 지연이다** — 로컬 CE 는 품질로는 무료 칸 넷 중 최고인데
+    # CPU 에서 질의당 51초라 화면에 못 쓴다(verify_log/2026-08-25-리랭커-2x2-무료칸.md 3-8).
+    # 그 탈락 사유가 장치 때문인지 모델 때문인지가 안 갈려 있었다.
+    #
+    # **점수도 함께 읽어야 한다** — `rerank_device` 가 존재하는 이유가 *"CPU 와 GPU 가 미세하게
+    # 다른 점수를 낸다"* 라서다. `cpu` 실행과 지표가 다르면 그것이 그 성질의 실측이고,
+    # 캐시가 섞이지 않는 것은 `rerank_cache_salt_for()` 가 device 를 싣기 때문이다
+    "local-gpu": {
+        "rerank_provider": "local",
+        "rerank_model": "BAAI/bge-reranker-v2-m3",
+        "rerank_device": "cuda",
+        "rerank_candidates": 50,
+        "rerank_cache_enabled": True,
+    },
 }
 
 # 아무것도 안 주면 이것. 리랭커 없이 도는 지금까지의 실행이다

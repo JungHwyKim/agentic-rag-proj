@@ -197,6 +197,10 @@ def _openai_config(tmp_path) -> RerankConfig:
         openai_api_key="sk-test",
         rerank_provider="openai",
         rerank_model="gpt-4.1-mini",
+        # **못 박는다.** 유료 갈래는 device 를 안 쓰지만 **캐시 salt 에는 들어가므로**,
+        # 안 박으면 개발자 `.env` 의 `RERANK_DEVICE` 가 픽스처에 실린다.
+        # 실제로 그렇게 샜다 — 리랭커를 켠 날 이 파일의 단언 하나가 그 값을 읽고 깨졌다
+        rerank_device="cpu",
         rerank_cache_dir=tmp_path / "rerank",
         rerank_cache_enabled=False,
     )
@@ -331,6 +335,33 @@ def test_prompt_version_is_in_the_cache_key(tmp_path):
     )
 
 
+# **장치도 캐시 키에 들어간다** — `rerank_device` 가 존재하는 이유가 *"CPU 와 GPU 가 미세하게
+# 다른 점수를 낸다"* 라서다. 안 들어가면 GPU 실행이 CPU 캐시를 읽어 **품질이 같게 나오고
+# 속도만 빨라 보인다** — 지연을 재려던 실행이 아무것도 안 재고 통과한다
+def test_device_is_in_the_cache_key(tmp_path):
+    from rag_pipeline.retrieval.reranker.base import rerank_cache_salt_for
+
+    cpu = RerankConfig(
+        rerank_provider="local", rerank_model="BAAI/bge-reranker-v2-m3", rerank_device="cpu"
+    )
+    gpu = RerankConfig(
+        rerank_provider="local", rerank_model="BAAI/bge-reranker-v2-m3", rerank_device="cuda"
+    )
+
+    assert rerank_cache_salt_for(cpu, prompt_version="v1") != rerank_cache_salt_for(
+        gpu, prompt_version="v1"
+    )
+    # 유료 갈래도 같은 규칙을 탄다 — 갈래마다 규칙이 다르면 한쪽이 빠져도 아무 에러가 안 난다.
+    # **값을 글자로 단언하지 않는다** — 초판이 `"cpu" in salt` 였는데 그 `cpu` 가 픽스처가
+    # 아니라 개발자 `.env` 에서 온 값이라, 리랭커를 켠 날 깨졌다. 재야 할 것은 기본값이
+    # 아니라 *device 를 바꾸면 salt 가 갈리는가* 다
+    paid_cpu = _openai_config(tmp_path)
+    paid_gpu = paid_cpu.model_copy(update={"rerank_device": "cuda"})
+    assert rerank_cache_salt_for(paid_cpu, prompt_version="v1") != rerank_cache_salt_for(
+        paid_gpu, prompt_version="v1"
+    )
+
+
 # ------------------------------------------------------------- 로컬 갈래
 
 
@@ -338,6 +369,8 @@ def _local_config(tmp_path) -> RerankConfig:
     return RerankConfig(
         rerank_provider="local",
         rerank_model="BAAI/bge-reranker-v2-m3",
+        # `_openai_config` 와 같은 이유로 못 박는다 (그쪽 주석 참고)
+        rerank_device="cpu",
         rerank_cache_dir=tmp_path / "rerank",
         rerank_cache_enabled=False,
     )
