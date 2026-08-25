@@ -375,3 +375,62 @@ def test_fresh_answer_has_no_cache_badge(mocker):
     body = _client().post("/api/v1/query", data={"query": "질문"}).text
 
     assert "badge-row" not in body
+
+
+# --- 리랭커 --------------------------------------------------------------------
+
+
+# **embedder 와 같은 축이다** — 로컬 갈래는 cross-encoder 가중치를 올리므로 startup 에서
+# 만들면 그 시간만큼 서버가 안 뜬다. 첫 질의에 만들고 그 뒤로는 재사용한다
+def test_reranker_is_created_lazily(mocker):
+    app = create_app()
+    config = IngestConfig()
+    object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
+    app.state.ingest_config = config
+    app.state.store = FakeStore()
+    app.state.embedder = object()
+    app.state.reranker = None
+    made = mocker.patch(
+        "backend.app.api.routes.query.get_reranker", return_value="fake-reranker"
+    )
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+    client = TestClient(app)
+
+    # 문서 목록만 봐서는 안 만든다
+    client.get("/api/v1/documents")
+    made.assert_not_called()
+
+    client.post("/api/v1/query", data={"query": "질문"})
+    assert made.call_count == 1
+    assert asked.call_args.kwargs["reranker"] == "fake-reranker"
+
+    # 두 번째 질의는 다시 안 만든다
+    client.post("/api/v1/query", data={"query": "또 질문"})
+    assert made.call_count == 1
+
+
+# **`None` 이 정상값이라 그것도 기억해야 한다.** 꺼진 상태를 "아직 안 만들었다"로 읽으면
+# 질의마다 다시 만드는데, 로컬 갈래에서는 그 자리가 곧 모델 적재다
+def test_disabled_reranker_is_not_rebuilt_every_query(mocker):
+    app = create_app()
+    config = IngestConfig()
+    object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
+    app.state.ingest_config = config
+    app.state.store = FakeStore()
+    app.state.embedder = object()
+    app.state.reranker = None
+    made = mocker.patch("backend.app.api.routes.query.get_reranker", return_value=None)
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+    client = TestClient(app)
+
+    client.post("/api/v1/query", data={"query": "질문"})
+    client.post("/api/v1/query", data={"query": "또 질문"})
+
+    assert made.call_count == 1
+    assert asked.call_args.kwargs["reranker"] is None

@@ -17,7 +17,9 @@ import pytest
 
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_RERANK_PROFILE,
     EVAL_EMBEDDINGS,
+    EVAL_RERANKERS,
     EVAL_SETTINGS,
     embedding_profile,
     eval_config,
@@ -27,9 +29,11 @@ from rag_pipeline.config import (
     ContentRoutingConfig,
     EmbeddingConfig,
     IngestConfig,
+    RerankConfig,
     RetrievalConfig,
     SplitterConfig,
 )
+from rag_pipeline.retrieval import get_reranker
 
 EVALUATION_DIR = Path(__file__).resolve().parents[2] / "evaluation"
 
@@ -41,6 +45,7 @@ _MODELS = {
     "splitter": SplitterConfig,
     "embedding": EmbeddingConfig,
     "retrieval": RetrievalConfig,
+    "rerank": RerankConfig,
 }
 
 
@@ -186,3 +191,69 @@ def test_env_cannot_move_a_named_profile(monkeypatch) -> None:
 # **읽기만 한다는 것**을 여기서 못 박아 둔다 (지금 호출부는 ** 로 펴서 넘긴다)
 def test_lookup_returns_the_registered_block() -> None:
     assert embedding_profile(DEFAULT_EMBEDDING_PROFILE) == EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE]
+
+
+# 리랭커 프로필 축 — 임베딩과 **같은 모양이라 같은 가드를 건다**
+# ---------------------------------------------------------------------------
+
+
+# 기본이 꺼짐이어야 한다. **`--rerank` 를 안 준 실행은 지금까지와 글자 그대로 같아야 한다** —
+# 켜지는 순간 질의당 LLM 호출이 1회에서 2회가 되므로 기본값이 곧 과금 여부다
+def test_rerank_default_profile_is_off() -> None:
+    assert EVAL_SETTINGS["rerank"] is EVAL_RERANKERS[DEFAULT_RERANK_PROFILE]
+    assert eval_config().rerank.rerank_model is None
+    assert get_reranker(eval_config().rerank) is None
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_every_rerank_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_RERANKERS[profile]) - set(RerankConfig.model_fields)
+    assert not unknown, f"리랭커 프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_named_rerank_profile_actually_lands(profile: str) -> None:
+    config = eval_config(rerank=profile)
+    for key, value in EVAL_RERANKERS[profile].items():
+        assert getattr(config.rerank, key) == value, f"{profile}.{key}"
+
+
+# **로컬 갈래는 장치를 못 박아야 한다** — CPU 와 GPU 가 다른 점수를 내면 같은 명령이
+# 머신마다 다른 순위를 만들고 비교표가 에러 없이 흔들린다. `kure-v1` 이 `embedding_device` 를
+# 못 박은 것과 같은 함정이라, 새 로컬 프로필을 더할 때 빠뜨리는 것을 여기서 막는다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_local_rerank_profiles_pin_the_device(profile: str) -> None:
+    block = EVAL_RERANKERS[profile]
+    if block.get("rerank_provider") != "local":
+        pytest.skip("로컬 갈래가 아니면 장치를 안 쓴다")
+    assert "rerank_device" in block, f"로컬 프로필 '{profile}' 에 rerank_device 가 없다"
+
+
+# 없는 이름이면 조용히 꺼짐으로 안 돌아간다. 돌아가면 리랭커를 켠 줄 알고 대조군을 두 번
+# 재게 되고, 두 실행이 같은 수치를 내는 것이 "리랭커가 효과 없다"로 읽힌다
+def test_unknown_rerank_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(rerank="없는리랭커")
+    assert "없는리랭커" in str(err.value)
+    assert DEFAULT_RERANK_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 못 이긴다. 고정의 목적이 이 축으로 새면 안 된다
+def test_env_cannot_move_a_named_rerank_profile(monkeypatch) -> None:
+    monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
+    monkeypatch.setenv("RERANK_CANDIDATES", "3")
+
+    config = eval_config(rerank="openai")
+
+    assert config.rerank.rerank_model == "gpt-4.1-mini"
+    assert config.rerank.rerank_candidates == 50
+
+
+# **`.env` 가 꺼진 기본값을 켤 수도 없어야 한다.** 개발자가 `.env` 에 모델 이름을 넣어 두면
+# `--rerank` 를 안 준 평가 실행이 조용히 과금되는데, 그것이 정확히 이 파일이 막는 것이다
+def test_env_cannot_turn_the_default_off_profile_on(monkeypatch) -> None:
+    monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
+
+    assert eval_config().rerank.rerank_model is None

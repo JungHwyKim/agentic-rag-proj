@@ -1,15 +1,23 @@
 """검색 단계. 질의를 받아 근거가 될 청크를 고른다.
 
 갈래는 둘이다 — **dense**(저장소 벡터 검색)와 **BM25**(낱말 색인). 둘을 쓸 때는 RRF 로
-합친다. reranker 는 `plan_log/검색-생성.md` 가 Phase 3 으로 예약해 두었고, 붙는 자리는
-`retrieve()` 의 반환 뒤다(`RetrievedChunk.rerank_score` 칸이 이미 비어 있다).
+합친다. 그 위에 **리랭커**가 선택적으로 얹혀 후보 풀의 순서를 다시 매긴다.
 
-**BM25 인덱스는 이 패키지가 안 들고 있다.** `build_bm25_index(store)` 로 지어 부르는 쪽이
-들고 `retrieve(..., bm25=...)` 로 넘긴다 — `store`·`embedder` 와 같은 대우다.
+**리랭커가 붙는 자리는 `retrieve()` 의 반환 뒤가 아니라 안이다.** 이 docstring 이 한동안
+*"반환 뒤"* 라고 적어 뒀는데 틀렸다 — 뒤에 두면 리랭커가 보는 것이 `top_k` 개뿐이라
+11~50위에 잠긴 여지를 통째로 버린다. 근거와 절단 위치는 `hybrid.py` docstring.
+
+**BM25 인덱스와 리랭커는 이 패키지가 안 들고 있다.** `build_bm25_index(store)` ·
+`get_reranker(config)` 로 지어 부르는 쪽이 들고 `retrieve(..., bm25=..., reranker=...)` 로
+넘긴다 — `store`·`embedder` 와 같은 대우이고, **안 넘기는 것이 곧 끄는 스위치**다.
 
 ## 이 단계의 규약이 어디 있나
 
-- 왜 `store`·`embedder`·`bm25` 를 인자로 받나 / dense 를 먼저 부르는 이유 — `hybrid.py` docstring
+- 왜 `store`·`embedder`·`bm25` 를 인자로 받나 / dense 를 먼저 부르는 이유 /
+  리랭커가 왜 `retrieve()` 안인가 — `hybrid.py` docstring
+- 리랭커 실패가 왜 폴백인가 / 왜 반쯤 안 채우나 / 왜 순위가 아니라 점수인가 —
+  `reranker/base.py` docstring
+- `rerank_model` 이 비면 왜 꺼지나 / 왜 Protocol 을 만드나 — `reranker/__init__.py` docstring
 - BM25 실패가 예외가 아니라 dense 폴백인 이유 / `k1`·`b` 를 설정으로 안 여는 이유 — `bm25.py` docstring
 - 한글은 bigram, 영문·숫자는 낱말인 이유 — `tokenize.py` docstring
 - 점수를 안 더하고 순위를 쓰는 이유(RRF) / 동점 처리 — `fusion.py` docstring
@@ -26,5 +34,6 @@ from __future__ import annotations
 
 from rag_pipeline.retrieval.bm25 import Bm25Index, build_bm25_index
 from rag_pipeline.retrieval.hybrid import retrieve
+from rag_pipeline.retrieval.reranker import Reranker, get_reranker
 
-__all__ = ["Bm25Index", "build_bm25_index", "retrieve"]
+__all__ = ["Bm25Index", "Reranker", "build_bm25_index", "get_reranker", "retrieve"]

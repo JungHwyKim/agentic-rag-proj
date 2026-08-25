@@ -67,6 +67,8 @@ from typing import Any
 
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    EVAL_RERANKERS,
     EVAL_SETTINGS,
     embedding_profile,
     eval_config,
@@ -134,13 +136,14 @@ def run_dense(
     label: str,
     groups: list[str] | None = None,
     use_bm25: bool = False,
+    rerank: str = DEFAULT_RERANK_PROFILE,
     qa_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
-    from rag_pipeline.retrieval import build_bm25_index, retrieve
+    from rag_pipeline.retrieval import build_bm25_index, get_reranker, retrieve
 
     qa = load_qa_set(qa_path)
     if not qa.items:
@@ -149,7 +152,7 @@ def run_dense(
     # **개발자 `.env` 가 아니라 고정 설정이다** (evaluation/config.py).
     # 실행마다 저장 경로를 가르는 것은 배타 잠금 때문이다 (모듈 docstring 참고)
     config = eval_config(
-        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding, rerank=rerank
     )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
@@ -186,6 +189,10 @@ def run_dense(
     # 45건이 45번이 된다. `--hybrid` 가 없으면 None 이고, 그때 결과는 dense 와 글자 그대로
     # 같아야 한다 (rag_pipeline/retrieval/hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
     bm25 = build_bm25_index(store) if use_bm25 else None
+    # **리랭커도 루프 밖에서 한 번 만든다.** 로컬 갈래는 모델을 올리므로 질의마다 만들면
+    # 그 비용을 60번 낸다. `--rerank` 를 안 주면 프로필이 `off` 라 None 이고, 그때 결과는
+    # 리랭커 이전과 글자 그대로 같아야 한다 (hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
+    reranker = get_reranker(config.rerank)
     # k 축마다 QueryScore 목록. **검색은 한 번이고 채점만 여러 번이다**
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
@@ -198,6 +205,7 @@ def run_dense(
                 embedder=embedder,
                 top_k=k,
                 bm25=bm25,
+                reranker=reranker,
                 config=config.retrieval,
             )
             texts = [hit.text for hit in hits]
@@ -226,7 +234,14 @@ def run_dense(
         "embedding_profile": embedding,
         # **`EVAL_SETTINGS` 를 그대로 실으면 안 된다** — 그 안의 `embedding` 은 기본
         # 프로필이라, 다른 프로필로 돌린 실행이 자기가 안 쓴 모델을 기록하게 된다
-        "settings": {**EVAL_SETTINGS, "embedding": embedding_profile(embedding)},
+        # **리랭커 프로필도 같은 이유로 갈아 끼운다** — `EVAL_SETTINGS["rerank"]` 는 기본
+        # 프로필(=꺼짐)이라, 그대로 실으면 리랭커를 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
+        "rerank_profile": rerank,
+        "settings": {
+            **EVAL_SETTINGS,
+            "embedding": embedding_profile(embedding),
+            "rerank": EVAL_RERANKERS[rerank],
+        },
         # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
         # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
         # dense 폴백이라, 안 남기면 "그냥 효과가 없었다"와 구분이 안 되기 때문이다
@@ -234,9 +249,23 @@ def run_dense(
             "use_bm25": use_bm25,
             "bm25_chunks": len(bm25) if bm25 is not None else None,
             "bm25_warnings": list(bm25.warnings) if bm25 is not None else [],
+            # **리랭커 경고도 같은 이유로 싣는다** — 실패가 예외가 아니라 RRF 순서로 내려가는
+            # 폴백이라, 안 남기면 *"리랭커가 값을 못 했다"* 와 *"리랭커가 안 돌았다"* 가
+            # 리포트에서 구분이 안 된다. 비교표의 한 칸이 통째로 거짓이 되는 자리다
+            "rerank": rerank,
+            "rerank_warnings": list(reranker.warnings) if reranker is not None else [],
         },
         "indexed": indexed,
-        "usage": {"tokens": embedder.usage.total_tokens, "calls": embedder.usage.api_calls},
+        # **리랭커 비용을 임베딩과 갈라 싣는다** — 유료 갈래는 토큰이, 로컬 갈래는 채점한
+        # 후보 수(`reranked`)가 비용이다. 합치면 어느 쪽이 얼마를 썼는지 못 읽는다
+        "usage": {
+            "tokens": embedder.usage.total_tokens,
+            "calls": embedder.usage.api_calls,
+            "rerank_calls": reranker.usage.api_calls if reranker is not None else 0,
+            "rerank_tokens": reranker.usage.total_tokens if reranker is not None else 0,
+            "rerank_cache_hits": reranker.usage.cache_hits if reranker is not None else 0,
+            "reranked": reranker.usage.reranked if reranker is not None else 0,
+        },
         "summary": summarize(by_axis[report_k], report_k),
         "by_k": {str(axis): summarize(by_axis[axis], axis) for axis in axes},
         "by_group": by_group,
@@ -272,10 +301,16 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "갱신 이력": [],
     }
+    # **`retriever` 와 `rerank_profile` 이 빠져 있었다.** 그래서 기준선 파일만 보고는
+    # dense 인지 hybrid 인지 못 가렸다 — 이번 회차는 기준선을 안 올리지만, 누군가
+    # `--hybrid --save-baseline` 을 돌리는 순간 갈래를 조용히 잃는 자리라 함께 닫는다.
+    # `usage` 는 여전히 뺀다(캐시 적중에 따라 흔들려 diff 노이즈가 된다)
     keys = (
         "label",
         "format",
         "embedding_profile",
+        "rerank_profile",
+        "retriever",
         "groups",
         "k",
         "report_k",
@@ -380,6 +415,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--rerank",
+        default=DEFAULT_RERANK_PROFILE,
+        choices=sorted(EVAL_RERANKERS),
+        help=(
+            "리랭커 프로필 이름 (evaluation/config.py 의 EVAL_RERANKERS). "
+            "기본은 off 라 지금까지와 같은 실행이다. **openai 는 질의당 과금이 붙는다**"
+        ),
+    )
+    parser.add_argument(
         "--qa-set",
         type=Path,
         help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
@@ -391,6 +435,12 @@ def main() -> int:
         help="이번 결과를 baseline.json 으로 굳힌다. 없으면 기준선을 안 건드린다",
     )
     args = parser.parse_args()
+
+    # **`--rerank` 를 `--dense` 없이 주면 멈춘다.** 아래 갈래가 세트 검증만 돌고 `통과` 를
+    # 찍는데, 리랭커를 켰다고 믿은 사람은 그것을 성공으로 읽는다. `--hybrid` 에 같은 함정이
+    # 있어 다른 세션이 실제로 한 번 헛돌았다 — 그 가드를 되살릴 때 모양을 맞추기로 했다
+    if args.rerank != DEFAULT_RERANK_PROFILE and not args.dense:
+        raise SystemExit("--rerank 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
 
     if args.check or not args.dense:
         problems = check(refresh=args.refresh, qa_path=args.qa_set)
@@ -408,6 +458,7 @@ def main() -> int:
         label=args.label,
         groups=args.groups,
         use_bm25=args.hybrid,
+        rerank=args.rerank,
         qa_path=args.qa_set,
         embedding=args.embedding,
     )

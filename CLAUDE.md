@@ -38,7 +38,7 @@ uv pip install -r requirements-local.txt
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
-- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`cache` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. `bm25`·`cache` 는 안 넘기면 그 갈래 없이 도는 것이 곧 스위치라 설정이 없다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`reranker`·`cache` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. 뒤 셋은 안 넘기면 그 갈래 없이 도는 것이 곧 스위치다 — 다만 **`bm25`·`cache` 는 설정이 없고 `reranker` 는 있다**(`RERANK_PROVIDER`·`RERANK_MODEL`). 구현체가 둘이라 고를 축이 실재하기 때문이고, `RERANK_MODEL` 이 비면 `get_reranker()` 가 `None` 을 돌려 꺼진다. **붙는 자리도 셋이 다르다** — `cache` 는 `retrieve()` 앞, `bm25` 는 그 안의 한 갈래, `reranker` 는 그 안에서 RRF 뒤·절단 앞이다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 

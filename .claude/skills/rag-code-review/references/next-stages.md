@@ -19,7 +19,11 @@
 - `rag_pipeline/query.py:answer_question()` — 위 둘을 잇는 **세 번째 진입점**
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
-**나머지는 여전히 없다** — 리랭커 · 질의 재작성 루프. **semantic cache 는 2026-08-24 에 생겼다**(`rag_pipeline/answer_cache/`) — 다만 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절).
+**나머지는 여전히 없다** — 질의 재작성 루프 · Evaluator · agent 레이어.
+**리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
+비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라
+결정이다**(켜는 순간 질의당 LLM 호출이 1→2 다). **품질은 아직 안 쟀다** — 2×2 비교표가
+`plan_log/검색-생성.md` 5회차에 비어 있다. **semantic cache 는 2026-08-24 에 생겼다**(`rag_pipeline/answer_cache/`) — 다만 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절).
 그래서 이 파일은 아직 `retriever.md` 로 승격하지 않았다(승격 규칙은 맨 아래). 있는 것에는
 아래 계약을 적용하고, 없는 것은 여전히 지적하지 않는다.
 
@@ -101,7 +105,20 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 - **metadata 필터 검색은 일부러 안 만들었다.** `search()` 에 `filters` 인자가 없는 것은
   누락이 아니다 — 쓸 만한 필터 축이 `document_id` 뿐이고 **`page` 는 못 쓴다**(같은 문서를
   PDF 28쪽 / HWPX 97쪽으로 세는 미해결 함정). metadata 저장·반환은 이미 된다
-- **하이브리드 검색·리랭커·질의 재작성**은 한 줄도 없다. 없는 것을 지적하지 않는다
+- **질의 재작성·Evaluator 는 한 줄도 없다.** 없는 것을 지적하지 않는다.
+  하이브리드(2026-08-23)와 리랭커(2026-08-25)는 **생겼으므로 이 면제에서 빠진다** —
+  아래 리랭커 계약을 적용한다
+- **리랭커의 실패는 예외가 아니라 폴백이고, 반쯤 채우면 안 된다.** 점수를 하나라도 못 얻으면
+  `rerank_score` 를 **아무것도 안 채우고** 받은 순서를 그대로 돌려준다 —
+  `ranking_score` 가 `fused_score` 로 떨어져 RRF 순서가 된다. **부분 성공을 만드는 방향으로
+  "개선"하지 말 것**(`표-경로.md` 13회차의 *채운 만큼 쓴다* 잣대를 여기 옮기면, 순서가 반쯤
+  바뀌어 *"리랭커가 나쁜가 응답이 반쪽이었나"* 를 못 가른다). 경고는 `Reranker.warnings` 다
+- **리랭커는 `retrieve()` 밖으로 빼면 안 된다.** 절단을 호출부로 옮기면 `top_k` 의 뜻이
+  *"최종 개수"* 와 *"후보 수"* 로 갈리고, 세 호출부 중 하나만 빠뜨리면 **조용히** 리랭커 없이
+  돈다. 같은 이유로 **dense-only 갈래의 후보 폭도 `reranker` 가 있으면 넓혀야 한다**
+- **`rerank_provider` 는 죽은 설정이 아니다.** 구현체가 둘이라(OpenAI listwise · 로컬
+  cross-encoder) `embedding_provider` 와 같은 자리다. `rerank_device` 기본값 `cpu` 는 성능
+  선택이 아니라 **재현성**이다 — 지우면 GPU 머신이 다른 순위를 낸다
 - **점수 임계값은 없다.** 근거 유무를 프롬프트로만 가르고 `dense_score` 는 실어 나르기만 한다
   — Dot 점수 분포를 아직 안 재서 임계값을 지어내야 하기 때문이다. 없는 것을 지적하지 않는다
 - `frontend/` 는 비어 있다 — 화면은 `backend/app/templates/` 에 서버 렌더로 산다
@@ -111,7 +128,18 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 retriever 가 실제로 구현되면 이 파일을 `references/retriever.md` 로 승격하고,
 `SKILL.md` 라우팅 표의 해당 줄을 바꾼다. cleaner·splitter·embedding·indexing 이 그렇게 갔다.
 
-**다시 볼 조건이 2026-08-23 에 충족됐다** — hybrid 가 붙었다. 그런데도 **승격하지 않았다.**
-리랭커·재작성 루프가 없어 파일의 상당 부분이 여전히 "아직 없는 것"이고, 제목만 바꾸면 그
-부분이 거짓이 된다. 조건을 다시 좁힌다 — **다시 볼 조건: 리랭커(Phase 3)가 붙을 때.**
-그때 검색과 생성을 두 파일로 가를지도 함께 정한다.
+**다시 볼 조건이 두 번 충족됐고 두 번 다 승격하지 않았다** — hybrid(2026-08-23)와
+리랭커(2026-08-25)다. 이번에도 안 올린 이유는 **같은 것이 아니다.**
+
+저번에는 *"리랭커·재작성 루프가 없어 파일의 상당 부분이 아직 없는 것"* 이었다. 지금은
+검색 쪽이 다 찼는데도 미룬 이유가 둘이다.
+
+- **품질을 아직 안 쟀다.** 리랭커는 코드가 있고 계약이 잠겨 있지만 2×2 비교표가 한 칸도 안
+  찼다(`plan_log/검색-생성.md` 5회차). *"켤 조합"* 이 정해지면 기본값·상한이 함께 정해지는데,
+  그 전에 `retriever.md` 로 굳히면 **곧 낡을 값을 리뷰 기준으로 만든다**
+- **가를지 말지가 아직 미결이다.** 검색과 생성을 한 파일로 둘지 두 파일로 가를지를 이 파일이
+  계속 미뤄 왔다. 리랭커가 붙으며 검색 쪽 분량이 생성 쪽을 넘었으므로 **이제는 가르는 쪽이
+  유력하다** — 다만 그 판단은 승격과 함께 한 번에 한다
+
+**다시 볼 조건: 2×2 비교표가 채워져 리랭커를 켤지 정해질 때.** 그때 `retriever.md` ·
+`generation.md` 로 가르는 것을 기본안으로 놓고 본다.

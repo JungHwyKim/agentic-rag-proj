@@ -160,3 +160,51 @@ def test_cache_miss_runs_normally_and_stores(mocker, config):
 
     assert answer.text == "답변"
     assert cache.put_calls == [answer]
+
+
+# --- 리랭커 --------------------------------------------------------------------
+
+
+# **리랭커를 그대로 retrieve() 에 넘긴다.** 여기서 하는 일은 수명을 정해 넘기는 것뿐이고,
+# 실제로 붙는 자리는 retrieve() **안**이다(RRF 뒤·절단 앞). 이 배선이 끊기면 리랭커를
+# 설정해도 아무 일이 안 일어나는데 **에러가 안 난다** — 순서가 그냥 예전 그대로다
+def test_reranker_is_passed_through_to_retrieve(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    reranker = object()
+
+    answer_question(
+        "질문", store=object(), embedder=object(), config=config, reranker=reranker
+    )
+
+    assert retrieve.call_args.kwargs["reranker"] is reranker
+
+
+# 안 넘기면 None 이 간다. bm25·cache 와 같은 스위치다
+def test_without_reranker_none_is_passed(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert retrieve.call_args.kwargs["reranker"] is None
+
+
+# **캐시가 히트하면 리랭커도 안 돈다.** retrieve() 를 통째로 건너뛰기 때문인데, 그래서
+# 리랭커를 켜기 전에 쌓인 캐시 항목은 켠 뒤에도 리랭킹 안 된 순서로 서빙된다.
+# 지금은 캐시가 기본으로 꺼져 있어 안 물리지만, **"리랭커가 늘 돈다"고 쓰면 안 되는 자리다**
+def test_cache_hit_skips_the_reranker_too(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(query="질문", text="옛 답변", sources=[])
+
+    answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        reranker=object(),
+        cache=_FakeCache(cached),
+    )
+
+    assert retrieve.call_count == 0

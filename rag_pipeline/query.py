@@ -28,6 +28,15 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 `None` 이면 dense 한 갈래로 돈다(`retrieval/hybrid.py` 가 그 동등성을 계약으로 박아 뒀다).
 그래서 이 인자를 더해도 **기존 호출은 한 줄도 안 바뀐다.**
 
+## `reranker` 도 같은 모양이다
+
+후보 풀을 다시 정렬하는 구현체 역시 인자이고 `None` 이면 RRF 순서로 돈다. **다만 붙는 자리가
+`bm25` 와 다르다** — 이것은 `retrieve()` **안**에서 RRF 뒤·절단 앞에 선다. 여기서 하는 일은
+수명을 정해 넘기는 것뿐이다(`retrieval/hybrid.py` 가 왜 안인지를 적어 뒀다).
+
+수명을 부르는 쪽이 정하는 이유는 `embedder` 와 같다 — 로컬 갈래는 모델을 올리므로 질의마다
+만들면 그 비용을 매번 낸다. backend 는 첫 질의에 만들어 들고, 평가 러너는 실행마다 만든다.
+
 ## `cache` 도 같은 모양이다
 
 답변 캐시 역시 인자이고 `None` 이면 캐시 없이 돈다 — `bm25` 와 같은 이유이자 같은 스위치다.
@@ -43,8 +52,9 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 
 ## 여기서 안 하는 것
 
-Evaluator·Rewriter 재검색 루프 · reranker. 둘 다 `plan_log/검색-생성.md` 의 Phase 3~5 이고,
-붙는 자리는 `retrieve()` 와 `generate_answer()` 사이다.
+Evaluator·Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 4~5 이고, 붙는 자리는
+`retrieve()` 와 `generate_answer()` 사이다. **리랭커는 여기 있었다가 빠졌다** — 그 자리가
+아니라 `retrieve()` 안이기 때문이다(위 "`reranker` 도 같은 모양이다").
 """
 
 from __future__ import annotations
@@ -54,7 +64,7 @@ from rag_pipeline.config import IngestConfig
 from rag_pipeline.generation import generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
-from rag_pipeline.retrieval import Bm25Index, retrieve
+from rag_pipeline.retrieval import Bm25Index, Reranker, retrieve
 from rag_pipeline.schemas.answer import Answer
 
 __all__ = ["answer_question"]
@@ -69,6 +79,7 @@ def answer_question(
     config: IngestConfig | None = None,
     top_k: int | None = None,
     bm25: Bm25Index | None = None,
+    reranker: Reranker | None = None,
     cache: QdrantAnswerCache | None = None,
 ) -> Answer:
     cfg = config or IngestConfig()
@@ -86,6 +97,7 @@ def answer_question(
         embedder=embedder,
         top_k=limit,
         bm25=bm25,
+        reranker=reranker,
         config=cfg.retrieval,
     )
     text = generate_answer(query, chunks, cfg.generation)

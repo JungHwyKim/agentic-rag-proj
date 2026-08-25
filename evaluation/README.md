@@ -686,6 +686,107 @@ from rag_pipeline.ingestion.indexing import collection_name_for   # 이름이 �
 **그 전에 `plan_log/시맨틱-캐시.md` 의 남은 미결 둘**(검색 파이프라인 변화 · 캐시 상한)
 **을 함께 본다** — 캐시가 켜지는 순간 둘 다 발화한다.
 
+## 리랭커를 재려면
+
+`plan_log/검색-생성.md` 5회차가 정한 **바닥 2 × 구현체 2** 비교다. 채우는 표와 기각한 안은
+그쪽에 있고, 여기는 절차만 적는다.
+
+### 1. 자[尺]를 먼저 맞춘다 — 여기서 제일 틀리기 쉽다
+
+리랭커는 **후보 집합을 안 바꾸고 순서만 바꾼다.** 그래서
+
+- `recall@후보수` 로 재면 차이가 **정의상 0** 이다(위 "지표를 축마다 가르는 이유")
+- `hit@10` 으로 재도 바닥이 좋으면 여지가 실제보다 **작아 보인다**
+
+바닥은 `hit@1` 이고 천장은 `hit@후보수` 다. KURE+BM25 에서 `hit@1` 0.4333 · `hit@20` 0.9333
+이라 여지가 `+0.500` 인데, `hit@10`(0.8167→0.9333)으로 보면 작아 보인다. **두 세션이 각각
+한 번씩 이 자리에서 틀렸다.** 주지표는 `nDCG@5`·`precision@3`·`recall@5` 다.
+
+### 2. 축은 프로필 이름이다
+
+`--rerank <프로필>` 이고 값은 `evaluation/config.py` 의 `EVAL_RERANKERS` 에 있다 —
+`off`(기본) · `openai` · `local`. **없는 이름을 주면 멈춘다** — 조용히 꺼짐으로 떨어지면
+리랭커를 켠 줄 알고 대조군을 두 번 재게 되고, 두 실행이 같은 수치를 내는 것이
+*"리랭커가 효과 없다"* 로 읽힌다(`--embedding` 과 같은 가드다).
+
+**`--dense` 없이 주면 멈춘다.** 안 그러면 세트 검증만 돌고 `통과` 를 찍는데, 리랭커를
+켰다고 믿은 사람은 그것을 성공으로 읽는다.
+
+### 3. 기준선을 안 건드린다
+
+`--save-baseline` 을 어느 명령에도 안 붙인다. `baseline.json` 은 **모델 비교의 대조군**이고
+위 3절이 *"대조군은 dense"* 로 못 박아 뒀다. 비교는 실행 라벨끼리 `overlap.py` 로 한다 —
+포맷 비교가 밟은 길이다.
+
+```powershell
+# 대조군 둘 (무료 — baseline 은 임베딩 캐시, kure-v1 은 로컬)
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --k 20 --report-k 10 --label c1-baseline
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --embedding kure-v1 --k 20 --report-k 10 --label c2-kure
+
+# 실험 넷. local 갈래는 무료다
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --rerank openai --k 20 --report-k 10 --label e1-baseline-llm
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --rerank local  --k 20 --report-k 10 --label e2-baseline-ce
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --rerank openai --embedding kure-v1 --k 20 --report-k 10 --label e3-kure-llm
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --rerank local  --embedding kure-v1 --k 20 --report-k 10 --label e4-kure-ce
+
+# 대조 — 총합이 아니라 겹침 구간별로 (위 4절)
+$env:PYTHONIOENCODING = "utf-8"
+.\.venv\Scripts\python.exe -m evaluation.overlap c2-kure-pdf e3-kure-llm-pdf
+```
+
+**`--k 20` 이어도 리랭커는 풀 50을 본다.** 풀 폭은 `candidate_k` 가 정하고 `top_k` 는 자르는
+수다 — 그것이 이 단계 배선의 요점이라 `retrieve()` **안**에서 자른다.
+
+### 4. 비용은 추정하지 말고 리포트에서 읽는다
+
+유료는 `openai` 프로필 둘뿐이다. 질의당 후보 50 × 최대 1200자라 입력이 대략 6만 토큰이고
+60건이면 실행당 $1~2 로 **예상**되는데, 실제 값은 리포트 `usage` 의 `rerank_calls` ·
+`rerank_tokens` 에 있다. `ResultCache` 가 재실행을 $0 으로 만든다.
+
+**로컬 갈래의 비용은 토큰이 아니라 지연이다** — `usage.reranked`(채점한 후보 수)가 그
+지표이고, CPU 에서 50후보 × 60질의가 얼마나 걸리는지는 **아직 안 쟀다.** 화면에 못 쓸 만큼
+느리면 그 사실 자체가 결과다.
+
+**⚠ 캐시가 비용과 실패를 가린다.** `rerank_cache_enabled` 가 켜져 있어 **같은 (질의, 후보
+집합)을 다시 돌리면 API 를 아예 안 탄다.** 재실행을 공짜로 만드는 것이 목적이지만, *비용을
+재거나 실패 경로를 확인할 때는* 그것이 곧 가림막이다 — 다른 세션이 그림자 색인 실패를
+만들려고 키를 깨고 재업로드했는데 **임베딩 캐시가 적중해 성공해 버린** 일이 실제로 있었다.
+비용·실패를 볼 때는 캐시에 없는 입력으로 재거나 `.cache/rerank` 를 비운다.
+
+### 5. 모델 후보는 순위표가 아니라 **컨텍스트 상한**으로 먼저 거른다
+
+cross-encoder 는 `(질의, 청크)` 를 **한 입력으로 함께** 넣는다. 이 코퍼스의 실측 최대 청크가
+**1,201토큰**이라 상한이 짧은 모델은 정답이 든 뒷부분을 잘라 버리는데, **에러가 아니라 낮은
+점수로만** 드러난다. 임베더를 고를 때 `multilingual-e5-large` 를 탈락시킨 것이 이 필터이고
+(상한 512), 리랭커에서는 질의까지 같이 들어가 **더 빡빡하다.**
+
+순위표로 고르지 않는 이유는 임베더 때와 같다 — 같은 모델을 두 표가 0.6947 과 0.728 로
+내놓아 스케일이 안 섞인다. **한국어 튜닝 여부는 함께 본다**: 다국어 리랭커를 한국어 튜닝
+retriever 위에 얹는 조합이 될 수 있고, 그 축의 반대편이 이번 임베더 교체(0.4833 → 0.8500)다.
+그래서 **두 후보를 같은 회차에 함께 잰다** — 한쪽만 재면 *"리랭커가 효과 없다"* 와
+*"이 리랭커가 한국어를 못 본다"* 가 안 갈린다.
+
+### 6. 폴백을 결과와 안 헷갈린다
+
+리랭커 실패는 예외가 아니라 **RRF 순서로 내려가는 폴백**이다. 그래서 리포트의
+`retriever.rerank_warnings` 를 **먼저** 본다 — 비어 있지 않으면 그 실행은
+*"리랭커가 값을 못 했다"* 가 아니라 *"리랭커가 안 돌았다"* 다.
+
+### 7. 사람 세트는 이긴 칸에만
+
+2×2 를 8칸으로 늘리지 않는다. 20건에서는 질의 1개가 5%p 라 네 칸을 서로 가를 힘이 없다.
+
+### 8. 여기서 잰 것을 실사용 질의로 일반화할 때의 감수 사항
+
+**`qa_set` 질의는 사람이 문서를 앞에 두고 던진 것이라 "혼자 선다".** 실사용 질의는 그렇지
+않을 수 있다 — 앞말 없이 도착해 `그 대장을`·`그 명단에` 같은 지시어가 성립하지 않는 축이
+있고, 그것은 **이 세트에 아예 없다**(축의 정체는 위 「답변 캐시 임계값을 재려면」의
+`### 4-2` 에 있다).
+
+리랭커는 `(질의, 청크)` 를 함께 보므로 **질의가 혼자 못 서면 그 어려움을 그대로 떠안는다.**
+여기서 나온 수치는 *"혼자 서는 질의에서의 리랭커 이득"* 이고, 실사용으로 옮길 때 그 차이가
+얼마인지는 **안 쟀다.**
+
 ## 지금 세트의 감수 사항
 
 - **60건 전부 사람 검수를 통과했다**(2026-08-22). 1차에서 52건이 통과하고 8건이 지적을 받아
