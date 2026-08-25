@@ -8,6 +8,12 @@
 (원문 낱말을 그대로 쓴 쌍이 섞이면 *"두 분포가 깨끗이 갈린다"* 는 착시가 생겨 *겹치면
 안 켠다* 라는 안전장치를 뒤집는다) **값이 낡으면 검사가 아니라 장식이 된다.**
 
+**검수 도장은 `overlap` 이 못 지킨다.** 겹침 값은 *바뀌는* 수정만 잡아서, 겹침 0.0 인 쌍은
+0 을 유지하는 어떤 재작성도 조용히 통과한다(2026-08-25 검수 시점 20건). 그래서 `qa_set` 이
+쓰는 것과 같은 `reviewed_hash` 를 함께 본다 — 검수 뒤에 문장을 고치면 **검수자가 안 본 문장에
+도장이 남는데 아무 에러도 안 난다.** 지문 함수는 `qa_set.content_hash` 를 그대로 쓴다.
+두 번째 지문 정의를 만들면 같은 세트에 서로 다른 두 도장이 생긴다.
+
 세트가 없으면 조용히 skip 한다 — `tests/fixtures/` 실파일 테스트와 같은 규약이다.
 """
 
@@ -19,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from evaluation.overlap import overlap_ratio
+from evaluation.qa_set import REVIEW_STATES, content_hash
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAIRS = PROJECT_ROOT / "evaluation" / "paraphrase_pairs.jsonl"
@@ -52,7 +59,16 @@ def _base_queries() -> dict[str, str]:
 
 
 def test_every_pair_has_the_required_fields():
-    required = {"pair_id", "query_id", "base_query", "paraphrase", "overlap", "written_by", "reviewed_by"}
+    required = {
+        "pair_id",
+        "query_id",
+        "base_query",
+        "paraphrase",
+        "overlap",
+        "written_by",
+        "reviewed_by",
+        "reviewed_hash",
+    }
 
     for pair in _pairs():
         assert required <= set(pair), f"{pair.get('pair_id')} 에 빠진 필드: {required - set(pair)}"
@@ -98,6 +114,38 @@ def test_paraphrase_is_not_the_original():
 def test_pair_ids_are_unique():
     ids = [p["pair_id"] for p in _pairs()]
     assert len(ids) == len(set(ids))
+
+
+# `qa_set` 과 같은 값만 쓴다. 이 파일에는 이 검사가 없어서 오타 하나면 그 쌍이 검수됐는지
+# 안 됐는지를 아무도 못 말하는 상태가 된다
+def test_review_state_is_known():
+    unknown = [(p["pair_id"], p["reviewed_by"]) for p in _pairs() if p["reviewed_by"] not in REVIEW_STATES]
+    assert not unknown, f"reviewed_by 가 {sorted(REVIEW_STATES)} 밖입니다: {unknown}"
+
+
+# **검수 도장을 그때 본 문장에 묶는다.** 찍고 나서 문장을 고치면 검수자가 안 본 쌍에 도장이
+# 남는데, `overlap` 은 값이 바뀌는 수정만 잡아 겹침 0.0 인 쌍은 통째로 구멍이다
+def test_review_stamp_matches_the_reviewed_sentences():
+    broken = []
+    for pair in _pairs():
+        if pair["reviewed_by"] != "human":
+            continue
+        expected = content_hash(pair["base_query"], [pair["paraphrase"]])
+        if pair["reviewed_hash"] != expected:
+            broken.append((pair["pair_id"], pair["reviewed_hash"] or "없음", expected))
+
+    assert not broken, (
+        f"검수 뒤에 문장이 바뀌었습니다 (id, 기록, 지금): {broken} "
+        "— 다시 검수하고 reviewed_hash 를 갱신하거나 pending 으로 되돌려라"
+    )
+
+
+# 도장을 안 찍은 쌍이 지문만 들고 있으면 **검수한 것처럼 보이는 흔적**이 남는다
+def test_pending_pairs_carry_no_stamp():
+    stamped = [
+        p["pair_id"] for p in _pairs() if p["reviewed_by"] == "pending" and p["reviewed_hash"]
+    ]
+    assert not stamped, f"pending 인데 reviewed_hash 가 있습니다: {stamped}"
 
 
 # 겹침이 높은 쌍은 **실패가 아니라 검수 대상**이다. 값을 못 박지 않고 목록만 보여준다 —
