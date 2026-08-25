@@ -44,6 +44,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend.app.core.config import get_settings
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
@@ -108,4 +109,24 @@ async def document_list(request: Request) -> HTMLResponse:
     # 없는 구현체가 끼면 목록만 빈다(화면은 산다)
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
-    return templates.TemplateResponse(request, "_documents.html", {"documents": documents})
+    originals_mb = await run_in_threadpool(_originals_megabytes)
+    return templates.TemplateResponse(
+        request,
+        "_documents.html",
+        {"documents": documents, "originals_mb": originals_mb},
+    )
+
+
+# 원본 보관함이 지금 몇 MB 인지. 사이드바 맨 아래 줄에 함께 실린다.
+#
+# **상한도 자동 정리도 안 만든 대신 이 숫자를 보여준다** — 값을 지금 정하면 관측 없는
+# 숫자가 되고, 자동 삭제는 사용자가 모르는 사이 원문만 사라지는 상태를 만든다.
+# 대신 얼마나 쓰는지 보이고 삭제 버튼을 손에 쥐어 준다 (plan_log/backend.md 7회차).
+#
+# 폴더가 없으면 0 이다 — 아직 아무것도 안 올린 상태가 정상이라 예외로 만들지 않는다
+def _originals_megabytes() -> float:
+    directory = get_settings().originals_dir
+    if not directory.is_dir():
+        return 0.0
+    total = sum(item.stat().st_size for item in directory.iterdir() if item.is_file())
+    return round(total / (1024 * 1024), 1)

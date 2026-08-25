@@ -47,6 +47,16 @@
                     onclick="const e = this.closest('.sources').querySelectorAll('.excerpt')[{{ loop.index0 }}]; e.hidden = !e.hidden;">
               <span class="tag-name">{{ name }}</span>{% if page %}<span class="tag-page"> · p.{{ page }}{% if page_end and page_end != page %}–{{ page_end }}{% endif %}</span>{% endif %}
             </button>
+            {# 원문으로 가는 링크. **태그 자체에 얹지 않는다** — 저기엔 이미 발췌 토글
+               onclick 이 있어서 한 버튼에 동작 둘이 된다.
+
+               **`#page=` 는 PDF 일 때만 붙인다.** 브라우저 PDF 뷰어가 그 조각을 해석하는데,
+               HWPX 는 로더가 세는 쪽 수가 문서에 따라 크게 부풀어 있어(신뢰가능 AI 가이드
+               실제 28쪽 → 97쪽) 엉뚱한 쪽으로 보낸다. 어차피 브라우저가 HWPX 를 못 열어
+               실질 제약은 아니지만, 붙이지 않는 이유는 그쪽이다 (CLAUDE.md 함정 절) #}
+            <a class="source-open" target="_blank" rel="noopener"
+               href="/api/v1/documents/{{ source.document_id | urlencode }}/original{% if page and name.lower().endswith('.pdf') %}#page={{ page }}{% endif %}"
+               title="{{ name }} 원문 열기">원문</a>
           {% endfor %}
         </div>
 

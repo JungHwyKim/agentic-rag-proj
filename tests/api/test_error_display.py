@@ -181,9 +181,15 @@ def test_fragment_carries_user_message_verbatim(mocker, message: str):
     assert message in response.text
 
 
-# 성공은 여전히 204 다 — 본문이 없어야 #upload-error 자리가 **저절로 비워진다**.
-# 여기에 조각을 실으면 재시도 성공 뒤에도 옛 오류가 남는다 (chat.html)
-def test_successful_index_sends_empty_body_that_clears_the_slot(mocker):
+# 성공은 여전히 204 이고 본문이 없다.
+#
+# **이 테스트의 이름을 한 번 잘못 지었다.** 처음에는
+# `..._that_clears_the_slot` 이었는데, htmx 는 204 에 swap 을 **아예 안 해서**
+# (`htmx.min.js` 의 `responseHandling` 에 `{code:"204", swap:false}`) 빈 본문이 화면을
+# 비우지 않는다. 서버 쪽 사실(204 · 본문 없음)만 재면서 화면 동작을 재는 것처럼 이름을
+# 붙였던 것이다 — 지우는 것은 `chat.html` 의 `hx-on::after-request` 한 줄이고
+# `test_pages.py:test_success_clears_the_error_slot` 이 그쪽을 잠근다
+def test_successful_index_returns_204_with_no_body(mocker):
     mocker.patch("backend.app.api.routes.documents.index_document")
 
     response = _client().post("/api/v1/documents/index", files=_files(), headers=HTMX)

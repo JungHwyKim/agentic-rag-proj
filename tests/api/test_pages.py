@@ -175,12 +175,38 @@ def test_upload_resets_unconditionally_but_composer_does_not():
     from backend.app.core.templates import TEMPLATES_DIR
 
     chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
-    upload_form = chat.split("<form hx-post=\"/api/v1/documents/index\"")[1].split("</form>")[0]
+    upload_form = chat.split('<form id="upload-form"')[1].split("</form>")[0]
     composer = chat.split('<form class="composer"')[1].split("</form>")[0]
 
-    assert 'hx-on::after-request="this.reset()"' in upload_form
-    assert "successful" not in upload_form
+    # reset 이 **조건 밖**에 있어야 한다 — 핸들러 맨 앞이라는 것이 그 증거다
+    assert 'hx-on::after-request="this.reset();' in upload_form
     assert "if(event.detail.successful) this.reset();" in composer
+    # composer 는 반대로 reset 이 조건 **안**에 있다
+    reset_at = composer.index("this.reset()")
+    assert "successful" in composer[:reset_at]
+
+
+# **성공했을 때 오류 자리를 손으로 비운다.** htmx 는 204 에 swap 을 아예 안 하므로
+# (`htmx.min.js` 의 `responseHandling` 에 `{code:"204", swap:false}`) `hx-swap="innerHTML"`
+# 만으로는 안 지워진다 — 실패 뒤 정상 파일로 재시도해 성공해도 빨간 줄이 남는다
+def test_success_clears_the_error_slot():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
+    upload_form = chat.split('<form id="upload-form"')[1].split("</form>")[0]
+
+    assert "event.detail.successful" in upload_form
+    assert "getElementById('upload-error').innerHTML = ''" in upload_form
+
+
+# 204 에 기대지 않는다는 것을 htmx 쪽에서도 잠근다. 벤더링한 파일을 갈아끼웠을 때
+# 이 전제가 바뀌면 여기서 알린다 — 바뀌면 위 한 줄이 불필요해지거나 반대로 필수가 된다
+def test_vendored_htmx_never_swaps_on_204():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    htmx = (TEMPLATES_DIR.parent / "static" / "htmx.min.js").read_text(encoding="utf-8")
+
+    assert '{code:"204",swap:false}' in htmx
 
 
 # htmx 는 4xx/5xx 를 기본적으로 swap 하지 않는다 — 이 리스너가 그것을 뒤집는다.
@@ -202,3 +228,117 @@ def test_error_swap_keeps_the_error_signal():
     script = chat.split('<script id="error-swap">')[1].split("</script>")[0]
 
     assert "isError" not in script
+
+
+# 진행 바 자리와 배선이 화면에 실린다. **두 구간이 갈려 있는 것이 요점이다** —
+# 업로드는 실제 퍼센트, 색인은 무한 애니메이션 + 경과 시간이다
+def test_upload_progress_bar_present(client: TestClient):
+    body = client.get("/").text
+
+    assert 'id="upload-progress"' in body
+    assert 'id="upload-bar"' in body
+    assert 'id="upload-progress-js"' in body
+    assert "htmx:xhr:progress" in body
+
+
+# **퍼센트를 지어내지 않는다.** 색인 구간은 서버가 신호를 안 주므로 시간만 센다 —
+# 여기에 가짜 진행률이 들어오면(예: 타이머로 퍼센트를 올리는 코드) 이 단언이 걸린다
+def test_indexing_phase_shows_time_not_a_fake_percentage():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
+    script = chat.split('<script id="upload-progress-js">')[1].split("</script>")[0]
+    indexing = script.split("function enterIndexing()")[1].split("function stop()")[0]
+    tick = script.split("function tick()")[1].split("}")[0]
+
+    # 무한 애니메이션으로 넘어가고, **퍼센트를 계산하지 않는다**.
+    # (width = '100%' 는 바를 꽉 채우는 것이지 진행률 수치가 아니다)
+    assert "is-indeterminate" in indexing
+    assert "Math.round" not in indexing
+    assert "d.total" not in indexing
+
+    # 라벨에 들어가는 것은 퍼센트가 아니라 경과 시간이다
+    assert "%" not in tick
+    assert "elapsed()" in tick
+    assert "색인하는 중…" in tick
+    assert "'초'" in script
+
+
+# 업로드 구간은 반대로 **실제 수치**여야 한다. lengthComputable 을 안 보면
+# total 이 0 인 요청에서 NaN% 가 뜬다
+def test_upload_phase_uses_real_bytes():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
+    script = chat.split('<script id="upload-progress-js">')[1].split("</script>")[0]
+
+    assert "lengthComputable" in script
+    assert "d.loaded / d.total" in script
+
+
+# 답변 말풍선 쪽은 여전히 .pending 규약이다 — 진행 바는 업로드에서만 벗어난다
+def test_query_side_still_uses_pending(client: TestClient):
+    body = client.get("/").text
+
+    assert 'class="pending htmx-indicator" id="pending"' in body
+
+
+# 문서 이름이 곧 원문 링크다. **urlencode 가 빠지면** 한국어·공백·`#` 이 든 파일명에서
+# 주소가 깨진다 — `#` 뒤는 조각으로 잘려 서버에 도달조차 안 한다
+def test_document_name_links_to_original():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_documents.html").read_text(encoding="utf-8")
+
+    assert "/original" in fragment
+    assert "doc.document_id | urlencode" in fragment
+    assert 'target="_blank"' in fragment
+    assert 'rel="noopener"' in fragment
+
+
+# 삭제 버튼은 확인을 거친다. hx-confirm 은 htmx 2.0.4 내장이라 JS 가 0줄이다
+def test_delete_button_confirms_before_deleting():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_documents.html").read_text(encoding="utf-8")
+
+    assert "hx-delete=" in fragment
+    assert "hx-confirm=" in fragment
+    # 되돌릴 수 없다는 것이 문구에 있어야 한다
+    assert "되돌릴 수 없습니다" in fragment
+
+
+# 출처 태그 **옆에** 원문 링크가 붙는다. 태그 자체에는 발췌 토글 onclick 이 이미 있어
+# 한 버튼에 동작 둘을 얹지 않는다
+def test_source_tag_has_a_separate_original_link():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
+    tag = fragment.split('<button class="source-tag"')[1].split("</button>")[0]
+
+    assert "source-open" in fragment
+    assert "/original" in fragment
+    # 원문 링크가 태그 버튼 **안**에 있으면 안 된다
+    assert "/original" not in tag
+
+
+# **`#page=` 는 PDF 일 때만이다.** HWPX 는 로더가 세는 쪽 수가 문서에 따라 크게 부풀어
+# (신뢰가능 AI 가이드 실제 28쪽 → 97쪽) 엉뚱한 쪽으로 보낸다 (CLAUDE.md 함정 절)
+def test_page_deep_link_is_pdf_only():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
+    link = fragment.split('class="source-open"')[1].split("</a>")[0]
+
+    assert "#page=" in link
+    assert ".pdf" in link
+
+
+# 원본 용량은 상한을 안 만든 대신 보여주는 것이다. 문서가 없으면 줄 자체가 비어야 한다
+def test_sidebar_shows_originals_size():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_documents.html").read_text(encoding="utf-8")
+
+    assert "originals_mb" in fragment
+    assert "MB" in fragment

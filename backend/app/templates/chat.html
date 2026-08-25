@@ -17,27 +17,49 @@
       <h2 class="panel-title">문서</h2>
       {# 파일을 고르는 즉시 보낸다. 별도 '전송' 버튼을 두지 않는 이유는 고르고 나서 할 일이
          하나뿐이어서다. input 은 숨기고 label 이 버튼 노릇을 하므로 JS 가 필요 없다 #}
-      <form hx-post="/api/v1/documents/index" hx-encoding="multipart/form-data"
+      <form id="upload-form"
+            hx-post="/api/v1/documents/index" hx-encoding="multipart/form-data"
             hx-target="#upload-error" hx-swap="innerHTML"
             hx-trigger="change from:#upload-input"
-            hx-indicator="#upload-status"
-            hx-on::after-request="this.reset()">
+            hx-on::after-request="this.reset();
+                                  if (event.detail.successful) document.getElementById('upload-error').innerHTML = ''">
         <label class="upload-btn" for="upload-input">파일 업로드</label>
         <input id="upload-input" type="file" name="file" hidden>
       </form>
-      {# 색인은 파싱·임베딩을 거쳐 초 단위로 걸린다. 진행 표시가 없으면 눌렸는지 모른다.
-         표시 방식은 답변 말풍선 쪽과 같은 .pending 규약이다 (app.css) #}
-      <p class="pending htmx-indicator" id="upload-status">색인하는 중…</p>
+      {# 색인 진행 표시. **두 구간이고 잴 수 있는 것이 다르다.**
+
+         앞 구간(브라우저→서버 업로드)은 htmx:xhr:progress 의 loaded/total 이 **실제 수치**라
+         퍼센트를 그대로 쓴다. 뒤 구간(파싱·임베딩·저장)은 index_document() 안에서 한 번에
+         도는데 **밖으로 나오는 신호가 없어** 퍼센트를 만들 수 없다 — 지어내지 않고 무한
+         애니메이션 + 경과 시간으로 둔다. 사용자가 겪은 문제가 *"되는 건지 멈춘 건지"* 라
+         경과 시간이 실제 답에 제일 가깝다.
+
+         진짜 단계별 진행률을 내려면 index_document() 에 진행 콜백을 뚫고 색인을
+         백그라운드로 돌려 폴링해야 한다 — rag_pipeline 공개 API 가 바뀌는 일이라
+         plan_log 로 미뤘다.
+
+         **.pending 규약을 여기서만 벗어난다** — 저쪽은 문구 한 줄을 켜고 끄는 것이라
+         퍼센트를 실을 자리가 없다. 답변 말풍선 쪽(#pending)은 그대로 .pending 이다 #}
+      <div id="upload-progress" hidden>
+        <div class="bar"><div class="bar-fill" id="upload-bar"></div></div>
+        <p class="bar-label muted small" id="upload-label">준비 중…</p>
+      </div>
       {# 실패 자리. 서버가 _error.html 을 status 그대로 보내고 아래 error-swap 스크립트가
-         4xx/5xx 도 그리게 한다 (main.py).
+         4xx/5xx 도 그리게 한다 (main.py). 비면 CSS 가 자리째 감춘다.
 
-         **성공 204 는 본문이 비어 있어 이 자리를 저절로 비운다** — 재시도가 성공했을 때
-         옛 오류를 지우는 코드를 따로 안 짜는 이유다. 비면 CSS 가 자리째 감춘다.
+         **성공했을 때 이 자리는 손으로 비운다.** 처음에는 "성공 204 는 본문이 비어 있으니
+         hx-swap="innerHTML" 이 저절로 비운다"고 봤는데 **틀렸다** — htmx 는 204 를 "빈 값으로
+         덮으라"가 아니라 **"할 일 없음"으로 읽고 swap 을 통째로 건너뛴다**(htmx.min.js 의
+         responseHandling 에 {code:"204", swap:false} 가 박혀 있다). 그래서 실패한 뒤 정상
+         파일로 재시도해 성공해도 빨간 줄이 그대로 남았다(사용자가 실제로 밟았다).
+         204 를 200 으로 낮추면 저절로 비워지지만 그건 4회차가 정한 응답 계약을 바꾸는
+         일이라, 화면에서 한 줄로 지운다.
 
-         **아래 reset 은 composer 와 일부러 반대다.** 저쪽은 event.detail.successful 일 때만
+         **reset 은 composer 와 일부러 반대다.** 저쪽은 event.detail.successful 일 때만
          비우지만(실패 때 질문 글자가 남아야 한다) 여기는 조건 없이 비운다 — file input 을
          안 비우면 같은 파일을 다시 골라도 change 가 안 떠서 재시도도 재색인도 막힌다.
-         '일관성' 을 이유로 한쪽에 맞추면 조용히 망가진다 (tests/api/test_pages.py 가 잠갔다) #}
+         '일관성' 을 이유로 한쪽에 맞추면 조용히 망가진다. 오류 지우기만 successful 을 탄다
+         (tests/api/test_pages.py 가 셋 다 잠갔다) #}
       <p id="upload-error"></p>
       {# documents-changed 는 색인 라우트가 HX-Trigger 로 보낸다. 목록 렌더는 여전히
          GET /documents 한 곳뿐이고 여기는 다시 부르기만 한다 (routes/documents.py) #}
@@ -114,6 +136,68 @@
 
    **isError 는 안 건드린다** — false 로 만들면 htmx:responseError 가 안 떠서 콘솔 진단이
    사라진다. 그릴 것은 그리되 실패는 실패로 남는다 (plan_log/backend.md 5회차) #}
+{# 업로드/색인 진행 표시. htmx 는 xhr 과 xhr.upload **둘 다**에 progress·loadend 를 걸어
+   같은 이벤트가 두 번 흐른다 — 그래서 `sending` 플래그로 앞 구간만 퍼센트로 읽고, 첫
+   loadend(=업로드 완료)에서 색인 구간으로 넘어간다. loaded>=total 로만 판정하면 파일이
+   아주 작아 progress 가 한 번도 안 뜨는 경우를 놓친다 #}
+<script id="upload-progress-js">
+  (function () {
+    var form = document.getElementById('upload-form');
+    var box = document.getElementById('upload-progress');
+    var fill = document.getElementById('upload-bar');
+    var label = document.getElementById('upload-label');
+    if (!form || !box) return;
+
+    var timer = null, startedAt = 0, sending = false;
+
+    function elapsed() {
+      var s = Math.round((Date.now() - startedAt) / 1000);
+      return s < 60 ? s + '초' : Math.floor(s / 60) + '분 ' + (s % 60) + '초';
+    }
+
+    function tick() { label.textContent = '색인하는 중… ' + elapsed(); }
+
+    // 서버가 진행 신호를 안 주는 구간. 퍼센트를 지어내는 대신 시간을 센다
+    function enterIndexing() {
+      if (!sending) return;
+      sending = false;
+      fill.className = 'bar-fill is-indeterminate';
+      fill.style.width = '100%';
+      tick();
+      timer = setInterval(tick, 1000);
+    }
+
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+      box.hidden = true;
+      sending = false;
+    }
+
+    form.addEventListener('htmx:xhr:loadstart', function () {
+      sending = true;
+      startedAt = Date.now();
+      box.hidden = false;
+      fill.className = 'bar-fill';
+      fill.style.width = '0%';
+      label.textContent = '업로드 중… 0%';
+    });
+
+    form.addEventListener('htmx:xhr:progress', function (event) {
+      if (!sending) return;
+      var d = event.detail;
+      if (!d.lengthComputable || !d.total) return;
+      var pct = Math.round((d.loaded / d.total) * 100);
+      fill.style.width = pct + '%';
+      label.textContent = '업로드 중… ' + pct + '%';
+      if (d.loaded >= d.total) enterIndexing();
+    });
+
+    form.addEventListener('htmx:xhr:loadend', enterIndexing);
+    form.addEventListener('htmx:afterRequest', stop);
+    form.addEventListener('htmx:xhr:abort', stop);
+  })();
+</script>
+
 <script id="error-swap">
   document.body.addEventListener('htmx:beforeSwap', function (event) {
     if (event.detail.xhr.status >= 400) { event.detail.shouldSwap = true; }

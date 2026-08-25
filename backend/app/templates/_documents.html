@@ -3,8 +3,23 @@
   <ul class="doc-list">
     {% for doc in documents %}
       <li class="doc-item">
-        <span class="doc-name" title="{{ doc.source_name }}">{{ doc.source_name }}</span>
+        {# 이름이 곧 원문 링크다. **urlencode 가 필수** — document_id 는 원본 파일명이라
+           한국어·공백·`+`·`#` 이 그대로 들어 있고, 안 감싸면 `#` 뒤가 조각으로 잘린다.
+
+           **이 회차 이전에 올린 문서는 원본이 없어 404 가 정상이다** — 그때 화면에
+           뜨는 것은 _error.html 이 아니라 브라우저의 기본 404 다(새 탭이라 htmx 밖이다).
+           그래서 라우트가 "다시 업로드하면 저장됩니다" 를 detail 에 담는다 #}
+        <a class="doc-name" target="_blank" rel="noopener"
+           href="/api/v1/documents/{{ doc.document_id | urlencode }}/original"
+           title="{{ doc.source_name }} — 원문 열기">{{ doc.source_name }}</a>
         <span class="doc-meta">{{ doc.chunk_count }}청크</span>
+        {# hx-confirm 은 htmx 2.0.4 내장이라 JS 가 0줄이다. 응답이 204 라 swap 은 안 일어나고
+           (htmx 가 204 에 swap 을 건너뛴다) 목록은 HX-Trigger 로 다시 그려진다 #}
+        <button class="doc-delete" type="button"
+                hx-delete="/api/v1/documents/{{ doc.document_id | urlencode }}"
+                hx-swap="none"
+                hx-confirm="'{{ doc.source_name }}' 을(를) 색인과 원본에서 모두 지웁니다. 되돌릴 수 없습니다."
+                title="삭제" aria-label="{{ doc.source_name }} 삭제">&times;</button>
       </li>
     {% endfor %}
   </ul>
@@ -15,7 +30,12 @@
 {% endif %}
 
 {# 사이드바 맨 아래 자리를 함께 갱신한다. 이 조각의 주 대상은 #documents 이고
-   여기는 out-of-band 라, 목록 요청 하나로 두 자리가 같은 값으로 움직인다 #}
+   여기는 out-of-band 라, 목록 요청 하나로 두 자리가 같은 값으로 움직인다.
+
+   **원본 용량을 여기 싣는 이유**: 상한도 자동 정리도 안 만들기로 했으므로(값을 지어내야
+   하고, 자동 삭제는 사용자 모르게 원문만 없애는 상태를 만든다) 대신 얼마나 쓰는지 보이고
+   위 삭제 버튼을 쥐어 준다 (plan_log/backend.md 7회차) #}
 <p class="sidebar-foot muted small" id="doc-count" hx-swap-oob="true">
-  {%- if documents %}{{ documents | length }}개 문서 · 인덱싱 완료{% endif -%}
+  {%- if documents %}{{ documents | length }}개 문서 · 인덱싱 완료
+  {%- if originals_mb %} · 원본 {{ originals_mb }}MB{% endif %}{% endif -%}
 </p>

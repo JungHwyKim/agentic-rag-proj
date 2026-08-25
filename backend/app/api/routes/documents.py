@@ -14,19 +14,33 @@
 돌려줄 것이 문서 목록인데 그 조각은 `routes/query.py` 의 `GET /documents` 가 이미 만든다.
 여기서 다시 렌더하면 같은 목록의 두 번째 진실이 생긴다. 대신 `HX-Trigger` 로 이벤트만
 보내고 사이드바가 자기 갱신을 하게 한다 — 목록 로직은 한 곳에 남는다.
+
+## 원본은 왜 남기나 (7회차)
+
+파서를 고친 뒤 재색인하려면 원본이 있어야 하는데 예전에는 `finally` 가 지워버려 사용자가
+파일을 다시 올리는 수밖에 없었다(13MB 스캔본은 OCR 만 3.6분이다). 그리고 답변의 근거를
+보다가 *"원문이 진짜 그런가"* 를 확인할 길이 없었다. 그래서 색인에 **성공한** 업로드만
+`settings.originals_dir` 로 옮겨 두고, 사이드바와 출처 태그에서 열 수 있게 한다.
+
+**저장 이름은 계산된다** — `_stored_name()` 참고. 매핑 파일을 두지 않는 것이 요점이다.
 """
 
 from __future__ import annotations
 
+import hashlib
+import shutil
 import tempfile
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 
-from backend.app.core.config import get_settings
+from backend.app.core.config import Settings, get_settings
+from rag_pipeline.ingestion.indexing import document_id_for
 from rag_pipeline.ingestion.loader.registry import SUPPORTED_EXTENSIONS
 from rag_pipeline.ingestion.pipeline import index_document, ingest
 from rag_pipeline.schemas.document import ParsedDocument
@@ -35,6 +49,98 @@ router = APIRouter(tags=["documents"])
 
 # 한 번에 읽어들일 청크 크기
 _CHUNK_SIZE = 1024 * 1024
+
+# 파일 이름에 그대로 쓸 수 없는 글자. Windows 예약 문자 + 경로 구분자다.
+# document_id_for() 가 경로는 이미 떼주지만(PurePath(...).name) 이 글자들은 안 거른다
+_UNSAFE_NAME_CHARS = '<>:"|?*\\/'
+
+# 확장자 → (미디어 타입, inline 으로 보여줄 수 있는가).
+#
+# **확장자로 정하는 근거**: 업로드가 화이트리스트(1차)와 매직바이트(2차)를 이미 통과했고,
+# 3회차가 화이트리스트 22종을 detect_format() 에 왕복시켜 **잰 것 18 · 어긋남 0** 으로
+# 둘이 어긋나지 않음을 실측했다. 그래서 저장된 파일의 확장자는 이미 뒷받침돼 있다.
+#
+# **inline 이 안전한 근거**: SUPPORTED_EXTENSIONS 에 `.svg` 도 `.html` 도 없다. 올린 파일이
+# 같은 오리진에서 스크립트로 도는 경로가 화이트리스트 단계에서 이미 닫혀 있다
+_MEDIA_TYPES: dict[str, tuple[str, bool]] = {
+    ".pdf": ("application/pdf", True),
+    ".png": ("image/png", True),
+    ".jpg": ("image/jpeg", True),
+    ".jpeg": ("image/jpeg", True),
+    ".gif": ("image/gif", True),
+    ".webp": ("image/webp", True),
+    ".bmp": ("image/bmp", True),
+    ".tif": ("image/tiff", True),
+    ".tiff": ("image/tiff", True),
+    # 텍스트류는 text/plain 으로 내려야 브라우저가 그린다. text/csv 는 내려받기로 샌다
+    ".txt": ("text/plain; charset=utf-8", True),
+    ".md": ("text/plain; charset=utf-8", True),
+    ".markdown": ("text/plain; charset=utf-8", True),
+    ".csv": ("text/plain; charset=utf-8", True),
+    ".tsv": ("text/plain; charset=utf-8", True),
+    # 아래는 브라우저가 못 그린다 — 내려받기로 보낸다
+    ".hwpx": ("application/octet-stream", False),
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        False,
+    ),
+    ".pptx": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        False,
+    ),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", False),
+    ".xls": ("application/vnd.ms-excel", False),
+}
+
+
+# 문서 키를 디스크에 쓸 수 있는 파일 이름으로 바꾼다.
+#
+# **해시 접미사를 항상 붙이는 것이 이 함수의 핵심이다.** 예약 문자를 치환만 하면
+# `보고서:1.pdf` 와 `보고서_1.pdf` 가 같은 이름이 되어, 색인은 둘을 다른 문서로 아는데
+# 원문은 하나뿐인 상태가 된다 — 한쪽의 "원문 보기"가 남의 파일을 **에러 없이** 보여준다.
+#
+# 부딪힐 때만 붙이는 안은 기각했다. 그러면 이름이 document_id 만으로 계산되지 않아
+# "이 문서의 원본이 어느 파일인가"를 알려면 디스크를 뒤지거나 매핑을 들여야 한다 —
+# 두 번째 진실이 생긴다 (plan_log/backend.md 7회차)
+def _stored_name(document_id: str) -> str:
+    suffix = "".join(
+        "_" if ch in _UNSAFE_NAME_CHARS or ord(ch) < 32 else ch
+        for ch in unicodedata.normalize("NFC", document_id)
+    ).strip()
+    digest = hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:6]
+
+    stem, dot, ext = suffix.rpartition(".")
+    # 확장자가 없으면 rpartition 이 앞을 비운다. 그때는 전체가 이름이다
+    if not dot:
+        stem, ext = suffix, ""
+    return f"{stem}__{digest}{'.' + ext if ext else ''}"
+
+
+# 문서 키에 대응하는 원본 파일 경로. **경로 탈출을 여기서 막는다.**
+#
+# 라우트의 경로 파라미터는 사용자 입력이라 `..%2F..%2F.env` 가 들어온다.
+# document_id_for() 가 PurePath 로 경로를 떼는 것이 1차이고, resolve() 한 결과가
+# 저장 폴더 안인지 보는 것이 2차다. 하나만으로는 안 되고 둘 다 필요하다
+def _original_path(document_id: str, settings: Settings) -> Path:
+    root = settings.originals_dir.resolve()
+    candidate = (root / _stored_name(document_id)).resolve()
+    if not candidate.is_relative_to(root):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="요청한 문서를 찾을 수 없습니다.",
+        )
+    return candidate
+
+
+# 임시 업로드를 원본 보관함으로 옮긴다. **색인이 성공한 뒤에만 부른다** —
+# 실패한 원본까지 남기면 목록에 없는 파일이 디스크에 쌓여 화면과 어긋난다.
+#
+# move 라서 뒤따르는 unlink(missing_ok=True) 가 그대로 통과한다. 같은 볼륨이면 rename 이라
+# 13MB 스캔본도 복사 비용이 안 든다
+def _keep_original(temp_path: Path, original_name: str, settings: Settings) -> None:
+    settings.originals_dir.mkdir(parents=True, exist_ok=True)
+    destination = _original_path(document_id_for(original_name), settings)
+    shutil.move(str(temp_path), destination)
 
 
 # 업로드 파일을 임시 경로에 저장하면서 크기 상한을 검사한다.
@@ -120,6 +226,9 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
             config=request.app.state.ingest_config,
             store=request.app.state.store,
         )
+        # **색인이 성공한 뒤에만** 원본을 남긴다 (_keep_original 주석 참고).
+        # 파일을 옮기는 것도 블로킹 I/O 라 스레드풀로 넘긴다
+        await run_in_threadpool(_keep_original, temp_path, original_name, settings)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -141,6 +250,69 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
 
     # 목록 조각을 여기서 렌더하지 않는다 (모듈 docstring 참고). 사이드바가 이 이벤트를 듣고
     # GET /documents 를 다시 부른다
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"HX-Trigger": "documents-changed"})
+
+
+# 색인된 문서의 원본 파일을 그대로 돌려준다. 사이드바 문서 이름과 답변의 출처 태그가
+# 이 주소를 연다 (모듈 docstring 참고).
+#
+# **`{document_id}` 를 불투명 문자열로 받는다.** 지금은 원본 파일명(NFC)이지만 문서
+# 레지스트리가 생기면 명시적 id 로 바뀐다 — 여기서 파일명이라고 전제하지 않으면 그때
+# 공개 URL 이 안 깨진다 (plan_log/backend.md 7회차)
+@router.get("/documents/{document_id}/original")
+async def original_file(document_id: str) -> FileResponse:
+    settings = get_settings()
+    # 경로 파라미터는 사용자 입력이다. document_id_for() 가 경로를 떼고 NFC 로 맞추는 것이
+    # 1차, _original_path() 의 resolve() 봉쇄가 2차다
+    path = _original_path(document_id_for(document_id), settings)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="이 문서의 원본이 저장돼 있지 않습니다. 파일을 다시 업로드하면 저장됩니다.",
+        )
+
+    media_type, renderable = _MEDIA_TYPES.get(
+        path.suffix.lower(), ("application/octet-stream", False)
+    )
+    return FileResponse(
+        path,
+        media_type=media_type,
+        # **filename 을 줘야 Starlette 이 Content-Disposition 을 단다**(안 주면 헤더 자체가
+        # 없다). 디스크 이름이 아니라 원래 이름을 주는 것이 요점이다 — 내려받았을 때
+        # `안내서__a3f9c2.pdf` 가 아니라 `안내서.pdf` 로 저장된다
+        filename=document_id_for(document_id),
+        # 브라우저가 그릴 수 있는 것만 inline 이다. 나머지는 내려받기로 보낸다
+        content_disposition_type="inline" if renderable else "attachment",
+        # 위 표가 정한 타입을 브라우저가 다시 추측하지 못하게 막는다.
+        # .svg·.html 이 화이트리스트에 없어 스크립트 경로는 이미 닫혀 있지만 한 겹 더 둔다
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
+# 문서 하나를 색인에서 지우고 원본도 함께 지운다.
+#
+# **둘을 함께 지우는 것이 계약이다** — 보이는 것과 실제가 어긋나면 사용자가 모르는 잔여물이
+# 생긴다. 디스크를 정리할 수단이 화면에 있어야 한다는 것도 같은 이유다
+# (plan_log/backend.md 7회차 — 상한·자동정리를 안 만든 대신 이 버튼이 있다)
+@router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(request: Request, document_id: str) -> Response:
+    settings = get_settings()
+    key = document_id_for(document_id)
+    path = _original_path(key, settings)
+
+    store = request.app.state.store
+    # delete_by_document_id() 는 VectorStore Protocol 에 있다 — list_documents() 와 달리
+    # getattr 로 봐줄 필요가 없다 (rag_pipeline/ingestion/indexing/base.py)
+    await run_in_threadpool(store.delete_by_document_id, key)
+    path.unlink(missing_ok=True)
+
+    # 색인 라우트와 같은 계약이다. BM25 는 저장소를 전량 훑은 스냅샷이라 낡는다
+    request.app.state.bm25 = None
+
+    # **답변 캐시는 여기서 안 비운다.** 캐시는 조회 시점에 근거 청크를 되짚어 스스로
+    # 걸러내는데, 삭제는 바로 그 청크가 사라지는 경우라 **원리적으로 잡히는 쪽**이다.
+    # 색인 라우트가 clear() 를 부르는 이유(새 문서 유입은 사라진 것이 없어 못 잡는다)와
+    # 정확히 반대다 (rag_pipeline/answer_cache/)
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"HX-Trigger": "documents-changed"})
 
 
