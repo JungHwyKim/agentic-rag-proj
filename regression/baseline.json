@@ -37,7 +37,7 @@
     "warnings 대조 규칙": {
       "규칙": "정확한 리스트 비교(순서 포함). 정규화하지 않는다.",
       "왜": "실제 표본이 쪽 번호를 담는다 — 아동정책 PDF(기준선에서 제외한 픽스처)가 ['23쪽은 텍스트가 없어 이미지로 처리했습니다.'] 하나를 낸다. 쪽 번호를 지우는 정규화를 넣으면 **쪽 계산이 밀린 회귀가 조용히 통과한다** — HWPX 쪽 수 부풀림이 이 저장소의 알려진 함정이라 그 신호를 버릴 수 없다. 합성 표본(cp949 텍스트)은 ['cp949 인코딩으로 디코드했습니다.'] 로 인코딩 이름을 담는다.",
-      "왜 안전한가": "measure 는 route_all() 을 안 타므로 **문서 로더의 경고 9종만** 들어온다(excel 2 · hwpx 3 · image 1 · pdf 2 · text 1). 외부 API 실패처럼 실행마다 흔들리는 핸들러 경고(image_vision 등)는 애초에 안 섞인다. 그리고 LoadContext.warn() 이 같은 메시지를 한 번만 담아 중복이 안 쌓인다. 순서는 파싱 순서라 같은 문서에 결정적이다.",
+      "왜 안전한가": "measure 는 route_all() 을 안 타므로 **문서 로더의 경고 9종만** 들어온다(excel 2 · hwpx 3 · image 1 · pdf 2 · text 1). 외부 API 실패처럼 실행마다 흔들리는 핸들러 경고(image_vision 등)는 애초에 안 섞인다. 그리고 LoadContext.warn() 이 같은 메시지를 한 번만 담아 중복이 안 쌓인다. 순서는 파싱 순서라 같은 문서에 결정적이다. **2026-08-25 보강**: 세 근거 중 마지막(\"순서는 파싱 순서라 결정적\")이 2026-08-24 의 OCR 병렬화로 하루 동안 첫 근거(measure 가 route_all() 을 안 탄다)에 매달렸었다 — 워커가 공유 목록에 바로 append 해 순서가 완료 순서였다. 자식 LoadContext 와 LoadContext.absorb() 로 되돌렸고, **이제 route_all() 을 타더라도 순서는 문서 순서다.** 즉 나중에 핸들러 경고를 이 블록에 넣기로 하면 순서 비교를 그대로 써도 된다 — 걸리는 것은 순서가 아니라 외부 API 실패처럼 **내용이** 실행마다 달라지는 쪽뿐이다.",
       "표본": "기준선 10건은 전부 빈 배열이라 규칙을 정할 표본이 없었다(2026-08-23 미결). 제외한 픽스처와 합성 입력에서 표본을 얻어 닫았다."
     },
     "여기에 없는 것": "splitter(청크 수·크기 분포)는 이 파일에 없다. documents 블록은 detect_regions() 범위이고 청킹은 그 뒤 단계라, 실파일 기대값은 tests/ingestion/splitter/test_splitter_real.py 가 잠근다. 제목 승격도 load() 에서 돌아 리전 수·타입을 바꾸지 않으므로 여기서는 안 보인다 — 그게 승격을 detect_regions() 밖에 둔 이유다.",
@@ -68,7 +68,7 @@
       "tests/hooks": 150,
       "tests/ingestion/loader/document": 146,
       "tests/ingestion/indexing": 97,
-      "tests/ingestion/loader/content": 89,
+      "tests/ingestion/loader/content": 102,
       "tests/api": 78,
       "tests/ingestion/embedding": 74,
       "tests/evaluation": 72,
@@ -82,7 +82,7 @@
       "tests": 8,
       "tests/ingestion/loader": 7
     },
-    "collected_total": 950,
+    "collected_total": 963,
     "run": {
       "passed": 948,
       "skipped": 2,
@@ -90,7 +90,7 @@
       "duration_sec": 85.3,
       "환경": "tests/fixtures/ 가 있는 머신 기준. 없는 클론에서는 이 셋만 달라지고 by_area 는 그대로다. **2026-08-24 실측**: 픽스처도 .env 도 없는 HEAD 워크트리에서 846 passed · 104 skipped · 0 failed · 25.8s 였다(수집은 같은 950). 픽스처 유무가 가르는 것은 skip 102건이고 실패는 0이다."
     },
-    "근거": "2026-08-23 에 총계 하나에서 영역별 표로 바꿨다. 이유는 _meta.갱신 이력에 있다. **영역 목록은 어디에도 안 박혀 있다** — measure.py 가 수집 결과를 디렉터리별로 접으므로 새 영역이 생기면 diff 에 '(기준선에 없음)' 으로 저절로 뜬다. 고정 목록이었다면 tests/hooks(141)와 tests/evaluation(30)이 근거에 한 번도 안 나온 채로 계속 갔을 것이다. 영역별 수가 줄면 항상 확인한다 — 지워졌는지 이름이 바뀌었는지는 다른 문제이고, Stop 훅의 전체 pytest 는 *실패*를 잡지 *삭제*를 못 잡는다. 그것이 이 블록이 남는 이유다. **2026-08-23 2차 갱신**: hybrid 검색에 테스트 50개가 붙어 tests/retrieval 8->52(+44) · tests/ingestion/indexing 88->94(+6) 이다. 파일별로 19+11+14=44 와 6 을 각각 세어 총계와 맞췄다 — 영역 합만 보면 '테스트가 늘었다' 와 '다른 영역에서 옮겨 왔다' 를 못 가른다. 네 파일 모두 tests/fixtures/ 를 안 쓰므로 _meta.픽스처 없는 환경 총계도 같은 폭으로 움직인다. **2026-08-24 3차 갱신**: 815 -> 950(+135). 파일별로 세어 총계와 맞췄다 — 새 파일 아홉이 test_answer_cache.py 32 · test_cache_salt.py 14 · test_local_embedder.py 14 · test_relative_time.py 11 · test_error_display.py 10 · test_index_route.py 10 · test_overlap.py 8 · test_paraphrase_pairs.py 7 · test_profile_axis.py 7 로 113 이고, 기존 파일 다섯 수정이 test_eval_config.py +9 · test_pages.py +5 · test_query.py +3 · test_indexing_pipeline.py +3 · test_query_route.py +2 로 22 다(113+22=135). **test_eval_config.py 의 +9 는 parametrize 확장이 아니라 새로 쓴 함수 7개다**(7 -> 14) — 2026-08-23 의 +1 이 순수 확장이었던 탓에 '프로필이 늘어 기존 가드가 더 잡았다'로 적을 뻔했다. 기전이 같아 보이는 자리일수록 함수 수를 직접 센다. **픽스처도 .env 도 없는 HEAD 워크트리에서 950 수집 · 846 passed · 104 skipped · 0 failed 를 확인했다** — 앞엣것이 by_area 환경 독립성의 재확인이고(새 파일 아홉이 들어온 뒤에도 유지), 뒤엣것이 '기본 테스트는 키 없이 통과한다'의 확인이다. 로컬 임베더 갈래가 붙은 회차라 뒤엣것을 실제로 재는 것이 특히 필요했다 — .env 의 EMBEDDING_PROVIDER=local 이 새면 가중치 2.27GB 를 조용히 내려받는 경로가 열린다.",
+    "근거": "2026-08-23 에 총계 하나에서 영역별 표로 바꿨다. 이유는 _meta.갱신 이력에 있다. **영역 목록은 어디에도 안 박혀 있다** — measure.py 가 수집 결과를 디렉터리별로 접으므로 새 영역이 생기면 diff 에 '(기준선에 없음)' 으로 저절로 뜬다. 고정 목록이었다면 tests/hooks(141)와 tests/evaluation(30)이 근거에 한 번도 안 나온 채로 계속 갔을 것이다. 영역별 수가 줄면 항상 확인한다 — 지워졌는지 이름이 바뀌었는지는 다른 문제이고, Stop 훅의 전체 pytest 는 *실패*를 잡지 *삭제*를 못 잡는다. 그것이 이 블록이 남는 이유다. **2026-08-23 2차 갱신**: hybrid 검색에 테스트 50개가 붙어 tests/retrieval 8->52(+44) · tests/ingestion/indexing 88->94(+6) 이다. 파일별로 19+11+14=44 와 6 을 각각 세어 총계와 맞췄다 — 영역 합만 보면 '테스트가 늘었다' 와 '다른 영역에서 옮겨 왔다' 를 못 가른다. 네 파일 모두 tests/fixtures/ 를 안 쓰므로 _meta.픽스처 없는 환경 총계도 같은 폭으로 움직인다. **2026-08-24 3차 갱신**: 815 -> 950(+135). 파일별로 세어 총계와 맞췄다 — 새 파일 아홉이 test_answer_cache.py 32 · test_cache_salt.py 14 · test_local_embedder.py 14 · test_relative_time.py 11 · test_error_display.py 10 · test_index_route.py 10 · test_overlap.py 8 · test_paraphrase_pairs.py 7 · test_profile_axis.py 7 로 113 이고, 기존 파일 다섯 수정이 test_eval_config.py +9 · test_pages.py +5 · test_query.py +3 · test_indexing_pipeline.py +3 · test_query_route.py +2 로 22 다(113+22=135). **test_eval_config.py 의 +9 는 parametrize 확장이 아니라 새로 쓴 함수 7개다**(7 -> 14) — 2026-08-23 의 +1 이 순수 확장이었던 탓에 '프로필이 늘어 기존 가드가 더 잡았다'로 적을 뻔했다. 기전이 같아 보이는 자리일수록 함수 수를 직접 센다. **픽스처도 .env 도 없는 HEAD 워크트리에서 950 수집 · 846 passed · 104 skipped · 0 failed 를 확인했다** — 앞엣것이 by_area 환경 독립성의 재확인이고(새 파일 아홉이 들어온 뒤에도 유지), 뒤엣것이 '기본 테스트는 키 없이 통과한다'의 확인이다. 로컬 임베더 갈래가 붙은 회차라 뒤엣것을 실제로 재는 것이 특히 필요했다 — .env 의 EMBEDDING_PROVIDER=local 이 새면 가중치 2.27GB 를 조용히 내려받는 경로가 열린다. **2026-08-24 4차 갱신 (이 영역만)**: tests/ingestion/loader/content 89 -> 96(+7). 새 파일 하나다 — test_router_parallel.py 7개(순서 유지 1 · 직렬/병렬 동치 1 · warn 중복 2 · Vision 직렬+상한 1 · 혼합 리전 순서 1 · 열기 실패 재시도 안 함 1). **다른 영역은 일부러 안 건드렸다** — 같은 시각 tests/api(+34) · tests/retrieval(+8) · tests/evaluation(+7) 이 다른 세션에서 진행 중이라 그 근거는 그 세션이 적어야 한다. 영역별 표로 쪼갠 것이 정확히 이 상황을 위한 것이다. 그래서 collected_total 은 957 이고 실제 수집은 1006 이다 — 차이 49 는 미기록이지 회귀가 아니다. **2026-08-25 5차 갱신 (이 영역만)**: tests/ingestion/loader/content 96 -> 102(+6). 같은 파일 test_router_parallel.py 에 함수 6개를 더했다 — 경고 순서 2(문서 순서 · 직렬과 섞임) + LoadContext.absorb 4(중복 제거 · ocr_applied OR · 유료 카운터 거부 · child 격리). **parametrize 확장이 아니라 새 함수 6개다**(7 -> 13). tests/api 는 이번에도 다른 세션 진행 중이라 안 건드렸다.",
     "주의": "-m integration 은 제외된 값이다(pyproject 의 addopts). 유료 테스트는 이 기준선에 안 들어간다."
   },
   "documents": {

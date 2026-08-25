@@ -163,7 +163,7 @@ def handle(
     metrics = precomputed if precomputed is not None else run_ocr(image, ctx.config, ctx=ctx)
     text = extract_text(image, ctx.config, ctx=ctx)
 
-    ctx.ocr_applied = True
+    ctx.mark_ocr_applied()
     if not text.strip():
         return []
 
