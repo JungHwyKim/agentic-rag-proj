@@ -18,6 +18,7 @@
  "k": 20,
  "report_k": 10,
  "per_query_k": 20,
+ "embedding_profile": "baseline",
  "settings": {
   "ingest": {
    "detect_headings": true,

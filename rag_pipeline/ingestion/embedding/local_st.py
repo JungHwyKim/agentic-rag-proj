@@ -11,20 +11,33 @@
 있어야 한다 — 같은 계열(`text-embedding-3-large`)로 재면 *"안 움직였다"* 가 임베딩 축을
 못 닫는다. 3회차가 `nlpai-lab/KURE-v1` 을 골랐다.
 
-## 기본 pytest 는 여기로 안 온다 — 두 겹으로 막는다
+## 기본 pytest 는 여기로 안 온다 — 이제 **한 겹**이다
 
 **로컬 모델은 키가 없어도 돈다.** 그래서 지금까지의 방어(*"키를 지운다"*)가 여기서는 안
 통하고, 기본 `pytest` 가 가중치 2.27GB 를 내려받는 경로가 **아무 에러 없이** 열릴 수 있다.
 
-1. `tests/conftest.py` 의 `offline_config` 가 `embedding_provider="openai"` 를 못 박는다
-2. `torch`·`sentence-transformers` 가 `requirements-local.txt` 에만 있어, 기본 설치에는
-   애초에 그 패키지가 없다
+전에는 두 겹이었다 — ① `offline_config` 의 provider 핀 ② `torch` 가 기본 설치에 없음.
+**2026-08-25 에 기본 임베더가 이쪽으로 오면서 ②가 사라졌다**(`torch` 가 `requirements.txt`
+본체로 갔다). 지금 남은 것은 **`tests/conftest.py` 의 `offline_config` 가
+`embedding_provider="openai"` 를 못 박는 것 하나뿐**이다.
 
-## device 를 `cpu` 로 못 박는다 — 설정으로 안 연다
+**그 한 겹이 실제로 뚫린 적이 있다.** 이관 당일 `tests/ingestion/embedding/conftest.py` 의
+`embedding_config` 픽스처가 provider 를 안 박고 기본값에 기대고 있어, 기본값이 바뀌자
+OpenAI 갈래 테스트 27개가 전부 이리로 새어 **2.2GB 를 실제로 적재했다**(그 폴더가 241초).
+**새 픽스처를 만들 때 provider 를 안 박으면 같은 일이 난다** — 가중치가 캐시에 없는
+머신이었으면 조용히 내려받았을 것이다.
 
-**재현성이다.** cu128 torch 를 깐 머신에서만 GPU 로 가면 같은 명령이 다른 벡터를 내고,
+## device 는 설정이지만 기본이 `cpu` 다 — 자동 감지는 안 한다
+
+**재현성이다.** cu 빌드 torch 를 깐 머신에서만 GPU 로 가면 같은 명령이 다른 벡터를 내고,
 *"baseline 은 재현될 때만 기준선"* 이 무너진다 — `evaluation/config.py` 가 `.env` 를 막은
-것과 같은 잣대다. 설정으로 열면 그 값이 `.env` 를 타서 머신마다 갈린다.
+것과 같은 잣대다.
+
+3회차에는 **설정 자체를 안 열어** 상수로 못 박았는데, 2026-08-25 에 사용자가 GPU 를 쓸 수
+있게 열기로 해서 `EmbeddingConfig.embedding_device` 가 됐다. **그래도 자동 감지
+(`cuda if available`)는 안 한다** — 그것이 정확히 *"머신마다 조용히 갈리는"* 모양이기
+때문이다. 켜려면 명시로 바꿔야 하고, PyPI 휠은 CPU 빌드라 cu 빌드를 `--index-url` 로 따로
+깔아야 한다. **평가는 `evaluation/config.py` 의 프로필이 `cpu` 를 못 박아 안 흔들린다.**
 
 ## 정규화를 명시적으로 켠다
 
@@ -60,24 +73,23 @@ from rag_pipeline.exceptions import EmbeddingError
 from rag_pipeline.ingestion.embedding.base import EmbeddingUsage, cache_salt_for
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 
-# 벡터가 머신마다 갈리면 기준선이 성립하지 않는다 (모듈 docstring 참고)
-_DEVICE = "cpu"
-
 
 # sentence-transformers 모델을 만든다.
-# **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고)
-def _make_model(model_name: str) -> Any:
+# **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고).
+# `device` 를 상수가 아니라 인자로 받는 것은 설정이 되었기 때문이고, 그래도 **기본값은
+# 여전히 `cpu`** 다 — 자동 감지를 안 하는 이유는 `config.py` 의 `embedding_device` 에 있다
+def _make_model(model_name: str, device: str) -> Any:
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
         raise EmbeddingError(
             f"sentence-transformers 가 설치되지 않았습니다: {exc}",
             user_message=(
-                "로컬 임베딩을 쓰려면 requirements-local.txt 를 설치해야 합니다: "
-                "uv pip install -r requirements-local.txt"
+                "로컬 임베딩에 sentence-transformers 가 필요합니다: "
+                "uv pip install -r requirements.txt"
             ),
         ) from exc
-    return SentenceTransformer(model_name, device=_DEVICE)
+    return SentenceTransformer(model_name, device=device)
 
 
 # 모델 자신의 토크나이저로 센다. tiktoken 으로 세면 이 모델의 수가 아니다
@@ -147,7 +159,9 @@ class LocalEmbedder:
     # 가중치는 한 번만 올린다. 캐시가 전량 적중하면 아예 안 올린다
     def _load(self) -> Any:
         if self._model is None:
-            self._model = _make_model(self._config.embedding_model)
+            self._model = _make_model(
+                self._config.embedding_model, self._config.embedding_device
+            )
         return self._model
 
     # 문서 텍스트들을 벡터로. 반환 길이는 입력 길이와 반드시 같다

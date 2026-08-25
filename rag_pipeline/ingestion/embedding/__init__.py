@@ -22,9 +22,11 @@ embedding 결정이 아니라 API 결정이다. 청크 285~721개 × 1536차원�
 **3회차에 `LocalEmbedder` 가 생기며 그 전제가 사라졌다.** 추상화를 먼저 두고 설정을 나중에
 연 것이 실제로 값을 했다 — 호출부는 한 줄도 안 바뀐다.
 
-**로컬 갈래는 키가 없어도 돈다.** 그래서 기본 `pytest` 방어가 *"키를 지운다"* 로는 부족해
-두 겹이 됐다 — `tests/conftest.py` 의 `offline_config` 가 provider 를 `openai` 로 못 박고,
-`torch`·`sentence-transformers` 가 `requirements-local.txt` 에만 있다.
+**로컬 갈래는 키가 없어도 돈다.** 그래서 기본 `pytest` 방어가 *"키를 지운다"* 로는 부족하다.
+전에는 두 겹이었는데(provider 핀 + `torch` 부재), **2026-08-25 에 기본값이 `local` 로 가고
+`torch` 가 본체 의존성이 되면서 뒤엣것이 사라졌다.** 지금 막는 것은 `tests/conftest.py` 의
+`offline_config` 가 provider 를 `openai` 로 못 박는 **한 겹뿐**이다 — 자세한 것과 그 겹이
+실제로 뚫렸던 사고는 `local_st.py` 모듈 docstring 에 있다.
 
 ## 이 단계가 잰 것 — 뒤 단계가 쓰고 있다
 

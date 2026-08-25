@@ -22,6 +22,16 @@
 BM25 와 달리 게으름을 깨지 않는다. 임계값이 없으면 `None` 이 돌아와 캐시 없이 도는데,
 그 판정은 설정 하나를 읽는 일이라 첫 질의까지 미룰 이유가 없다.
 
+## 리랭커도 embedder 쪽 패턴이다
+
+`get_reranker()` 는 저장소를 안 훑지만 **로컬 갈래가 cross-encoder 가중치를 올린다.**
+startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 받는 환경에서는 화면조차 못 본다.
+그래서 첫 질의로 미룬다 — `embedder` 와 같은 축이고 `bm25` 와는 이유가 다르다(저쪽은
+저장소의 게으름을 깨지 않으려는 것이다).
+
+**색인 뒤 되돌릴 것이 없다.** 리랭커는 저장소 스냅샷을 안 들고 질의마다 후보를 받아 점수만
+매기므로, 아래 BM25 무효화 계약이 여기에는 해당하지 않는다. 답변 캐시 쪽 분류다.
+
 ## BM25 인덱스도 같은 패턴이다
 
 `build_bm25_index()` 는 저장소를 전량 훑는다. startup 에서 지으면 **색인이 아직 없는 상태**
@@ -48,7 +58,7 @@ from backend.app.core.config import get_settings
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
-from rag_pipeline.retrieval import build_bm25_index
+from rag_pipeline.retrieval import build_bm25_index, get_reranker
 
 router = APIRouter(tags=["query"])
 
@@ -74,6 +84,20 @@ def _bm25(request: Request):  # noqa: ANN202 - Bm25Index 를 라우트 시그니
     return index
 
 
+# 앱 수명 동안 하나뿐인 리랭커를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고).
+#
+# **`None` 이 정상값이다** — `RERANK_MODEL` 이 비어 있으면 `get_reranker()` 가 None 을
+# 돌려주고 그것이 곧 꺼진 상태다. 그래서 만들었는지를 `state` 에 없는 것으로 판정하면
+# **꺼져 있을 때 질의마다 다시 만들게 된다.** 지금은 만드는 비용이 없지만 로컬 갈래에서는
+# 그 자리가 곧 모델 적재라, 만들었다는 사실 자체를 `_rerank_ready` 로 따로 표시한다
+def _reranker(request: Request):  # noqa: ANN202 - Reranker 를 라우트 시그니처에 노출하지 않는다
+    state = request.app.state
+    if not getattr(state, "_rerank_ready", False):
+        state.reranker = get_reranker(request.app.state.ingest_config.rerank)
+        state._rerank_ready = True
+    return state.reranker
+
+
 # 질문 하나를 받아 답변 말풍선 조각을 돌려준다
 @router.post("/query", response_class=HTMLResponse)
 async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
@@ -91,6 +115,11 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         embedder=_embedder(request),
         config=request.app.state.ingest_config,
         bm25=await run_in_threadpool(_bm25, request),
+        # 모델 이름이 없으면 None 이라 RRF 순서로 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25·cache 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **threadpool 로 넘기는 것은 로컬 갈래 때문이다** — cross-encoder 적재가 초 단위라
+        # 이벤트 루프에서 하면 첫 질의 동안 서버 전체가 멈춘다
+        reranker=await run_in_threadpool(_reranker, request),
         # 임계값이 없으면 None 이라 캐시 없이 돈다. 라우트에 스위치를 두지 않는 이유는
         # bm25 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
         # **getattr 인 것은 lifespan 을 안 거치고 app 을 세우는 호출부가 있어서**다 —
@@ -109,12 +138,43 @@ async def document_list(request: Request) -> HTMLResponse:
     # 없는 구현체가 끼면 목록만 빈다(화면은 산다)
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
+    documents = await run_in_threadpool(_mark_shadow_gaps, request, documents)
     originals_mb = await run_in_threadpool(_originals_megabytes)
     return templates.TemplateResponse(
         request,
         "_documents.html",
         {"documents": documents, "originals_mb": originals_mb},
     )
+
+
+# 그림자 컬렉션에 없는 문서에 `shadow_missing` 을 달아 준다.
+#
+# **그림자 색인은 실패해도 색인을 안 막는다**(pipeline.py `_index_shadow`). 그 대가로
+# 구멍이 조용히 생길 수 있어, **무엇이 빠졌는지 보이는 자리가 반드시 하나 있어야 한다.**
+# 여기가 그 자리다 — 목록은 이미 렌더되고 있고 두 번째 진실을 만들지 않는다.
+#
+# **채우는 방법은 그 문서를 다시 올리는 것이다.** 색인이 delete -> upsert 라 멱등이고
+# `document_id` 가 파일 이름에서 파생되므로 재업로드가 두 컬렉션을 함께 채운다.
+# 표시가 있어야 무엇을 다시 올릴지 안다 — 그것이 이 함수의 존재 이유다.
+#
+# **스크롤이 한 번 더 는다.** 지금 규모(494 point · 6문서)에서 무시할 만하고,
+# 느려지면 그것이 `bm25` 처럼 스냅샷으로 옮길 신호다. 그림자가 꺼져 있거나 목록을 못 내는
+# 저장소면 아무것도 안 달고 그대로 돌려준다 — 없는 축을 화면에 만들지 않는다
+def _mark_shadow_gaps(request: Request, documents: list[dict]) -> list[dict]:
+    shadow_store = getattr(request.app.state, "shadow_store", None)
+    if shadow_store is None or not documents:
+        return documents
+
+    lister = getattr(shadow_store, "list_documents", None)
+    if lister is None:
+        return documents
+
+    try:
+        shadowed = {row.get("document_id") for row in lister()}
+    except Exception:  # noqa: BLE001 - 목록은 보여야 한다. 그림자 조회 실패로 화면을 죽이지 않는다
+        return documents
+
+    return [{**row, "shadow_missing": row.get("document_id") not in shadowed} for row in documents]
 
 
 # 원본 보관함이 지금 몇 MB 인지. 사이드바 맨 아래 줄에 함께 실린다.

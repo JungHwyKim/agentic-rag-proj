@@ -22,7 +22,7 @@ from pathlib import Path
 
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.ingestion.cleaner import clean
-from rag_pipeline.ingestion.embedding import EmbeddingUsage, get_embedder
+from rag_pipeline.ingestion.embedding import Embedder, EmbeddingUsage, get_embedder
 from rag_pipeline.ingestion.indexing import (
     VectorStore,
     document_id_for,
@@ -32,7 +32,21 @@ from rag_pipeline.ingestion.indexing import (
 from rag_pipeline.ingestion.loader.detect import detect_format
 from rag_pipeline.ingestion.loader.registry import get_loader
 from rag_pipeline.ingestion.splitter import split
+from rag_pipeline.schemas.chunk import Chunk
 from rag_pipeline.schemas.document import DocumentMetadata, FileFormat, ParsedDocument
+
+
+# 그림자 색인 한 번의 결과. **`error` 가 있으면 그 문서는 그림자에 구멍이 났다.**
+#
+# 주 색인과 달리 실패가 예외로 안 올라오므로(index_document() 참고), 무엇이 빠졌는지
+# 아는 유일한 길이 이 값이다. 채우는 방법은 **그 문서를 다시 올리는 것**이다 —
+# 색인이 delete -> upsert 라 멱등이고 document_id 가 파일 이름에서 파생된다
+@dataclass
+class ShadowIndexResult:
+    collection: str
+    indexed_count: int
+    usage: EmbeddingUsage
+    error: str | None = None
 
 
 # 색인 한 번의 결과. 무엇을 몇 개 어디에 넣었고 얼마를 썼는지
@@ -49,6 +63,10 @@ class IndexResult:
     # 호출부가 `ingest()` 를 한 번 더 불러 얻는 안은 기각했다: 그 두 번째 파싱이 실제로
     # 색인된 것과 다를 수 있어, 다른 파싱의 카운터는 애초에 쓸모가 없다
     metadata: DocumentMetadata
+    # 그림자 색인을 안 시켰으면 None. **하나이고 목록이 아니다** — 목록으로 열면
+    # 합법값이 하나뿐인 축이 또 생긴다(다중 임베더 융합의 `extra_dense` 가 그래서 죽었다).
+    # 셋째 모델이 실제로 생기면 그때 연다
+    shadow: ShadowIndexResult | None = None
 
 
 # 파일 하나를 읽어 ParsedDocument로 만든다. 포맷 판별 -> 로더 라우팅 -> 파싱 -> 정리
@@ -81,6 +99,7 @@ def index_document(
     original_name: str | None = None,
     config: IngestConfig | None = None,
     store: VectorStore | None = None,
+    shadow: tuple[VectorStore, Embedder] | None = None,
 ) -> IndexResult:
     config = config or IngestConfig()
 
@@ -126,6 +145,55 @@ def index_document(
         indexed_count=indexed,
         usage=embedder.usage,
         metadata=document.metadata,
+        shadow=_index_shadow(shadow, chunks, document_id),
+    )
+
+
+# 같은 청크를 두 번째 임베더로 한 벌 더 색인한다. **비교 데이터를 쌓아두는 것이 목적**이고
+# (`plan_log/embedding.md` 5회차), 지금은 갈아타기 전 기본값이던 OpenAI 가 그 자리다.
+#
+# ## 왜 여기이고 호출부가 아닌가
+#
+# 파싱·청킹이 **한 번만** 돌아야 한다. backend 가 `index_document()` 를 두 번 부르는 안은
+# 파싱 캐시에 기대게 되고, 더 나쁘게는 *"두 컬렉션이 같은 문서 집합"* 이라는 성질이
+# 호출부로 새어 나간다. 같은 `chunks` 를 쓰는 것이 그 성질을 구조로 만든다.
+#
+# ## 왜 실패를 삼키나 — 이 저장소에서 드문 쪽이다
+#
+# embedding·indexing 은 실패를 **예외로** 올린다. 그 규약의 근거가 *"내려갈 폴백 층이
+# 없다"* 인데, **여기는 주 컬렉션이 이미 성공한 뒤라 층이 실재한다.** 그림자가 죽었다고
+# 업로드를 통째로 막으면 OpenAI 장애가 서비스를 멈춘다 — 주 모델은 멀쩡한데도.
+#
+# 대신 **구멍이 드러나야 한다.** 삼킨 이유를 `ShadowIndexResult.error` 에 담아 올리고,
+# backend 가 그것을 화면 경고와 목록 표시로 낸다. 조용히 없어지는 것과 갈리는 자리다
+def _index_shadow(
+    shadow: tuple[VectorStore, Embedder] | None,
+    chunks: list[Chunk],
+    document_id: str,
+) -> ShadowIndexResult | None:
+    if shadow is None:
+        return None
+
+    shadow_store, shadow_embedder = shadow
+    try:
+        vectors = shadow_embedder.embed_documents([chunk.text for chunk in chunks])
+        records = to_records(chunks, vectors, document_id=document_id)
+        if records:
+            shadow_store.ensure_collection(len(records[0].vector))
+        shadow_store.delete_by_document_id(document_id)
+        indexed = shadow_store.upsert(records)
+    except Exception as exc:  # noqa: BLE001 - 주 색인이 이미 성공한 폴백 자리다 (위 docstring)
+        return ShadowIndexResult(
+            collection=shadow_store.collection,
+            indexed_count=0,
+            usage=shadow_embedder.usage,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    return ShadowIndexResult(
+        collection=shadow_store.collection,
+        indexed_count=indexed,
+        usage=shadow_embedder.usage,
     )
 
 

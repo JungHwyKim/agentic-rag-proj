@@ -94,6 +94,9 @@ body {
 }
 .doc-name:hover { color: var(--accent); text-decoration: underline; }
 .doc-meta { font-size: 10.5px; color: var(--muted); }
+/* 그림자(비교용) 색인이 빠진 문서. 오류가 아니라 **다시 올리면 채워지는 상태**라
+   빨강이 아니라 경고색이고, 삭제 버튼처럼 눈을 끌면 안 된다 */
+.doc-shadow-missing { color: #b26a00; cursor: help; }
 
 /* 삭제 버튼. 평소엔 흐려 두고 항목에 마우스를 올렸을 때 드러낸다 —
    되돌릴 수 없는 동작이라 눈에 먼저 띄면 안 된다 */

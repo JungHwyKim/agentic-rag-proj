@@ -13,6 +13,12 @@
            href="/api/v1/documents/{{ doc.document_id | urlencode }}/original"
            title="{{ doc.source_name }} — 원문 열기">{{ doc.source_name }}</a>
         <span class="doc-meta">{{ doc.chunk_count }}청크</span>
+        {# 그림자 색인이 실패해 비교용 컬렉션에 안 들어간 문서. **다시 올리면 채워진다** —
+           색인이 delete -> upsert 라 멱등이다. 그림자가 꺼져 있으면 이 키가 아예 없다 #}
+        {% if doc.shadow_missing %}
+        <span class="doc-meta doc-shadow-missing"
+              title="비교용 색인(OpenAI)에 안 들어갔습니다. 이 문서를 다시 올리면 채워집니다.">비교색인 없음</span>
+        {% endif %}
         {# hx-confirm 은 htmx 2.0.4 내장이라 JS 가 0줄이다. 응답이 204 라 swap 은 안 일어나고
            (htmx 가 204 에 swap 을 건너뛴다) 목록은 HX-Trigger 로 다시 그려진다 #}
         <button class="doc-delete" type="button"

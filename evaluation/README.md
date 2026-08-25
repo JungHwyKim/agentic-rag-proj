@@ -311,8 +311,14 @@ CLAUDE.md 의 *"시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배"
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --embedding kure-v1 --label kure-v1
 ```
 
-**`kure-v1` 은 로컬 갈래라 `requirements-local.txt` 설치가 선행한다**(8번). 안 깔고 부르면
-`EmbeddingError` 가 설치 안내를 담아 나온다 — 조용히 다른 모델로 떨어지지 않는다.
+**`kure-v1` 은 로컬 갈래이고 2026-08-25 부터 그것이 운영 기본값이다** — `torch`·
+`sentence-transformers` 가 `requirements.txt` 본체로 들어와 따로 깔 것이 없다(그전에는
+`requirements-local.txt` 였다). 그래도 안 깔린 환경에서 부르면 `EmbeddingError` 가 설치
+안내를 담아 나온다 — 조용히 다른 모델로 떨어지지 않는다.
+
+**반대로 `baseline` 쪽이 이제 키를 요구하는 갈래다.** 기본 프로필은 여전히 `baseline` 이라
+(`DEFAULT_EMBEDDING_PROFILE`) `--embedding` 없이 부르면 OpenAI 를 쓴다 — 운영 기본값과
+평가 기본 프로필이 **일부러 다르다**. 옮기지 않은 이유는 아래 8-3 에 있다.
 
 새 모델을 재려면 **`EVAL_EMBEDDINGS` 에 프로필을 먼저 더한다.**
 
@@ -390,10 +396,13 @@ $env:PYTHONIOENCODING = "utf-8"
 
 **갈래가 로컬로 정해져 단가가 0 이다**(8번). 대가는 설치 용량과 계산 시간으로 옮겨갔다 —
 위 문단의 "전량 재임베딩"은 그대로지만 그것이 **돈이 아니다.** 구체적으로는 가중치
-**2.27GB** 를 첫 실행에 한 번 받고(`requirements-local.txt` 설치가 선행), 그 뒤로는
-`.cache/embedding` 이 받는다. **CPU 로 도는 시간은 아직 안 쟀다** — `device` 를 `cpu` 로
-못 박은 것은 재현성 때문이고(같은 명령이 머신마다 다른 벡터를 내면 안 된다), 그 시간이
-얼마인지는 이 회차가 낼 실측이다.
+**2.27GB** 를 첫 실행에 한 번 받고, 그 뒤로는 `.cache/embedding` 이 받는다.
+**CPU 로 도는 시간은 아직 안 쟀다** — `device` 를 `cpu` 로 두는 것은 재현성 때문이고
+(같은 명령이 머신마다 다른 벡터를 내면 안 된다), 그 시간이 얼마인지는 아직 실측이 없다.
+
+**`device` 는 2026-08-25 에 설정이 됐다**(`EMBEDDING_DEVICE`). 그래도 **평가는 안 흔들린다** —
+`EVAL_EMBEDDINGS["kure-v1"]` 이 `"embedding_device": "cpu"` 를 못 박아, `.env` 에 GPU 를
+켜 두어도 이 러너는 CPU 로 돈다. 이 파일이 `.env` 를 통째로 막은 것과 같은 잣대다.
 
 **`paid_test_check.py` 는 스크립트를 안 막는다. 사람 승인을 받고 돌린다** — 로컬 갈래로
 청구가 0일 것으로 **예상**되더라도 마찬가지다. 예상과 실측은 다르고, 실제로 얼마였는지는
@@ -469,10 +478,17 @@ KURE-v1 을 고른 이유 셋. (1) 벤치 코퍼스(AutoRAGRetrieval — 금융�
 질의 접두사도 여전히 죽은 축이다 — KURE-v1 이 안 쓴다. E5·arctic 계열을 붙이는 날
 `cache_salt_for()` 와 `collection_name_for()` 를 **같은 자리에서** 함께 연다.
 
-**넷째가 하나 더 있었다** — 의존성이다. `torch`·`sentence-transformers` 는
-**`requirements-local.txt`** 에만 있고 기본 설치에 안 들어간다. 안 쓰는 사람에게 가중치
-2.27GB 를 지우지 않으려는 것도 있지만, **기본 pytest 환경에 `torch` 가 아예 없으면
-가중치를 조용히 내려받는 경로가 구조적으로 없다** — `offline_config` 방어와 두 겹이 된다.
+**넷째가 하나 더 있었다** — 의존성이다. `torch`·`sentence-transformers` 가
+**`requirements-local.txt`** 에만 있어 기본 설치에 안 들어갔고, 그래서 **기본 pytest 환경에
+`torch` 가 아예 없으면 가중치를 조용히 내려받는 경로가 구조적으로 없다**는 것이 실제 근거였다
+(용량은 부차적이었다). `offline_config` 방어와 두 겹이었다.
+
+> **2026-08-25 정정 — 그 겹이 없어졌다.** 기본 임베더가 KURE-v1 로 가면서 `torch` 가
+> `requirements.txt` 본체로 왔다(안 쓰는 사람이 없어졌다). 지금 막는 것은 `offline_config`
+> 의 provider 핀 **한 겹뿐**이고, 그 한 겹은 실제로 뚫린 적이 있다 — 이관 당일
+> `tests/ingestion/embedding/conftest.py` 가 provider 를 안 박고 있어 OpenAI 갈래 테스트
+> 27개가 로컬로 새어 **2.2GB 를 적재했다**(그 폴더가 241초). **새 픽스처는 provider 를
+> 반드시 박는다.**
 
 ### 8-2. 표적이 한 겹 더 좁다 — 아직 안 잰 교차
 
@@ -483,6 +499,31 @@ KURE-v1 을 고른 이유 셋. (1) 벤치 코퍼스(AutoRAGRetrieval — 금융�
 **그 7건과 겹침 0 구간이 얼마나 겹치는지는 아직 안 쟀다.** `overlap.py` 로 무료로 잰다.
 축을 낸 회차에 일부러 안 쟀는데, 그때 재면 다음 회차에서 *모델이 움직인 것*과 *표적이 원래
 좁았던 것*이 섞이기 때문이다. **모델 비교와 같은 회차에 재는 것이 맞다.**
+
+### 8-3. 갈아탔다 — 다만 **운영만** 이다 (2026-08-25, 5회차)
+
+**운영 기본값이 `nlpai-lab/KURE-v1` 이 됐다**(`rag_pipeline/config.py`). 근거는 이 러너가
+낸 실측이다 — 같은 60건에서 `hit@10` 0.4833 → **0.8500**, miss 31 → 9.
+
+**그런데 `DEFAULT_EMBEDDING_PROFILE` 은 `baseline` 그대로다.** 일부러 안 옮겼고 이유가
+이 러너 안에 있다.
+
+`compare_to_baseline()` 은 프로필을 `baseline.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)`
+로 읽는다. **새 리포트는 라벨을 항상 쓰지만 커밋된 `baseline.json` 에는 그 키가 없었다.**
+그래서 기본 프로필을 옮기는 순간, OpenAI 로 잰 그 파일이 **`kure-v1` 이라는 이름으로 읽히고**
+프로필 가드가 통과해 버린다 — 다른 모델로 잰 두 실행이 나란히 놓여 승·패가 나오는데
+**아무 에러도 안 난다.**
+
+**피하는 것과 닫는 것은 다르다.** 기본값을 안 옮기는 것만으로는 *오늘* 안 터질 뿐이고,
+언젠가 다른 이유로 `DEFAULT_EMBEDDING_PROFILE` 이 바뀌면 같은 함정이 그대로 재현된다.
+그래서 **`baseline.json` 에 `"embedding_profile": "baseline"` 을 명시로 박았다.** 이제
+그 파일은 fallback 에 안 기대고, 비교는 늘 *실제 라벨 대 실제 라벨* 이다.
+`tests/evaluation/test_profile_axis.py` 가 라벨의 **존재와 값**을 둘 다 잠근다
+(라벨만 있고 값이 틀리면 fallback 보다 나쁘다 — 틀린 이름을 확신을 갖고 들게 된다).
+
+**그래서 KURE 로 재려면 `--embedding kure-v1` 을 명시해야 한다.** 그때 가드가 정상적으로
+물러서서 *"기준선은 'baseline' 임베딩이라 'kure-v1' 과 직접 비교하지 않습니다"* 를 낸다 —
+그것이 고장이 아니라 이 축이 도는 모습이다. KURE 실행끼리 견주는 것은 `overlap.py` 다.
 
 ## 답변 캐시 임계값을 재려면
 

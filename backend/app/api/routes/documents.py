@@ -39,7 +39,8 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from backend.app.core.config import Settings, get_settings
+from backend.app.core.config import SHADOW_EMBEDDING, Settings, get_settings
+from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.ingestion.indexing import document_id_for
 from rag_pipeline.ingestion.loader.registry import SUPPORTED_EXTENSIONS
 from rag_pipeline.ingestion.pipeline import index_document, ingest
@@ -91,6 +92,25 @@ _MEDIA_TYPES: dict[str, tuple[str, bool]] = {
     ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", False),
     ".xls": ("application/vnd.ms-excel", False),
 }
+
+
+# 그림자 색인에 넘길 (저장소, 임베더) 쌍. 꺼져 있거나 저장소가 형제를 못 내면 None 이다.
+#
+# **임베더를 여기서 게으르게 만든다** — `_bm25()` 와 같은 자리이고 이유도 같다.
+# lifespan 에서 만들면 키가 없는 환경에서 서버가 안 뜨는데, 그림자는 **없어도 서비스가
+# 도는 것**이 이 회차의 계약이라 뜨는 것을 막으면 앞뒤가 안 맞는다.
+#
+# **여기서 예외를 안 잡는다.** `get_embedder()` 는 키가 없어도 객체는 만들고 실제 호출에서
+# 던지므로, 삼킬 것은 `_index_shadow()` 안에 있다 — 두 곳에서 잡으면 이유가 갈린다
+def _shadow(request: Request):  # noqa: ANN202 - tuple[VectorStore, Embedder] | None
+    store = getattr(request.app.state, "shadow_store", None)
+    if store is None:
+        return None
+    embedder = getattr(request.app.state, "shadow_embedder", None)
+    if embedder is None:
+        embedder = get_embedder(SHADOW_EMBEDDING)
+        request.app.state.shadow_embedder = embedder
+    return (store, embedder)
 
 
 # 문서 키를 디스크에 쓸 수 있는 파일 이름으로 바꾼다.
@@ -225,6 +245,7 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
             original_name=original_name,
             config=request.app.state.ingest_config,
             store=request.app.state.store,
+            shadow=_shadow(request),
         )
         # **색인이 성공한 뒤에만** 원본을 남긴다 (_keep_original 주석 참고).
         # 파일을 옮기는 것도 블로킹 I/O 라 스레드풀로 넘긴다
@@ -304,6 +325,15 @@ async def delete_document(request: Request, document_id: str) -> Response:
     # delete_by_document_id() 는 VectorStore Protocol 에 있다 — list_documents() 와 달리
     # getattr 로 봐줄 필요가 없다 (rag_pipeline/ingestion/indexing/base.py)
     await run_in_threadpool(store.delete_by_document_id, key)
+
+    # **그림자 컬렉션에서도 지운다.** 안 지우면 화면에서 사라진 문서가 그림자에 남아,
+    # 나중에 두 모델을 견줄 때 **한쪽에만 있는 문서**가 생긴다 — `overlap.py` 가 정확히
+    # 그것을 경고하는 자리이고, 조용히 두면 비교가 검색이 아니라 문서 집합 차이를 잰다.
+    # 색인 쪽이 두 컬렉션을 함께 채우므로 지우는 쪽도 함께여야 짝이 맞는다
+    shadow_store = getattr(request.app.state, "shadow_store", None)
+    if shadow_store is not None:
+        await run_in_threadpool(shadow_store.delete_by_document_id, key)
+
     path.unlink(missing_ok=True)
 
     # 색인 라우트와 같은 계약이다. BM25 는 저장소를 전량 훑은 스냅샷이라 낡는다

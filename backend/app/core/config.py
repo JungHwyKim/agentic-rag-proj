@@ -6,7 +6,20 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from rag_pipeline.config import PROJECT_ROOT
+from rag_pipeline.config import PROJECT_ROOT, EmbeddingConfig
+
+# 그림자 색인이 쓰는 임베딩 설정. **2026-08-25 에 갈아타기 전의 기본값 그대로다.**
+#
+# 설정이 아니라 상수인 것이 요점이다 — 고를 수 있게 열면 합법값이 하나뿐인 축이 하나 더
+# 생기고, 그것이 `Settings.shadow_index_enabled` 주석이 말하는 그 잣대다. 켜고 끄는 것만
+# 설정이고 **무엇을 쌓을지는 이 회차가 정했다.**
+#
+# `openai_api_key` 를 안 적는다 — `EmbeddingConfig()` 가 `.env` 에서 읽는다. 키가 없으면
+# 그림자만 실패하고 주 색인은 그대로 성공한다(pipeline.py `_index_shadow`)
+SHADOW_EMBEDDING = EmbeddingConfig(
+    embedding_provider="openai",
+    embedding_model="text-embedding-3-small",
+)
 
 
 # FastAPI 앱 동작에 필요한 설정
@@ -33,6 +46,19 @@ class Settings(BaseSettings):
     # 대신 사이드바가 총 용량을 보여주고 삭제 버튼을 손에 쥐어 준다
     # (plan_log/backend.md 7회차 "안 하기로 한 것")
     originals_dir: Path = PROJECT_ROOT / "original_files"
+
+    # 색인할 때마다 **갈아타기 전 임베더로 한 벌 더** 넣을지.
+    #
+    # **모델 축이 아니라 스위치 하나다.** `SHADOW_EMBEDDING` 이 갈아타기 전 기본값으로
+    # 못 박혀 있고 설정으로 못 고른다 — "N개 모델을 고른다" 로 열면 합법값이 하나뿐인 축이
+    # 또 생긴다(다중 임베더 융합이 그래서 죽었다). **걷는 것은 이 불리언을 끄는 것 하나다.**
+    #
+    # **왜 켜 두나**: 지금 정답 질의 세트가 tests/fixtures/ 문서 4개에만 붙어 있어, 운영에
+    # 올라오는 문서로는 두 모델을 견줄 수가 없다. 그림자는 **나중에 견주고 싶어졌을 때
+    # 재색인 없이 되게 해 주는 보험**이고, 지금 옛 494 point 가 원본이 없어 못 되살리는 것이
+    # 그 보험이 막으려는 상황이다. 걷을 조건은 **새 문서에 정답 질의가 붙을 때**다
+    # (plan_log/embedding.md 5회차 미결)
+    shadow_index_enabled: bool = True
 
     # 바이트 단위 업로드 상한
     @property

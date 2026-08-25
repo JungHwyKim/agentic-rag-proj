@@ -122,22 +122,22 @@ def test_dimension_reduction_is_refused(local_config) -> None:
 # 미설치면 **설치 안내가 담긴** EmbeddingError 다. 새 예외를 만들지 않았으므로
 # backend 의 _STATUS_BY_EXCEPTION 매핑은 그대로 쓰인다
 def test_missing_dependency_gives_install_hint(mocker, local_config) -> None:
-    def _boom(model_name: str) -> Any:
+    def _boom(model_name: str, device: str) -> Any:
         try:
             raise ImportError("No module named 'sentence_transformers'")
         except ImportError as exc:
             raise EmbeddingError(
                 f"sentence-transformers 가 설치되지 않았습니다: {exc}",
                 user_message=(
-                    "로컬 임베딩을 쓰려면 requirements-local.txt 를 설치해야 합니다: "
-                    "uv pip install -r requirements-local.txt"
+                    "로컬 임베딩에 sentence-transformers 가 필요합니다: "
+                    "uv pip install -r requirements.txt"
                 ),
             ) from exc
 
     mocker.patch.object(local_st, "_make_model", side_effect=_boom)
     with pytest.raises(EmbeddingError) as caught:
         LocalEmbedder(local_config).embed_documents(["가"])
-    assert "requirements-local.txt" in caught.value.user_message
+    assert "requirements.txt" in caught.value.user_message
 
 
 # 문서와 질의가 같은 자리를 본다. **KURE-v1 은 질의 접두사를 안 쓰므로 지금은 같은 값이다** —
@@ -194,3 +194,43 @@ def test_factory_branches_on_provider(local_config) -> None:
 def test_offline_fixture_pins_the_provider(offline_config) -> None:
     assert offline_config.embedding.embedding_provider == "openai"
     assert offline_config.embedding.openai_api_key is None
+
+
+# --- 배포 기본값 (2026-08-25 전환) ---
+
+
+# **기본값이 로컬 갈래라는 것을 못 박는다.** 실측으로 갈아탄 결정이라(같은 60건에서
+# `hit@10` KURE-v1 0.8500 vs text-embedding-3-small 0.4833) 조용히 되돌아가면 검색 품질이
+# 절반으로 떨어지는데 **아무 테스트도 안 깨진다** — 그 자리를 여기서 막는다
+def test_shipped_default_is_the_local_korean_model() -> None:
+    fields = EmbeddingConfig.model_fields
+    assert fields["embedding_provider"].default == "local"
+    assert fields["embedding_model"].default == "nlpai-lab/KURE-v1"
+
+
+# **device 기본값은 `cpu` 다 — 자동 감지를 안 하는 것이 요점이다.**
+# `cuda if available` 로 바꾸면 같은 명령이 머신마다 다른 벡터를 내고
+# *"baseline 은 재현될 때만 기준선"* 이 무너진다 (local_st.py 모듈 docstring)
+def test_device_defaults_to_cpu() -> None:
+    assert EmbeddingConfig.model_fields["embedding_device"].default == "cpu"
+
+
+# **`_make_model()` 에 그 device 가 실제로 실려 가는지 본다.** 설정만 만들고 안 넘기면
+# 값이 조용히 무시돼 GPU 로 바꿔도 CPU 로 돈다 — 설정이 거짓말을 하는 모양이다
+def test_device_reaches_the_model_factory(mocker, local_config) -> None:
+    make = mocker.patch.object(local_st, "_make_model", return_value=FakeModel())
+    config = local_config.model_copy(update={"embedding_device": "cuda"})
+
+    LocalEmbedder(config).embed_documents(["가"])
+
+    assert make.call_args.args[1] == "cuda"
+
+
+# **기본값이 `local` 이 된 뒤로 이 픽스처가 유일한 방어다.** 위
+# `test_offline_fixture_pins_the_provider` 와 짝이고, 저쪽이 "핀이 있다"를 보는 반면
+# 이쪽은 **"핀이 실제로 기본값을 뒤집는다"** 를 본다 — 기본값과 핀이 같아지면 저 테스트는
+# 통과하는데 방어는 사라진 상태가 되기 때문이다
+def test_offline_pin_actually_overrides_the_shipped_default(offline_config) -> None:
+    shipped = EmbeddingConfig.model_fields["embedding_provider"].default
+    assert shipped == "local", "기본값이 openai 로 돌아왔다면 이 방어의 전제가 바뀐 것이다"
+    assert offline_config.embedding.embedding_provider == "openai"

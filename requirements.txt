@@ -50,10 +50,25 @@ httpx                     # FastAPI TestClient
 # ---- 개발 도구 ----
 ruff
 
-# ---- 로컬 임베딩 갈래 - 기본 설치에 안 들어간다 ----
-# torch + sentence-transformers 는 `requirements-local.txt` 에 있다. 안 쓰는 사람에게
-# 가중치 2.27GB 를 지우지 않으려는 것도 있지만, **기본 pytest 환경에 torch 가 없으면
-# 가중치를 조용히 내려받는 경로가 구조적으로 없다**는 쪽이 더 크다. 이유는 그 파일 머리에
+# ---- 로컬 임베딩 (기본 갈래다) ----
+# **2026-08-25 에 본체로 들어왔다.** 그전까지는 `requirements-local.txt` 에 따로 있었고
+# 근거는 *"안 쓰는 사람에게 가중치 2.27GB 를 지우지 않는다"* 였는데, 기본 임베더가
+# `nlpai-lab/KURE-v1` 로 바뀌면서 **안 쓰는 사람이 없어졌다** — 기본 설치로 서버를 띄우면
+# 첫 색인에서 ImportError 가 난다. 갈아탄 근거는 실측이다: 같은 60건에서 `hit@10` 이
+# KURE-v1 0.8500 vs text-embedding-3-small 0.4833 (`plan_log/embedding.md` 5회차).
+#
+# **감수 사항 둘.**
+# ① 설치 용량이 는다(코드 ~140MB + 첫 실행에 가중치 2.27GB 를 내려받는다).
+# ② **기본 pytest 가 가중치를 조용히 내려받는 경로를 막던 겹이 하나 없어졌다.** 전에는
+#    "torch 가 아예 없다" 가 구조적 방어였는데 이제는 `tests/conftest.py` 의 `offline_config`
+#    가 `embedding_provider="openai"` 를 못 박는 것이 **유일한 방어**다. 실제로 이 이관 중에
+#    `tests/ingestion/embedding/conftest.py` 가 provider 를 안 박고 있어 27개 테스트가
+#    2.2GB 를 적재했다(241초). 새 픽스처를 만들 때 provider 를 안 박으면 같은 일이 난다.
+#
+# PyPI 휠은 **CPU 빌드**다. GPU 로 가려면 PyPI 밖 `--index-url` 로 cu 빌드를 따로 깔고
+# `EMBEDDING_DEVICE` 를 바꾼다 — 자동 감지를 안 하는 이유는 `rag_pipeline/config.py` 에 있다
+torch
+sentence-transformers
 
 # ---- 추후 단계 - 지금은 설치하지 않음 ----
 # (없음)

@@ -126,15 +126,41 @@ def _to_result(point: Any) -> SearchResult:
 class QdrantStore:
     # 클라이언트를 여기서 만들지 않는다. 파일 잠금을 실제로 쓸 때까지 늦추고,
     # _make_client() 를 호출 시점에 부르는 것이 테스트의 모킹 이음새다
-    def __init__(self, indexing: IndexingConfig, embedding: EmbeddingConfig) -> None:
+    def __init__(
+        self,
+        indexing: IndexingConfig,
+        embedding: EmbeddingConfig,
+        *,
+        shares_client_with: QdrantStore | None = None,
+    ) -> None:
         self._config = indexing
         self._collection = collection_name_for(indexing, embedding)
         self._client: Any | None = None
+        # 형제 store 는 클라이언트를 갖지 않고 주인에게 물어본다 (sibling_for 참고)
+        self._owner = shares_client_with
 
     # 이 store 가 실제로 쓰는 컬렉션 이름
     @property
     def collection(self) -> str:
         return self._collection
+
+    # 같은 저장 경로의 **다른 임베딩 컬렉션**을 보는 형제 store 를 만든다.
+    #
+    # **바로 아래 `client` 프로퍼티와 같은 이유로 있고, 소비자만 다르다** — 저쪽은 컬렉션을
+    # 직접 다루는 소비자(답변 캐시)용이고, 이쪽은 **`VectorStore` 가 하나 더 필요한**
+    # 소비자용이다. 지금 그 소비자는 그림자 색인이다(`pipeline.py:index_document(shadow=)`).
+    #
+    # **닫는 것은 여전히 주인 하나다.** 형제의 `close()` 는 아무것도 안 한다 — 소유권 규칙이
+    # *"연 쪽이 닫는다"* 이고 형제는 연 적이 없다. 형제를 닫으면 주인이 다음 요청에서 죽는다.
+    #
+    # **게으름도 유지된다** — 형제가 주인의 `_qdrant` 를 그때 물어보므로, 만들어만 두고
+    # 안 쓰면 파일이 안 열린다.
+    #
+    # **한 번 지웠다가 되살린 API 다.** 2026-08-24 다중 임베더 융합이 쓰던 것을 25일에
+    # 되돌리며 지웠는데, 그때 근거가 *"호출부가 0개인 죽은 축"* 이었다. 그림자 색인이
+    # 살아 있는 호출부를 만들어 사실이 바뀌었다 — 잣대는 그대로다
+    def sibling_for(self, embedding: EmbeddingConfig) -> QdrantStore:
+        return QdrantStore(self._config, embedding, shares_client_with=self)
 
     # 같은 저장 경로의 **다른 컬렉션**을 볼 소비자에게 클라이언트를 빌려준다.
     #
@@ -153,6 +179,9 @@ class QdrantStore:
     # 날것의 RuntimeError 는 backend 매핑표에 없어 500 이 된다
     @property
     def _qdrant(self) -> Any:
+        # 형제는 자기 클라이언트를 안 만들고 주인 것을 쓴다 (sibling_for 참고)
+        if self._owner is not None:
+            return self._owner._qdrant
         if self._client is None:
             try:
                 self._client = _make_client(self._config)
@@ -447,6 +476,9 @@ class QdrantStore:
 
     # 저장소를 닫아 파일 잠금을 푼다. 안 닫으면 다음 색인이 통째로 실패한다
     def close(self) -> None:
+        # 형제는 연 적이 없으므로 닫지 않는다. 닫으면 주인이 다음 호출에서 죽는다
+        if self._owner is not None:
+            return
         client, self._client = self._client, None
         if client is None:
             return

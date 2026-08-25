@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.config import DEFAULT_EMBEDDING_PROFILE
+from evaluation.config import DEFAULT_EMBEDDING_PROFILE, DEFAULT_RERANK_PROFILE
 from evaluation.run_eval import BASELINE_PATH, as_baseline, compare_to_baseline
 
 
@@ -21,6 +21,11 @@ def _report(**over: object) -> dict:
         "label": "t",
         "format": "pdf",
         "embedding_profile": DEFAULT_EMBEDDING_PROFILE,
+        # 리랭커 축이 생기며 기준선에 함께 담긴다. **`as_baseline()` 을 `.get()` 으로
+        # 관대하게 만들지 않는 것이 의도다** — 조용히 빠지는 것이 이 키가 고치는 결함이라,
+        # 리포트를 만드는 쪽이 빠뜨리면 여기서 KeyError 로 시끄럽게 죽어야 한다
+        "rerank_profile": DEFAULT_RERANK_PROFILE,
+        "retriever": {"use_bm25": False, "rerank": DEFAULT_RERANK_PROFILE},
         "groups": ["g"],
         "k": 20,
         "report_k": 10,
@@ -90,3 +95,36 @@ def test_committed_baseline_still_compares() -> None:
         per_query=[dict(row) for row in baseline["per_query"]],
     )
     assert "직접 비교하지 않습니다" not in compare_to_baseline(report, baseline)[0]
+
+
+# **커밋된 기준선은 라벨을 스스로 들고 있어야 한다 — fallback 에 기대면 안 된다.**
+#
+# 위 `test_a_baseline_without_the_key_is_read_as_default` 가 보는 fallback
+# (`baseline.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)`)은 **읽는 쪽의 관용**이지
+# 파일의 성질이 아니다. 라벨이 없는 파일은 `DEFAULT_EMBEDDING_PROFILE` 이 바뀌는 순간
+# **자기가 아닌 프로필의 이름으로 읽힌다** — 그러면 프로필 가드가 통과해 버려서, OpenAI 로
+# 잰 기준선과 다른 모델로 잰 실행이 나란히 놓이고 승·패가 나온다. **에러 없이 수치로만
+# 오염되는 모양이다.**
+#
+# 실제로 2026-08-25 에 그 문턱까지 갔다 — 운영 기본값을 KURE-v1 로 옮기며 평가 기본
+# 프로필도 함께 옮길지 검토했고, 옮겼다면 이 파일(`hit@10` 0.4833, OpenAI 로 잰 것)이
+# `kure-v1` 로 읽혔을 것이다. 기본값을 안 옮기는 것으로 피했지만 그건 **피한 것이지 닫은
+# 것이 아니라서**, 라벨을 박아 닫았다. 새 리포트는 `run_eval.py` 가 항상 쓰므로 라벨이
+# 없을 수 있는 파일은 이 커밋된 기준선 하나뿐이다
+@pytest.mark.skipif(not BASELINE_PATH.exists(), reason="기준선 파일이 없다")
+def test_committed_baseline_carries_an_explicit_profile() -> None:
+    baseline = json.loads(Path(BASELINE_PATH).read_text(encoding="utf-8"))
+
+    assert "embedding_profile" in baseline, (
+        "커밋된 기준선에 embedding_profile 이 없으면 DEFAULT_EMBEDDING_PROFILE 이 바뀔 때 "
+        "자기가 아닌 프로필 이름으로 읽힌다 — 라벨을 명시로 박아야 한다"
+    )
+
+    # **라벨이 파일이 실제로 잰 것과 맞는지까지 본다.** 라벨만 있고 값이 틀리면
+    # fallback 보다 나쁘다 — 틀린 이름을 확신을 갖고 들고 있게 된다
+    from evaluation.config import embedding_profile
+
+    declared = baseline["embedding_profile"]
+    assert baseline["settings"]["embedding"] == embedding_profile(declared), (
+        f"기준선의 라벨은 {declared!r} 인데 settings.embedding 블록이 그 프로필과 다르다"
+    )

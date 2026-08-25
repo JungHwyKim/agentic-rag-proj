@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.app.api.routes import documents, pages, query
-from backend.app.core.config import get_settings
+from backend.app.core.config import SHADOW_EMBEDDING, get_settings
 from backend.app.core.templates import templates
 from rag_pipeline.answer_cache import get_answer_cache
 from rag_pipeline.config import IngestConfig
@@ -97,10 +97,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # BM25 도 첫 질의에 짓는다. 여기서 지으면 색인이 아직 없을 때 저장소를 헛되이 열고,
     # 무엇보다 store 의 게으름을 깨는 것이 위 주석이 피하려는 바로 그 일이다
     app.state.bm25 = None
+    # 리랭커도 첫 질의에 만든다. **embedder 와 같은 축이다** — 로컬 갈래는 cross-encoder
+    # 가중치를 올리므로 여기서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 받는 환경에서는
+    # 화면조차 못 본다. bm25 처럼 저장소를 훑지는 않지만 **뜨는 것을 막으면 안 되는 것**은 같다.
+    # `RERANK_MODEL` 이 비어 있으면 get_reranker() 가 None 을 돌려줘 그대로 꺼진 채 돈다
+    app.state.reranker = None
     # 답변 캐시. **임계값이 없으면 None 이고 그것이 곧 꺼진 상태다** (answer_cache/__init__.py).
     # 여기서 만들어도 store 를 참조만 하므로 위 게으름이 안 깨진다 — 클라이언트는 첫 질의에
     # 열린다. 닫을 것도 여전히 store 하나뿐이라 finally 가 안 늘어난다
     app.state.answer_cache = get_answer_cache(app.state.store, config)
+    # 그림자 색인용 두 번째 컬렉션. **`sibling_for()` 로 만드는 것이 유일한 길이다** —
+    # `get_store()` 를 한 번 더 부르면 같은 프로세스에서 위 싱글턴과 배타 잠금 충돌이다.
+    # 형제는 주인의 클라이언트를 빌리므로 **게으름도 유지되고 닫을 것도 여전히 하나**다.
+    # 임베더는 `None` 으로 두고 첫 색인에 만든다 — 키가 없어도 서버는 떠야 한다(embedder 와
+    # 같은 축). 꺼져 있으면 store 조차 안 만든다
+    #
+    # **`getattr` 로 받는 것은 `list_documents()` 와 같은 규약이다** — `sibling_for` 는
+    # qdrant 파일 잠금 때문에 있는 것이라 Protocol 에 안 넣었고(답변 캐시가 `client` 를
+    # 구상 타입으로 받는 것과 같은 판단), 그러면 Protocol 만 지키는 저장소에서는 없다.
+    # 그때는 그림자가 그냥 안 도는 것이 맞다 — 두 번째 구현체는 잠금 문제가 없을 수 있다
+    settings = get_settings()
+    sibling_for = getattr(app.state.store, "sibling_for", None)
+    app.state.shadow_store = (
+        sibling_for(SHADOW_EMBEDDING)
+        if settings.shadow_index_enabled and sibling_for is not None
+        else None
+    )
+    app.state.shadow_embedder = None
     try:
         yield
     finally:

@@ -58,16 +58,20 @@ from rag_pipeline.config import (
     EmbeddingConfig,
     IndexingConfig,
     IngestConfig,
+    RerankConfig,
     RetrievalConfig,
     SplitterConfig,
 )
 
 __all__ = [
     "DEFAULT_EMBEDDING_PROFILE",
+    "DEFAULT_RERANK_PROFILE",
     "EVAL_EMBEDDINGS",
+    "EVAL_RERANKERS",
     "EVAL_SETTINGS",
     "embedding_profile",
     "eval_config",
+    "rerank_profile",
 ]
 
 
@@ -100,6 +104,12 @@ EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
         "embedding_provider": "local",
         "embedding_model": "nlpai-lab/KURE-v1",
         "embedding_dimensions": None,
+        # **`cpu` 를 여기에 못 박는 것이 이 프로필의 재현성이다.** `EMBEDDING_DEVICE` 가
+        # 설정이 되었으므로(2026-08-25), 안 박으면 GPU 를 켠 머신에서 같은 명령이 다른
+        # 벡터를 내고 *"baseline 은 재현될 때만 기준선"* 이 무너진다 — 이 파일이 `.env` 를
+        # 통째로 막은 것과 같은 잣대다. **리랭커 축도 같은 함정이라** `EVAL_SETTINGS` 쪽에
+        # 같은 이름 규칙으로 `rerank_device` 가 붙을 예정이다
+        "embedding_device": "cpu",
         "embedding_batch_size": 100,
         "max_embedding_tokens_per_doc": 200_000,
         "embedding_cache_enabled": True,
@@ -108,6 +118,46 @@ EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
 
 # 아무것도 안 주면 이것. 지금까지와 같은 실행이 된다
 DEFAULT_EMBEDDING_PROFILE = "baseline"
+
+
+# 갈아끼울 수 있는 리랭커 설정들. **`EVAL_EMBEDDINGS` 와 같은 모양인 것이 의도다** —
+# 이름이 곧 실험의 정체라 결과 JSON 에 함께 실리고, 없는 이름을 주면 조용히 기본값으로
+# 안 돌아가고 멈춘다(그러면 대조군을 두 번 재고 *"리랭커가 효과 없다"* 로 읽힌다).
+#
+# **기본이 `off` 인 것이 이 축의 요점이다.** 리랭커를 켜면 질의당 LLM 호출이 1회에서 2회가
+# 되므로, `--rerank` 를 명시하지 않은 실행은 지금까지와 글자 그대로 같아야 한다.
+#
+# 새 프로필을 더할 때 **`rerank_device` 를 빠뜨리지 않는다** — `kure-v1` 이 `embedding_device`
+# 를 못 박은 것과 같은 함정이다(GPU 를 켠 머신이 다른 점수를 내면 비교표가 조용히 흔들린다).
+EVAL_RERANKERS: dict[str, dict[str, Any]] = {
+    # 리랭커 없음. **`rerank_model` 이 비면 `get_reranker()` 가 None 을 돌려준다**
+    "off": {
+        "rerank_model": None,
+    },
+    # 유료 갈래. `gpt-4.1-mini` 는 Vision·생성과 같은 모델인데, 우연이 아니라 싼 쪽에서
+    # 시작한다는 같은 판단이다
+    "openai": {
+        "rerank_provider": "openai",
+        "rerank_model": "gpt-4.1-mini",
+        "rerank_candidates": 50,
+        "rerank_temperature": 0.0,
+        "rerank_max_tokens": 4096,
+        "rerank_cache_enabled": True,
+    },
+    # 무료 갈래. **모델 이름은 탐침값이다** — 한국어 cross-encoder 를 견줘본 적이 없다.
+    # 대안은 `Dongjin-kr/ko-reranker` 이고, 로컬이라 견주는 데 과금이 없다
+    # (`plan_log/검색-생성.md` 5회차 미결)
+    "local": {
+        "rerank_provider": "local",
+        "rerank_model": "BAAI/bge-reranker-v2-m3",
+        "rerank_device": "cpu",
+        "rerank_candidates": 50,
+        "rerank_cache_enabled": True,
+    },
+}
+
+# 아무것도 안 주면 이것. 리랭커 없이 도는 지금까지의 실행이다
+DEFAULT_RERANK_PROFILE = "off"
 
 # 평가가 고정하는 값 전부. **`baseline.json` 의 `_meta` 가 이것을 그대로 싣는다** —
 # 기준선 파일만 보고도 어떤 설정으로 잰 값인지 알 수 있어야 하고, 두 곳에 손으로 적으면
@@ -155,6 +205,9 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
         "candidate_k": 50,
         "rrf_k": 60,
     },
+    # **임베딩과 같은 이유로 두 곳에 안 적는다** — 기본 프로필(=꺼짐)을 그대로 가리켜,
+    # `--rerank` 를 안 준 실행이 자기가 안 쓴 모델을 기록하는 일이 없게 한다
+    "rerank": EVAL_RERANKERS[DEFAULT_RERANK_PROFILE],
     # **두 곳에 적지 않는다.** 기본 프로필을 그대로 가리켜, `baseline.json` 의 `settings`
     # 와 실제로 실린 설정이 갈릴 수 없게 한다
     "embedding": EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE],
@@ -176,13 +229,26 @@ def embedding_profile(name: str) -> dict[str, Any]:
     return EVAL_EMBEDDINGS[name]
 
 
+# 이름으로 리랭커 프로필을 찾는다. **`embedding_profile()` 과 같은 이유로 같은 모양이다** —
+# 없는 이름에 조용히 기본값(=꺼짐)으로 떨어지면 리랭커를 켠 줄 알고 대조군을 두 번 재게 되고,
+# 두 실행이 같은 수치를 내는 것이 *"리랭커가 효과 없다"* 로 읽힌다
+def rerank_profile(name: str) -> dict[str, Any]:
+    if name not in EVAL_RERANKERS:
+        raise SystemExit(
+            f"'{name}' 은 없는 리랭커 프로필입니다. "
+            f"있는 것: {sorted(EVAL_RERANKERS)} (evaluation/config.py 의 EVAL_RERANKERS)"
+        )
+    return EVAL_RERANKERS[name]
+
+
 # 평가용 IngestConfig. lazy 프로퍼티를 명시 값으로 덮어 `.env` 가 결과를 못 흔들게 한다.
 # `qdrant_path` 는 색인하는 쪽만 넘긴다 — 로컬 파일 모드가 배타 잠금을 걸어 실행마다 갈라야 한다.
-# `embedding` 은 갈아끼울 수 있는 유일한 축이다 (모듈 docstring 참고)
+# `embedding` 과 `rerank` 는 갈아끼울 수 있는 두 축이고 나머지는 고정이다 (모듈 docstring 참고)
 def eval_config(
     *,
     qdrant_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
+    rerank: str = DEFAULT_RERANK_PROFILE,
 ) -> IngestConfig:
     config = IngestConfig(**EVAL_SETTINGS["ingest"])
 
@@ -193,6 +259,9 @@ def eval_config(
     object.__setattr__(config, "_splitter", SplitterConfig(**EVAL_SETTINGS["splitter"]))
     object.__setattr__(config, "_embedding", EmbeddingConfig(**embedding_profile(embedding)))
     object.__setattr__(config, "_retrieval", RetrievalConfig(**EVAL_SETTINGS["retrieval"]))
+    # **키는 안 지운다** — 유료 갈래는 실제로 키가 필요하고, 이 파일이 일부러 고정하지 않는
+    # 둘(API 키·tesseract 경로) 중 하나다. 꺼진 상태는 키가 아니라 `rerank_model=None` 이 만든다
+    object.__setattr__(config, "_rerank", RerankConfig(**rerank_profile(rerank)))
 
     if qdrant_path is not None:
         object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=qdrant_path))

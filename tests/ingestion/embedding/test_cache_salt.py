@@ -119,13 +119,27 @@ def test_provider_moves_neither_derivation() -> None:
 
 
 # **두 provider 의 모델 이름 공간이 안 겹친다**는 것이 위 결정의 유일한 근거다.
-# 겹치는 순간 같은 자리를 다른 벡터가 보게 되므로, 그 전제를 여기에 남겨 둔다
+# 겹치는 순간 같은 자리를 다른 벡터가 보게 되므로, 그 전제를 여기에 남겨 둔다.
+#
+# **기본값 하나만 보되 provider 를 함께 읽는다.** 전에는 *"기본 모델 이름에 `/` 가 없다"* 로
+# 잠갔는데, 그건 기본값이 OpenAI 쪽일 때만 뜻이 있는 **대리 지표**였다 — 2026-08-25 에
+# 기본값이 `nlpai-lab/KURE-v1` 로 가자 규칙은 그대로인데 테스트만 깨졌다. 그래서 방향을
+# provider 에서 얻는다: 로컬 이름은 `org/name` 이라 `/` 가 **있어야** 하고, OpenAI 이름은
+# `/` 가 **없어야** 한다. 어느 쪽이 기본값이 되든 같은 규칙을 잰다
 def test_the_two_name_spaces_do_not_overlap() -> None:
-    openai_default = EmbeddingConfig.model_fields["embedding_model"].default
-    assert "/" not in openai_default, (
-        "OpenAI 모델 이름에 슬래시가 생기면 로컬(org/name)과 이름 공간이 겹칠 수 있다 — "
-        "그러면 cache_salt_for() 에 provider 를 넣어야 한다"
-    )
+    provider = EmbeddingConfig.model_fields["embedding_provider"].default
+    model = EmbeddingConfig.model_fields["embedding_model"].default
+
+    if provider == "local":
+        assert "/" in model, (
+            f"로컬 모델 이름 {model!r} 에 org 접두사가 없으면 OpenAI 이름 공간과 겹칠 수 있다 — "
+            "그러면 cache_salt_for() 에 provider 를 넣어야 한다"
+        )
+    else:
+        assert "/" not in model, (
+            f"OpenAI 모델 이름 {model!r} 에 슬래시가 생기면 로컬(org/name)과 이름 공간이 "
+            "겹칠 수 있다 — 그러면 cache_salt_for() 에 provider 를 넣어야 한다"
+        )
 
 
 # **값 자체를 잠근다.** 모양이 바뀌면 기존 캐시가 전부 빗나가 조용히 재과금된다 —
