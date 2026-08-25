@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from rag_pipeline import query as query_module
 from rag_pipeline.config import GenerationConfig, IngestConfig
 from rag_pipeline.query import answer_question
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, CacheOrigin
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -94,3 +95,116 @@ def test_store_and_embedder_are_passed_through(mocker, config):
 
     assert retrieve.call_args.kwargs["store"] is store
     assert retrieve.call_args.kwargs["embedder"] is embedder
+
+
+# --- 답변 캐시 ----------------------------------------------------------------
+
+
+# 캐시 자리. lookup 이 무엇을 돌려줄지만 정하면 된다
+class _FakeCache:
+    def __init__(self, hit: Answer | None = None) -> None:
+        self._hit = hit
+        self.put_calls: list[Answer] = []
+
+    def lookup(self, query: str, *, embedder: object) -> Answer | None:
+        return self._hit
+
+    def put(self, answer: Answer, *, embedder: object) -> bool:
+        self.put_calls.append(answer)
+        return True
+
+
+# **캐시를 안 넘기면 기존 경로가 한 줄도 안 바뀐다.** 안 넘기는 것이 곧 끄는 스위치라
+# 이 성질이 깨지면 설정 없이 끄는 방법이 사라진다
+def test_without_cache_the_path_is_unchanged(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert retrieve.call_count == 1
+    assert generate.call_count == 1
+    assert answer.cached_from is None
+
+
+# 히트하면 **검색도 생성도 안 돈다.** 이것이 이 기능의 절약 전부다 —
+# retrieve() 뒤에 두면 아끼는 것이 LLM 호출 하나뿐이다
+def test_cache_hit_skips_retrieval_and_generation(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(
+        query="옛 질문",
+        text="옛 답변",
+        sources=[_chunk()],
+        cached_from=CacheOrigin(query="옛 질문", created_at=datetime.now(UTC), score=0.97),
+    )
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=_FakeCache(cached)
+    )
+
+    assert answer.text == "옛 답변"
+    assert retrieve.call_count == 0
+    assert generate.call_count == 0
+
+
+# 미스면 평소대로 돌고, 만든 답을 캐시에 넣는다
+def test_cache_miss_runs_normally_and_stores(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    cache = _FakeCache(hit=None)
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=cache
+    )
+
+    assert answer.text == "답변"
+    assert cache.put_calls == [answer]
+
+
+# --- 리랭커 --------------------------------------------------------------------
+
+
+# **리랭커를 그대로 retrieve() 에 넘긴다.** 여기서 하는 일은 수명을 정해 넘기는 것뿐이고,
+# 실제로 붙는 자리는 retrieve() **안**이다(RRF 뒤·절단 앞). 이 배선이 끊기면 리랭커를
+# 설정해도 아무 일이 안 일어나는데 **에러가 안 난다** — 순서가 그냥 예전 그대로다
+def test_reranker_is_passed_through_to_retrieve(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    reranker = object()
+
+    answer_question(
+        "질문", store=object(), embedder=object(), config=config, reranker=reranker
+    )
+
+    assert retrieve.call_args.kwargs["reranker"] is reranker
+
+
+# 안 넘기면 None 이 간다. bm25·cache 와 같은 스위치다
+def test_without_reranker_none_is_passed(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert retrieve.call_args.kwargs["reranker"] is None
+
+
+# **캐시가 히트하면 리랭커도 안 돈다.** retrieve() 를 통째로 건너뛰기 때문인데, 그래서
+# 리랭커를 켜기 전에 쌓인 캐시 항목은 켠 뒤에도 리랭킹 안 된 순서로 서빙된다.
+# 지금은 캐시가 기본으로 꺼져 있어 안 물리지만, **"리랭커가 늘 돈다"고 쓰면 안 되는 자리다**
+def test_cache_hit_skips_the_reranker_too(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(query="질문", text="옛 답변", sources=[])
+
+    answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        reranker=object(),
+        cache=_FakeCache(cached),
+    )
+
+    assert retrieve.call_count == 0

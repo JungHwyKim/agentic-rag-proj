@@ -19,11 +19,13 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from rag_pipeline.config import (
+    AnswerCacheConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
     GenerationConfig,
     IndexingConfig,
     IngestConfig,
+    RerankConfig,
 )
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
@@ -62,11 +64,33 @@ def offline_config(tmp_path: Path) -> IngestConfig:
     )
     # 임베딩은 ingest() 밖에 있어 이 픽스처로 호출될 일이 없다. 그래도 덮어쓰는 이유는
     # EmbeddingConfig() 가 .env 를 읽기 때문이다 — 개발자 머신의 실제 키가 픽스처로 새면
-    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다)
+    # 언젠가 실수로 과금된다. 캐시도 끈다(테스트가 서로의 결과를 물려받으면 안 된다).
+    #
+    # **provider 를 함께 못 박는 이유는 키와 다르다**(3회차) — 로컬 갈래는 **키가 없어도
+    # 돈다.** 기본 pytest 가 모델 가중치 2.27GB 를 내려받는 경로가 열리는데 **아무 에러도
+    # 안 난다.** 키를 지우는 것으로는 이 갈래를 못 막는다.
+    #
+    # **2026-08-25 부터 이 줄이 유일한 방어다.** 전에는 두 겹이었다 — 이 핀과, `torch` 가
+    # 기본 설치에 없다는 것. 기본 임베더가 `nlpai-lab/KURE-v1` 로 바뀌며 `torch` 가
+    # `requirements.txt` 본체로 가서 **뒤엣것이 사라졌다.** 게다가 이제는 개발자 `.env` 에
+    # 뭐가 있든 상관없이 **코드 기본값 자체가 `local`** 이라, 이 핀이 없으면 기본 상태가
+    # 곧 가중치 적재다. 실제로 이관 당일 `tests/ingestion/embedding/conftest.py` 가 provider 를
+    # 안 박고 있어 27개 테스트가 2.2GB 를 적재했다(그 폴더가 241초).
+    # **새 픽스처를 만들 때 provider 를 빠뜨리면 같은 일이 난다.**
     object.__setattr__(
         config,
         "_embedding",
-        EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
+        EmbeddingConfig(
+            openai_api_key=None,
+            embedding_provider="openai",
+            # **provider 와 model 은 함께 박아야 한다.** provider 만 박으면 `openai` 인데
+            # 모델 이름은 기본값(`nlpai-lab/KURE-v1`)인 **앞뒤가 안 맞는 설정**이 되고,
+            # 그것이 파생 이름으로 새어 나간다 — 컬렉션이 `documents_nlpai-lab_KURE-v1_...`
+            # 이 되고 캐시 salt 도 그 이름을 탄다. 가짜 클라이언트가 호출을 받아 주므로
+            # **테스트는 도는데 이름만 틀린** 상태가 된다(실측으로 그 일이 났다)
+            embedding_model="text-embedding-3-small",
+            embedding_cache_enabled=False,
+        ),
     )
     # 색인도 같은 이유로 덮어쓴다. 여기서 막는 것은 키가 아니라 **저장 위치**다 —
     # IndexingConfig() 의 기본 qdrant_path 가 PROJECT_ROOT/.qdrant 라, 안 덮으면 테스트가
@@ -84,6 +108,32 @@ def offline_config(tmp_path: Path) -> IngestConfig:
         config,
         "_generation",
         GenerationConfig(openai_api_key=None),
+    )
+    # 답변 캐시도 같은 이유로 덮어쓴다. **기본값이 이미 꺼짐(threshold=None)인데도 덮는
+    # 이유**는 AnswerCacheConfig() 가 .env 를 직접 읽어서다 — 개발자가 .env 에 임계값을
+    # 넣어 두면 그 값이 픽스처에 실려 테스트가 사람마다 다르게 돈다
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_threshold=None),
+    )
+    # 리랭커도 덮어쓴다. **여기는 임베딩과 같은 함정이 두 개 겹쳐 있어 셋을 다 박는다.**
+    #
+    # `rerank_model=None` 하나만으로도 `get_reranker()` 가 None 을 돌려줘 꺼지지만,
+    # RerankConfig() 가 .env 를 직접 읽으므로 개발자가 이름을 넣어 두면 그 값이 실린다.
+    # 그리고 **provider="local" 이면 키가 없어도 돌아** cross-encoder 가중치를 내려받는데,
+    # 임베딩이 이관 당일 정확히 그 일을 겪었다(27개 테스트가 2.2GB 적재, 폴더 241초).
+    # 키를 지우는 것으로는 이 갈래를 못 막는다 — 위 _embedding 주석과 같은 이야기다.
+    # 캐시를 끄는 것은 테스트가 서로의 결과를 물려받지 않게 하려는 것이다
+    object.__setattr__(
+        config,
+        "_rerank",
+        RerankConfig(
+            openai_api_key=None,
+            rerank_provider="openai",
+            rerank_model=None,
+            rerank_cache_enabled=False,
+        ),
     )
     return config
 

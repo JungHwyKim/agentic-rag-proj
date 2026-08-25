@@ -80,6 +80,8 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/retrieval/", "tests/retrieval"),
     ("rag_pipeline/generation/", "tests/generation"),
     ("rag_pipeline/query.py", "tests/test_query.py"),
+    # 답변 캐시. 적재도 검색도 아니라 최상위에 산다 — retrieve() **앞**에 서기 때문이다
+    ("rag_pipeline/answer_cache/", "tests/answer_cache"),
     ("backend/", "tests/api"),
     (".claude/hooks/", "tests/hooks"),
     # 평가 하네스. rag_pipeline 이 아니라 **그것을 재는 자**라 최상위에 있다.

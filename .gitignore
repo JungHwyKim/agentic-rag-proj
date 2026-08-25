@@ -20,8 +20,10 @@ tests/fixtures/
 
 # 런타임 데이터
 data/
-uploads/
 .cache/
+# 색인에 성공한 업로드 원본(Settings.originals_dir 기본값). 사용자가 올린 파일 그대로라
+# 커밋하면 안 된다. 상한도 자동 정리도 없고 삭제는 화면의 버튼이 한다
+original_files/
 # qdrant 로컬 파일 모드의 저장 경로(IndexingConfig.qdrant_path 기본값).
 # 벡터 DB 바이너리라 커밋하면 안 되고, 임베딩 모델을 바꾸면 내용도 통째로 달라진다
 .qdrant/

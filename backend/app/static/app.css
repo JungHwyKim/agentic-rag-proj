@@ -14,6 +14,10 @@
   --lavender-ink: #4a3fb0;
   --user-bubble: #dfe4fb;
   --sunken: #fafafc;
+  /* 실패 표시. 기존 팔레트에 경고색이 없어 둘만 더한다 — 화면 어디서도 빨강을 안 쓰므로
+     이 둘이 곧 "무언가 잘못됐다"의 유일한 신호다 */
+  --danger: #b4232b;
+  --danger-bg: #fdf0f0;
   --r: 10px;
   --r-sm: 6px;
 }
@@ -51,7 +55,10 @@ body {
 
 .panel-title { font-size: 12px; font-weight: 700; margin: 0 0 9px; letter-spacing: -.2px; }
 
+/* button 이 아니라 file input 을 여는 label 이다 — 그래서 display·text-align 을 직접 준다
+   (button 은 기본이 inline-block + 가운데 정렬이라 안 적어도 됐다) */
 .upload-btn {
+  display: block;
   width: 100%;
   padding: 7px;
   margin-bottom: 11px;
@@ -60,9 +67,10 @@ body {
   background: #fff;
   font: inherit;
   font-size: 12px;
+  text-align: center;
+  cursor: pointer;
 }
-/* 목업이라는 것이 눈에 보여야 한다 */
-.upload-btn[disabled] { color: var(--muted); cursor: not-allowed; }
+.upload-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .doc-list, .history { list-style: none; margin: 0; padding: 0; }
 
@@ -76,8 +84,36 @@ body {
   gap: 1px;
 }
 /* 실제 파일명이 길고 공백이 없어 anywhere 가 아니면 패널을 밀어낸다 */
-.doc-name { font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+/* 이름이 곧 원문 링크다. 밑줄은 hover 에서만 — 목록이 링크투성이로 보이면 안 된다 */
+.doc-name {
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  color: inherit;
+  text-decoration: none;
+}
+.doc-name:hover { color: var(--accent); text-decoration: underline; }
 .doc-meta { font-size: 10.5px; color: var(--muted); }
+/* 그림자(비교용) 색인이 빠진 문서. 오류가 아니라 **다시 올리면 채워지는 상태**라
+   빨강이 아니라 경고색이고, 삭제 버튼처럼 눈을 끌면 안 된다 */
+.doc-shadow-missing { color: #b26a00; cursor: help; }
+
+/* 삭제 버튼. 평소엔 흐려 두고 항목에 마우스를 올렸을 때 드러낸다 —
+   되돌릴 수 없는 동작이라 눈에 먼저 띄면 안 된다 */
+.doc-delete {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s, color .12s;
+}
+.doc-item:hover .doc-delete, .doc-delete:focus-visible { opacity: 1; }
+.doc-delete:hover { color: var(--danger); }
 
 /* 히스토리는 비활성이다 — 예시처럼 테두리는 두되 전체를 흐리게 해 클릭 불가를 알린다 */
 .history { opacity: .55; }
@@ -162,6 +198,17 @@ body {
 }
 .source-tag:hover { border-color: var(--accent); color: var(--accent); }
 
+/* 출처 태그 옆 원문 링크. 태그와 같은 줄에 서되 눌리는 자리는 따로다 —
+   태그는 발췌 토글, 이쪽은 원문 열기 (＿answer.html) */
+.source-open {
+  align-self: center;
+  font-size: 10.5px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.source-open:hover { color: var(--accent); text-decoration: underline; }
+
 /* **파일명만 자른다.** 쪽 번호는 태그의 요점이라 잘리면 안 된다.
    원본 이름은 button[title] 에 있다 (_answer.html) */
 .tag-name {
@@ -215,6 +262,55 @@ body {
 /* htmx 가 요청 중에만 보여준다 */
 .pending { display: none; font-size: 11.5px; color: var(--muted); }
 .htmx-request.pending, .htmx-request .pending { display: block; }
+
+/* 업로드·색인 진행 바. **앞 구간만 실제 수치다** — 업로드 바이트는 xhr 이 알려주지만
+   그 뒤 파싱·임베딩·저장은 서버가 신호를 안 내보내 무한 애니메이션으로 둔다.
+   가짜 퍼센트를 지어내지 않는 것이 이 두 모양이 갈려 있는 이유다 (chat.html) */
+#upload-progress { margin: 6px 0 0; }
+.bar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.bar-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+.bar-fill.is-indeterminate {
+  background: linear-gradient(90deg, var(--line) 0%, var(--accent) 50%, var(--line) 100%);
+  background-size: 200% 100%;
+  animation: bar-slide 1.1s linear infinite;
+  transition: none;
+}
+@keyframes bar-slide { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+/* 무한 애니메이션은 이 설정이 정확히 겨냥하는 것이다. 끄되 **바는 남긴다** —
+   진행 중이라는 표시 자체가 사라지면 이 기능의 목적이 없어진다 */
+@media (prefers-reduced-motion: reduce) {
+  .bar-fill.is-indeterminate { animation: none; background: var(--line-soft); }
+}
+.bar-label { margin: 4px 0 0; }
+
+/* 실패 조각(_error.html). **조각은 한 벌이고 모양은 자리가 결정한다** — 템플릿에 variant
+   인자를 두면 예외 핸들러가 어느 라우트인지 알아야 해서 HX-Request 한 축으로 가른 이유가
+   사라진다 (main.py). 기본형은 사이드바용 한 줄이다 */
+.error {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* **성공 204 는 본문이 비어 이 자리를 저절로 비운다.** 그때 테두리만 남지 않도록 자리째
+   감춘다 — .sidebar-foot:empty 와 같은 규약이다 (chat.html) */
+#upload-error:empty { display: none; }
+
+/* 질의 실패는 대화 흐름 안에 남아야 "어느 질문이 실패했는지" 가 보인다. 그래서 답변
+   말풍선과 같은 치수를 덧입힌다 — .bubble.assistant 를 그대로 따른다 */
+#messages .error {
+  margin: 0;
+  align-self: stretch;
+  padding: 11px 14px;
+  border-radius: var(--r);
+  font-size: 13px;
+}
 
 .muted { color: var(--muted); }
 .small { font-size: 10.5px; }

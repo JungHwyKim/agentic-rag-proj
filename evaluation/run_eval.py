@@ -65,7 +65,14 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from evaluation.config import EVAL_SETTINGS, eval_config
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    EVAL_RERANKERS,
+    EVAL_SETTINGS,
+    embedding_profile,
+    eval_config,
+)
 from evaluation.corpus import build_corpus
 from evaluation.documents import DOCUMENT_GROUPS, FIXTURES_DIR
 from evaluation.qa_set import load_qa_set, validate_items, validate_spans_across_formats
@@ -83,8 +90,8 @@ K_AXES: tuple[int, ...] = (1, 3, 5, 10, 20)
 
 
 # 세트가 성립하는지 본다. 문제 목록을 돌려주고 비어 있으면 통과다
-def check(refresh: bool = False) -> list[str]:
-    qa = load_qa_set()
+def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
+    qa = load_qa_set(qa_path)
     if not qa.items:
         return [f"세트가 비어 있습니다: {qa.path}"]
 
@@ -122,20 +129,31 @@ def axes_for(k: int) -> tuple[int, ...]:
 
 # dense 검색 baseline. **과금이 일어난다** — 색인과 질의 임베딩 둘 다 OpenAI 를 부른다
 def run_dense(
-    *, fmt: str, k: int, report_k: int, label: str, groups: list[str] | None = None
+    *,
+    fmt: str,
+    k: int,
+    report_k: int,
+    label: str,
+    groups: list[str] | None = None,
+    use_bm25: bool = False,
+    rerank: str = DEFAULT_RERANK_PROFILE,
+    qa_path: Path | None = None,
+    embedding: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
-    from rag_pipeline.retrieval import retrieve
+    from rag_pipeline.retrieval import build_bm25_index, get_reranker, retrieve
 
-    qa = load_qa_set()
+    qa = load_qa_set(qa_path)
     if not qa.items:
         raise SystemExit(f"세트가 비어 있습니다: {qa.path}")
 
     # **개발자 `.env` 가 아니라 고정 설정이다** (evaluation/config.py).
     # 실행마다 저장 경로를 가르는 것은 배타 잠금 때문이다 (모듈 docstring 참고)
-    config = eval_config(qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}")
+    config = eval_config(
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding, rerank=rerank
+    )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
     items = [item for item in qa.items if item.source_doc in wanted]
@@ -167,13 +185,30 @@ def run_dense(
     axes = axes_for(k)
     embedder = get_embedder(config.embedding)
     store = get_store(config.indexing, config.embedding)
+    # **인덱스를 루프 밖에서 한 번 짓는다.** 안에서 지으면 질의마다 저장소를 통째로 다시 훑어
+    # 45건이 45번이 된다. `--hybrid` 가 없으면 None 이고, 그때 결과는 dense 와 글자 그대로
+    # 같아야 한다 (rag_pipeline/retrieval/hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
+    bm25 = build_bm25_index(store) if use_bm25 else None
+    # **리랭커도 루프 밖에서 한 번 만든다.** 로컬 갈래는 모델을 올리므로 질의마다 만들면
+    # 그 비용을 60번 낸다. `--rerank` 를 안 주면 프로필이 `off` 라 None 이고, 그때 결과는
+    # 리랭커 이전과 글자 그대로 같아야 한다 (hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
+    reranker = get_reranker(config.rerank)
     # k 축마다 QueryScore 목록. **검색은 한 번이고 채점만 여러 번이다**
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
         for item in items:
             # **top_k=k 를 반드시 넘긴다.** retrieve() 의 기본값 5 가 실리면 by_axis[10]·
             # [20] 만 후보 부족으로 조용히 낮아져 검색 품질이 나빠진 것처럼 보인다
-            texts = [hit.text for hit in retrieve(item.query, store=store, embedder=embedder, top_k=k)]
+            hits = retrieve(
+                item.query,
+                store=store,
+                embedder=embedder,
+                top_k=k,
+                bm25=bm25,
+                reranker=reranker,
+                config=config.retrieval,
+            )
+            texts = [hit.text for hit in hits]
             for axis in axes:
                 by_axis[axis].append(score_query(item.query_id, texts, item.gold_spans, axis))
     finally:
@@ -194,9 +229,43 @@ def run_dense(
         "report_k": report_k,
         # **`per_query` 는 `--k` 채점이다** (모듈 docstring 참고)
         "per_query_k": k,
-        "settings": EVAL_SETTINGS,
+        # **어느 임베딩 프로필로 쟀나.** 이름과 실제 값을 함께 남긴다 — 이름만 남기면
+        # 나중에 그 프로필의 내용이 바뀌었을 때 옛 결과가 무엇으로 쟀는지 알 수 없다
+        "embedding_profile": embedding,
+        # **`EVAL_SETTINGS` 를 그대로 실으면 안 된다** — 그 안의 `embedding` 은 기본
+        # 프로필이라, 다른 프로필로 돌린 실행이 자기가 안 쓴 모델을 기록하게 된다
+        # **리랭커 프로필도 같은 이유로 갈아 끼운다** — `EVAL_SETTINGS["rerank"]` 는 기본
+        # 프로필(=꺼짐)이라, 그대로 실으면 리랭커를 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
+        "rerank_profile": rerank,
+        "settings": {
+            **EVAL_SETTINGS,
+            "embedding": embedding_profile(embedding),
+            "rerank": EVAL_RERANKERS[rerank],
+        },
+        # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
+        # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
+        # dense 폴백이라, 안 남기면 "그냥 효과가 없었다"와 구분이 안 되기 때문이다
+        "retriever": {
+            "use_bm25": use_bm25,
+            "bm25_chunks": len(bm25) if bm25 is not None else None,
+            "bm25_warnings": list(bm25.warnings) if bm25 is not None else [],
+            # **리랭커 경고도 같은 이유로 싣는다** — 실패가 예외가 아니라 RRF 순서로 내려가는
+            # 폴백이라, 안 남기면 *"리랭커가 값을 못 했다"* 와 *"리랭커가 안 돌았다"* 가
+            # 리포트에서 구분이 안 된다. 비교표의 한 칸이 통째로 거짓이 되는 자리다
+            "rerank": rerank,
+            "rerank_warnings": list(reranker.warnings) if reranker is not None else [],
+        },
         "indexed": indexed,
-        "usage": {"tokens": embedder.usage.total_tokens, "calls": embedder.usage.api_calls},
+        # **리랭커 비용을 임베딩과 갈라 싣는다** — 유료 갈래는 토큰이, 로컬 갈래는 채점한
+        # 후보 수(`reranked`)가 비용이다. 합치면 어느 쪽이 얼마를 썼는지 못 읽는다
+        "usage": {
+            "tokens": embedder.usage.total_tokens,
+            "calls": embedder.usage.api_calls,
+            "rerank_calls": reranker.usage.api_calls if reranker is not None else 0,
+            "rerank_tokens": reranker.usage.total_tokens if reranker is not None else 0,
+            "rerank_cache_hits": reranker.usage.cache_hits if reranker is not None else 0,
+            "reranked": reranker.usage.reranked if reranker is not None else 0,
+        },
         "summary": summarize(by_axis[report_k], report_k),
         "by_k": {str(axis): summarize(by_axis[axis], axis) for axis in axes},
         "by_group": by_group,
@@ -211,7 +280,14 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         "무엇인가": "dense 검색의 기준값. 이후 모든 검색 비교가 이 값과의 차이로 판정된다.",
         "재는 방법": (
             f"python -m evaluation.run_eval --dense --format {report['format']} "
-            f"--k {report['k']} --report-k {report['report_k']} --save-baseline"
+            f"--k {report['k']} --report-k {report['report_k']}"
+            + (
+                ""
+                if report.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+                == DEFAULT_EMBEDDING_PROFILE
+                else f" --embedding {report['embedding_profile']}"
+            )
+            + " --save-baseline"
         ),
         "설정": "settings 블록이 그 실행의 고정 설정이다 (evaluation/config.py).",
         "갱신 규칙": (
@@ -225,9 +301,16 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "갱신 이력": [],
     }
+    # **`retriever` 와 `rerank_profile` 이 빠져 있었다.** 그래서 기준선 파일만 보고는
+    # dense 인지 hybrid 인지 못 가렸다 — 이번 회차는 기준선을 안 올리지만, 누군가
+    # `--hybrid --save-baseline` 을 돌리는 순간 갈래를 조용히 잃는 자리라 함께 닫는다.
+    # `usage` 는 여전히 뺀다(캐시 적중에 따라 흔들려 diff 노이즈가 된다)
     keys = (
         "label",
         "format",
+        "embedding_profile",
+        "rerank_profile",
+        "retriever",
         "groups",
         "k",
         "report_k",
@@ -248,6 +331,18 @@ def compare_to_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> lis
         return [
             f"  (기준선은 '{baseline.get('format')}' 판이라 "
             f"'{report.get('format')}' 과 직접 비교하지 않습니다)"
+        ]
+
+    # **포맷과 같은 이유로 임베딩 프로필도 가른다.** 다른 모델로 잰 순위를 승·패로 세면
+    # 검색이 좋아진 것인지 모델이 다른 것인지 못 가른다 — 60건 요약과 45건 요약을 견주는
+    # 사고를 막는 그 가드와 같은 종류다. **프로필 축이 생기기 전의 기준선에는 이 키가 없고,
+    # 그때는 실제로 기본 프로필이었으므로** 없으면 기본으로 본다
+    old_profile = baseline.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+    new_profile = report.get("embedding_profile", DEFAULT_EMBEDDING_PROFILE)
+    if old_profile != new_profile:
+        return [
+            f"  (기준선은 '{old_profile}' 임베딩이라 "
+            f"'{new_profile}' 과 직접 비교하지 않습니다)"
         ]
 
     before = {row["query_id"]: row["rank"] for row in baseline.get("per_query", [])}
@@ -301,11 +396,38 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="검색 품질 평가 러너")
     parser.add_argument("--check", action="store_true", help="세트만 검증한다 (과금 없음)")
     parser.add_argument("--dense", action="store_true", help="dense baseline 을 잰다 (과금)")
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="BM25 를 얹어 RRF 로 합친다. 빼면 지금까지와 똑같은 dense 다",
+    )
     parser.add_argument("--format", dest="fmt", default="pdf", help="색인할 포맷 라벨 (pdf / hwpx)")
     parser.add_argument("--groups", nargs="*", help="특정 그룹만. 비우면 세트의 전 그룹")
     parser.add_argument("--k", type=int, default=20, help="후보를 어디까지 가져오나 (검색은 무료)")
     parser.add_argument("--report-k", type=int, default=10, help="summary 의 주지표 k")
     parser.add_argument("--label", default="dense-baseline")
+    parser.add_argument(
+        "--embedding",
+        default=DEFAULT_EMBEDDING_PROFILE,
+        help=(
+            "임베딩 프로필 이름 (evaluation/config.py 의 EVAL_EMBEDDINGS). "
+            "**모델이 바뀌면 캐시 salt 와 컬렉션이 함께 갈려 전량 재임베딩이다**"
+        ),
+    )
+    parser.add_argument(
+        "--rerank",
+        default=DEFAULT_RERANK_PROFILE,
+        choices=sorted(EVAL_RERANKERS),
+        help=(
+            "리랭커 프로필 이름 (evaluation/config.py 의 EVAL_RERANKERS). "
+            "기본은 off 라 지금까지와 같은 실행이다. **openai 는 질의당 과금이 붙는다**"
+        ),
+    )
+    parser.add_argument(
+        "--qa-set",
+        type=Path,
+        help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
+    )
     parser.add_argument("--refresh", action="store_true", help="파싱 캐시를 버리고 다시 읽는다")
     parser.add_argument(
         "--save-baseline",
@@ -314,8 +436,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # **`--rerank` 를 `--dense` 없이 주면 멈춘다.** 아래 갈래가 세트 검증만 돌고 `통과` 를
+    # 찍는데, 리랭커를 켰다고 믿은 사람은 그것을 성공으로 읽는다. `--hybrid` 에 같은 함정이
+    # 있어 다른 세션이 실제로 한 번 헛돌았다 — 그 가드를 되살릴 때 모양을 맞추기로 했다
+    if args.rerank != DEFAULT_RERANK_PROFILE and not args.dense:
+        raise SystemExit("--rerank 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
+
     if args.check or not args.dense:
-        problems = check(refresh=args.refresh)
+        problems = check(refresh=args.refresh, qa_path=args.qa_set)
         for line in problems:
             print("  ✗", line)
         print(f"\n{'통과' if not problems else str(len(problems)) + '건 문제'}")
@@ -324,7 +452,15 @@ def main() -> int:
     report_k = min(args.report_k, args.k)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     report = run_dense(
-        fmt=args.fmt, k=args.k, report_k=report_k, label=args.label, groups=args.groups
+        fmt=args.fmt,
+        k=args.k,
+        report_k=report_k,
+        label=args.label,
+        groups=args.groups,
+        use_bm25=args.hybrid,
+        rerank=args.rerank,
+        qa_path=args.qa_set,
+        embedding=args.embedding,
     )
     out = RESULTS_DIR / f"{args.label}-{args.fmt}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -336,6 +472,10 @@ def main() -> int:
             json.dumps(as_baseline(report), ensure_ascii=False, indent=1), encoding="utf-8"
         )
         print(f"\n기준선 갱신: {BASELINE_PATH}")
+    elif args.qa_set is not None:
+        # **다른 세트를 기본 기준선과 대조하면 안 된다.** query_id 가 안 겹쳐 전 항목이
+        # "없음 -> N" 으로 나오는데, 그것은 회귀가 아니라 애초에 다른 질문들이다
+        print(f"\n(기준선 대조 생략 — 기준선은 {load_qa_set().path.name} 것이다)")
     elif BASELINE_PATH.exists():
         baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
         print(f"\n기준선 대비 ({baseline.get('label')}-{baseline.get('format')}):")

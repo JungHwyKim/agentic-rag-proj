@@ -15,14 +15,25 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.config import EVAL_SETTINGS, eval_config
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    EVAL_EMBEDDINGS,
+    EVAL_RERANKERS,
+    EVAL_SETTINGS,
+    embedding_profile,
+    eval_config,
+)
 from rag_pipeline.config import (
     CleanerConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
     IngestConfig,
+    RerankConfig,
+    RetrievalConfig,
     SplitterConfig,
 )
+from rag_pipeline.retrieval import get_reranker
 
 EVALUATION_DIR = Path(__file__).resolve().parents[2] / "evaluation"
 
@@ -33,6 +44,8 @@ _MODELS = {
     "cleaner": CleanerConfig,
     "splitter": SplitterConfig,
     "embedding": EmbeddingConfig,
+    "retrieval": RetrievalConfig,
+    "rerank": RerankConfig,
 }
 
 
@@ -118,3 +131,129 @@ def test_evaluation_never_builds_its_own_ingest_config(module) -> None:
     }
     assert "IngestConfig" not in called, f"{module} 는 eval_config() 를 써야 한다"
     assert "eval_config" in called
+
+
+# ---------------------------------------------------------------------------
+# 임베딩 프로필 축 — 고정 중에 이것 하나만 이름으로 갈아끼울 수 있다
+# ---------------------------------------------------------------------------
+
+
+# **두 곳에 안 적는다.** EVAL_SETTINGS 가 기본 프로필을 그대로 가리켜야, baseline.json 의
+# settings 와 실제로 실린 설정이 갈릴 수 없다
+def test_fixed_settings_point_at_the_default_profile() -> None:
+    assert EVAL_SETTINGS["embedding"] is EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE]
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다 —
+# 기본 프로필만 보면 나중에 더한 프로필의 오타가 그대로 산다
+@pytest.mark.parametrize("profile", sorted(EVAL_EMBEDDINGS))
+def test_every_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_EMBEDDINGS[profile]) - set(EmbeddingConfig.model_fields)
+    assert not unknown, f"프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 아무것도 안 주면 지금까지와 같은 실행이어야 한다. 축이 산출을 바꾸면 축이 아니라 변경이다
+def test_default_is_the_same_as_naming_the_default_profile() -> None:
+    assert eval_config().embedding.model_dump() == (
+        eval_config(embedding=DEFAULT_EMBEDDING_PROFILE).embedding.model_dump()
+    )
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_EMBEDDINGS))
+def test_named_profile_actually_lands(profile: str) -> None:
+    config = eval_config(embedding=profile)
+    for key, value in EVAL_EMBEDDINGS[profile].items():
+        assert getattr(config.embedding, key) == value, f"{profile}.{key}"
+
+
+# **없는 이름이면 조용히 기본값으로 안 돌아간다.** 돌아가면 대조군을 두 번 재고, 두 실행이
+# 같은 수치를 내는 것이 "모델이 안 움직였다"로 읽힌다 — 물으려던 질문에 가짜 답이 나온다
+def test_unknown_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(embedding="없는프로필")
+    assert "없는프로필" in str(err.value)
+    assert DEFAULT_EMBEDDING_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 여전히 못 이긴다. 고정의 목적이 프로필 축으로 새면 안 된다
+def test_env_cannot_move_a_named_profile(monkeypatch) -> None:
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "3")
+
+    config = eval_config(embedding=DEFAULT_EMBEDDING_PROFILE)
+
+    assert config.embedding.embedding_model == "text-embedding-3-small"
+    assert config.embedding.embedding_batch_size == 100
+
+
+# 프로필 조회는 사본이 아니라 그 딕셔너리를 준다. 호출부가 고치면 다음 실행이 오염되므로
+# **읽기만 한다는 것**을 여기서 못 박아 둔다 (지금 호출부는 ** 로 펴서 넘긴다)
+def test_lookup_returns_the_registered_block() -> None:
+    assert embedding_profile(DEFAULT_EMBEDDING_PROFILE) == EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE]
+
+
+# 리랭커 프로필 축 — 임베딩과 **같은 모양이라 같은 가드를 건다**
+# ---------------------------------------------------------------------------
+
+
+# 기본이 꺼짐이어야 한다. **`--rerank` 를 안 준 실행은 지금까지와 글자 그대로 같아야 한다** —
+# 켜지는 순간 질의당 LLM 호출이 1회에서 2회가 되므로 기본값이 곧 과금 여부다
+def test_rerank_default_profile_is_off() -> None:
+    assert EVAL_SETTINGS["rerank"] is EVAL_RERANKERS[DEFAULT_RERANK_PROFILE]
+    assert eval_config().rerank.rerank_model is None
+    assert get_reranker(eval_config().rerank) is None
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_every_rerank_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_RERANKERS[profile]) - set(RerankConfig.model_fields)
+    assert not unknown, f"리랭커 프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_named_rerank_profile_actually_lands(profile: str) -> None:
+    config = eval_config(rerank=profile)
+    for key, value in EVAL_RERANKERS[profile].items():
+        assert getattr(config.rerank, key) == value, f"{profile}.{key}"
+
+
+# **로컬 갈래는 장치를 못 박아야 한다** — CPU 와 GPU 가 다른 점수를 내면 같은 명령이
+# 머신마다 다른 순위를 만들고 비교표가 에러 없이 흔들린다. `kure-v1` 이 `embedding_device` 를
+# 못 박은 것과 같은 함정이라, 새 로컬 프로필을 더할 때 빠뜨리는 것을 여기서 막는다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_local_rerank_profiles_pin_the_device(profile: str) -> None:
+    block = EVAL_RERANKERS[profile]
+    if block.get("rerank_provider") != "local":
+        pytest.skip("로컬 갈래가 아니면 장치를 안 쓴다")
+    assert "rerank_device" in block, f"로컬 프로필 '{profile}' 에 rerank_device 가 없다"
+
+
+# 없는 이름이면 조용히 꺼짐으로 안 돌아간다. 돌아가면 리랭커를 켠 줄 알고 대조군을 두 번
+# 재게 되고, 두 실행이 같은 수치를 내는 것이 "리랭커가 효과 없다"로 읽힌다
+def test_unknown_rerank_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(rerank="없는리랭커")
+    assert "없는리랭커" in str(err.value)
+    assert DEFAULT_RERANK_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 못 이긴다. 고정의 목적이 이 축으로 새면 안 된다
+def test_env_cannot_move_a_named_rerank_profile(monkeypatch) -> None:
+    monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
+    monkeypatch.setenv("RERANK_CANDIDATES", "3")
+
+    config = eval_config(rerank="openai")
+
+    assert config.rerank.rerank_model == "gpt-4.1-mini"
+    assert config.rerank.rerank_candidates == 50
+
+
+# **`.env` 가 꺼진 기본값을 켤 수도 없어야 한다.** 개발자가 `.env` 에 모델 이름을 넣어 두면
+# `--rerank` 를 안 준 평가 실행이 조용히 과금되는데, 그것이 정확히 이 파일이 막는 것이다
+def test_env_cannot_turn_the_default_off_profile_on(monkeypatch) -> None:
+    monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
+
+    assert eval_config().rerank.rerank_model is None

@@ -59,10 +59,20 @@ def real_config(tmp_path) -> IngestConfig:
         "_splitter",
         SplitterConfig(max_chunk_chars=1200, chunk_overlap_chars=150),
     )
+    # **`embedding_provider` 를 못 박는 것이 여기서 특히 중요하다.** 이 파일은 실파일로
+    # `index_document()` 를 끝까지 돌리는 유일한 자리라, provider 가 기본값을 타면
+    # `fake_embedding_api` 가 갈아끼우는 OpenAI 이음새가 **아무 데도 안 꽂히고** 로컬
+    # 가중치 2.27GB 를 실제로 적재한다. 실측으로 그 일이 났다 — 2026-08-25 에 기본값이
+    # `local` 로 바뀌자 이 폴더가 120초를 넘겼고 `test_every_chunk_is_stored` 에서
+    # **Windows access violation** 까지 났다(키 없음으로는 못 막는다. 로컬은 키가 필요 없다)
     object.__setattr__(
         config,
         "_embedding",
-        EmbeddingConfig(openai_api_key=None, embedding_cache_enabled=False),
+        EmbeddingConfig(
+            openai_api_key=None,
+            embedding_provider="openai",
+            embedding_cache_enabled=False,
+        ),
     )
     object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=tmp_path / "qdrant"))
     return config

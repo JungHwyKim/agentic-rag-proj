@@ -64,6 +64,6 @@ class IndexingError(RagPipelineError):
 # 사용자는 "근거를 못 찾았다"와 "생성이 실패했다"를 구분할 수 없다 — 할 일이 서로 다른데도.
 #
 # 검색 결과가 0건인 것은 여기 해당하지 않는다. 그건 정상 경로이고 Answer.sources 가
-# 빈 리스트로 나간다 (plan_log/frontend.md 1회차)
+# 빈 리스트로 나간다 (plan_log/backend.md)
 class GenerationError(RagPipelineError):
     pass

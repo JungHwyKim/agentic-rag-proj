@@ -11,7 +11,7 @@
   — `prompts.py` docstring
 - 모킹 이음새(`_make_client`) — `answer.py` docstring
 - `GenerationError` 가 왜 예외 계열인가 — `rag_pipeline/exceptions.py`
-- 답변을 무엇으로 재나(아직 못 잰다) — `plan_log/frontend.md` 미결
+- 답변을 무엇으로 재나(아직 못 잰다) — `plan_log/backend.md` 미결
 """
 
 from __future__ import annotations

@@ -38,7 +38,7 @@ import tiktoken
 
 from rag_pipeline.config import EmbeddingConfig
 from rag_pipeline.exceptions import EmbeddingError
-from rag_pipeline.ingestion.embedding.base import EmbeddingUsage
+from rag_pipeline.ingestion.embedding.base import EmbeddingUsage, cache_salt_for
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 
 # 모델별 인코딩을 못 찾을 때 쓸 기본값. text-embedding-3-* 가 실제로 쓰는 것이기도 하다
@@ -133,12 +133,11 @@ class OpenAIEmbedder:
     def usage(self) -> EmbeddingUsage:
         return self._usage
 
-    # 캐시 키의 salt. **모델과 차원이 반드시 들어간다** — 빠지면 모델을 바꿔도 옛 벡터가
-    # 나와 검색이 조용히 망가진다
+    # 캐시 키의 salt. **규칙은 구현체가 갖지 않는다** — base.cache_salt_for() 가 정하고
+    # 두 번째 구현체도 같은 것을 부른다 (base.py 모듈 docstring 참고)
     @property
     def _salt(self) -> str:
-        dimensions = self._config.embedding_dimensions
-        return f"embed:{self._config.embedding_model}:{dimensions or 'default'}"
+        return cache_salt_for(self._config)
 
     # 문서 텍스트들을 벡터로. 반환 길이는 입력 길이와 반드시 같다
     def embed_documents(self, texts: list[str]) -> list[list[float]]:

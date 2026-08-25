@@ -15,6 +15,37 @@
 `get_embedder()` 는 키가 없으면 **그 자리에서 예외**다(embedding 의 실패 계약). startup 에서
 만들면 키 없는 개발 환경에서 **서버가 아예 안 뜬다** — 화면도 문서 목록도 못 본다.
 첫 질의까지 미루면 그때 503 과 한국어 메시지로 떨어진다.
+
+## 답변 캐시는 왜 startup 에서 만드나
+
+`get_answer_cache()` 는 `store` 를 **참조만 하고 클라이언트를 안 당긴다.** 그래서 embedder·
+BM25 와 달리 게으름을 깨지 않는다. 임계값이 없으면 `None` 이 돌아와 캐시 없이 도는데,
+그 판정은 설정 하나를 읽는 일이라 첫 질의까지 미룰 이유가 없다.
+
+## 리랭커도 embedder 쪽 패턴이다
+
+`get_reranker()` 는 저장소를 안 훑지만 **로컬 갈래가 cross-encoder 가중치를 올린다.**
+startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 받는 환경에서는 화면조차 못 본다.
+그래서 첫 질의로 미룬다 — `embedder` 와 같은 축이고 `bm25` 와는 이유가 다르다(저쪽은
+저장소의 게으름을 깨지 않으려는 것이다).
+
+**색인 뒤 되돌릴 것이 없다.** 리랭커는 저장소 스냅샷을 안 들고 질의마다 후보를 받아 점수만
+매기므로, 아래 BM25 무효화 계약이 여기에는 해당하지 않는다. 답변 캐시 쪽 분류다.
+
+## BM25 인덱스도 같은 패턴이다
+
+`build_bm25_index()` 는 저장소를 전량 훑는다. startup 에서 지으면 **색인이 아직 없는 상태**
+에서 저장소를 여는 셈이라 `lifespan` 이 일부러 지킨 게으름이 깨진다. 첫 질의에 지어
+`app.state` 에 두면 그 뒤로는 공짜다.
+
+**딸린 감수 사항**: 서버가 사는 동안 색인이 바뀌면 이 인덱스가 낡는다. **이제 실제로 바뀐다** —
+`POST /documents/index` 가 같은 저장소에 쓴다. 그래서 그 라우트가 색인 성공 뒤
+`app.state.bm25 = None` 으로 되돌리고 다음 질의가 다시 짓는다 (`routes/documents.py`).
+답변 캐시는 **대우가 다르다** — 객체는 그대로 두고 `clear()` 로 내용만 비운다. 그쪽은
+스냅샷이 아니라 `store` 참조만 들고 질의마다 새로 읽으므로 갈아끼울 이유가 없고(경고만 잃는다),
+낡은 항목은 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다. **그런데도 비우는 것이 따로
+필요한 이유**는 그 대조가 *새 문서가 들어온 경우*를 원리적으로 못 잡아서다 — 사라진 것이
+없어 옛 답의 근거는 여전히 멀쩡하다 (`rag_pipeline/answer_cache/`).
 """
 
 from __future__ import annotations
@@ -23,9 +54,11 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend.app.core.config import get_settings
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
+from rag_pipeline.retrieval import build_bm25_index, get_reranker
 
 router = APIRouter(tags=["query"])
 
@@ -38,6 +71,31 @@ def _embedder(request: Request):  # noqa: ANN202 - Embedder Protocol 은 런타�
         embedder = get_embedder(config.embedding)
         request.app.state.embedder = embedder
     return embedder
+
+
+# 앱 수명 동안 하나뿐인 BM25 인덱스를 얻는다. 없으면 이때 짓는다 (모듈 docstring 참고).
+# **예외를 안 던진다** — build_bm25_index() 가 실패를 빈 인덱스 + 경고로 바꿔 주므로,
+# 색인 전이라도 질의는 dense 로 돈다
+def _bm25(request: Request):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처에 노출하지 않는다
+    index = getattr(request.app.state, "bm25", None)
+    if index is None:
+        index = build_bm25_index(request.app.state.store)
+        request.app.state.bm25 = index
+    return index
+
+
+# 앱 수명 동안 하나뿐인 리랭커를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고).
+#
+# **`None` 이 정상값이다** — `RERANK_MODEL` 이 비어 있으면 `get_reranker()` 가 None 을
+# 돌려주고 그것이 곧 꺼진 상태다. 그래서 만들었는지를 `state` 에 없는 것으로 판정하면
+# **꺼져 있을 때 질의마다 다시 만들게 된다.** 지금은 만드는 비용이 없지만 로컬 갈래에서는
+# 그 자리가 곧 모델 적재라, 만들었다는 사실 자체를 `_rerank_ready` 로 따로 표시한다
+def _reranker(request: Request):  # noqa: ANN202 - Reranker 를 라우트 시그니처에 노출하지 않는다
+    state = request.app.state
+    if not getattr(state, "_rerank_ready", False):
+        state.reranker = get_reranker(request.app.state.ingest_config.rerank)
+        state._rerank_ready = True
+    return state.reranker
 
 
 # 질문 하나를 받아 답변 말풍선 조각을 돌려준다
@@ -56,6 +114,17 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         store=request.app.state.store,
         embedder=_embedder(request),
         config=request.app.state.ingest_config,
+        bm25=await run_in_threadpool(_bm25, request),
+        # 모델 이름이 없으면 None 이라 RRF 순서로 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25·cache 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **threadpool 로 넘기는 것은 로컬 갈래 때문이다** — cross-encoder 적재가 초 단위라
+        # 이벤트 루프에서 하면 첫 질의 동안 서버 전체가 멈춘다
+        reranker=await run_in_threadpool(_reranker, request),
+        # 임계값이 없으면 None 이라 캐시 없이 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **getattr 인 것은 lifespan 을 안 거치고 app 을 세우는 호출부가 있어서**다 —
+        # 그때 여기서 죽으면 캐시가 없다는 이유로 질의 전체가 죽는다
+        cache=getattr(request.app.state, "answer_cache", None),
     )
     return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
 
@@ -65,8 +134,59 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
 async def document_list(request: Request) -> HTMLResponse:
     store = request.app.state.store
     # list_documents() 는 Protocol 이 아니라 QdrantStore 에만 있다 — backend 가 구체 타입을
-    # 아는 유일한 자리이고, 그 판단의 근거는 plan_log/frontend.md 에 있다.
+    # 아는 유일한 자리이고, 그 판단의 근거는 plan_log/backend.md 에 있다.
     # 없는 구현체가 끼면 목록만 빈다(화면은 산다)
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
-    return templates.TemplateResponse(request, "_documents.html", {"documents": documents})
+    documents = await run_in_threadpool(_mark_shadow_gaps, request, documents)
+    originals_mb = await run_in_threadpool(_originals_megabytes)
+    return templates.TemplateResponse(
+        request,
+        "_documents.html",
+        {"documents": documents, "originals_mb": originals_mb},
+    )
+
+
+# 그림자 컬렉션에 없는 문서에 `shadow_missing` 을 달아 준다.
+#
+# **그림자 색인은 실패해도 색인을 안 막는다**(pipeline.py `_index_shadow`). 그 대가로
+# 구멍이 조용히 생길 수 있어, **무엇이 빠졌는지 보이는 자리가 반드시 하나 있어야 한다.**
+# 여기가 그 자리다 — 목록은 이미 렌더되고 있고 두 번째 진실을 만들지 않는다.
+#
+# **채우는 방법은 그 문서를 다시 올리는 것이다.** 색인이 delete -> upsert 라 멱등이고
+# `document_id` 가 파일 이름에서 파생되므로 재업로드가 두 컬렉션을 함께 채운다.
+# 표시가 있어야 무엇을 다시 올릴지 안다 — 그것이 이 함수의 존재 이유다.
+#
+# **스크롤이 한 번 더 는다.** 지금 규모(494 point · 6문서)에서 무시할 만하고,
+# 느려지면 그것이 `bm25` 처럼 스냅샷으로 옮길 신호다. 그림자가 꺼져 있거나 목록을 못 내는
+# 저장소면 아무것도 안 달고 그대로 돌려준다 — 없는 축을 화면에 만들지 않는다
+def _mark_shadow_gaps(request: Request, documents: list[dict]) -> list[dict]:
+    shadow_store = getattr(request.app.state, "shadow_store", None)
+    if shadow_store is None or not documents:
+        return documents
+
+    lister = getattr(shadow_store, "list_documents", None)
+    if lister is None:
+        return documents
+
+    try:
+        shadowed = {row.get("document_id") for row in lister()}
+    except Exception:  # noqa: BLE001 - 목록은 보여야 한다. 그림자 조회 실패로 화면을 죽이지 않는다
+        return documents
+
+    return [{**row, "shadow_missing": row.get("document_id") not in shadowed} for row in documents]
+
+
+# 원본 보관함이 지금 몇 MB 인지. 사이드바 맨 아래 줄에 함께 실린다.
+#
+# **상한도 자동 정리도 안 만든 대신 이 숫자를 보여준다** — 값을 지금 정하면 관측 없는
+# 숫자가 되고, 자동 삭제는 사용자가 모르는 사이 원문만 사라지는 상태를 만든다.
+# 대신 얼마나 쓰는지 보이고 삭제 버튼을 손에 쥐어 준다 (plan_log/backend.md 7회차).
+#
+# 폴더가 없으면 0 이다 — 아직 아무것도 안 올린 상태가 정상이라 예외로 만들지 않는다
+def _originals_megabytes() -> float:
+    directory = get_settings().originals_dir
+    if not directory.is_dir():
+        return 0.0
+    total = sum(item.stat().st_size for item in directory.iterdir() if item.is_file())
+    return round(total / (1024 * 1024), 1)

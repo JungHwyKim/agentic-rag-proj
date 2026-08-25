@@ -148,22 +148,35 @@ def vector_of():
     return fake_vector
 
 
-# 캐시를 끈 기본 설정. 키는 가짜지만 _make_client 를 갈아끼우므로 밖으로 안 나간다
+# 캐시를 끈 기본 설정. 키는 가짜지만 _make_client 를 갈아끼우므로 밖으로 안 나간다.
+#
+# **`embedding_provider`·`embedding_model` 을 못 박는 것이 이 픽스처의 핵심이다.**
+# 이 폴더의 테스트는 `openai_api._make_client()` 를 갈아끼워 OpenAI 갈래를 재는데,
+# provider 를 기본값에 맡기면 **기본값이 바뀌는 순간 전부 로컬 갈래로 새어** 가짜 클라이언트가
+# 아무 데도 안 꽂히고 **2.27GB 가중치를 실제로 적재**한다. 실측으로 그 일이 났다 —
+# 2026-08-25 에 기본값이 `local`/`KURE-v1` 로 바뀌자 이 폴더가 **27 failed · 241초**가 됐고,
+# 가중치가 없는 머신이었으면 조용히 내려받았을 것이다. 모델 이름까지 박는 것은 salt·컬렉션
+# 이름이 거기서 파생돼, 기본 모델이 바뀌면 캐시 테스트의 기대값이 함께 흔들리기 때문이다
 @pytest.fixture
 def embedding_config() -> EmbeddingConfig:
     return EmbeddingConfig(
         openai_api_key="test-key",
+        embedding_provider="openai",
+        embedding_model="text-embedding-3-small",
         embedding_batch_size=100,
         embedding_cache_enabled=False,
     )
 
 
-# 캐시를 켠 설정. tmp_path 에 두어 테스트끼리 결과를 물려받지 않는다
+# 캐시를 켠 설정. tmp_path 에 두어 테스트끼리 결과를 물려받지 않는다.
+# provider·model 을 못 박는 이유는 위와 같다 — `overrides` 로 덮을 수는 있다
 @pytest.fixture
 def cached_config(tmp_path):
     def _make(**overrides) -> EmbeddingConfig:
         params = {
             "openai_api_key": "test-key",
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
             "embedding_batch_size": 100,
             "embedding_cache_enabled": True,
             "embedding_cache_dir": tmp_path / "embedding-cache",

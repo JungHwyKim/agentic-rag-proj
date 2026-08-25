@@ -39,7 +39,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from rag_pipeline.schemas.vector import SearchResult
+from rag_pipeline.schemas.vector import StoredChunk
 
 __all__ = ["RetrievedChunk"]
 
@@ -63,20 +63,24 @@ class RetrievedChunk(BaseModel):
     # 리랭커를 안 돌렸으면 None. 있으면 이 값이 정렬 기준이 된다
     rerank_score: float | None = None
 
-    # 저장소가 돌려준 결과 한 건을 검색 결과로 승격한다. 경로별 점수는 부르는 쪽이 채운다
+    # 저장소가 준 청크 한 건을 검색 결과로 승격한다. 경로별 점수는 부르는 쪽이 채운다.
+    #
+    # **`SearchResult` 가 아니라 `StoredChunk` 를 받는 것이 요점이다** — BM25 에만 걸린
+    # 후보는 저장소 검색을 안 거쳐 점수가 없다. 여기서 `SearchResult` 를 요구하면 그런
+    # 후보를 만들려고 `score=0.0` 을 지어내야 하고, 그것이 이 모듈이 피하려는 바로 그 손실이다
     @classmethod
-    def from_search_result(
+    def from_stored(
         cls,
-        result: SearchResult,
+        chunk: StoredChunk,
         *,
         dense_score: float | None = None,
         bm25_score: float | None = None,
     ) -> RetrievedChunk:
         return cls(
-            chunk_id=result.chunk_id,
-            document_id=result.document_id,
-            text=result.text,
-            metadata=result.metadata,
+            chunk_id=chunk.chunk_id,
+            document_id=chunk.document_id,
+            text=chunk.text,
+            metadata=chunk.metadata,
             dense_score=dense_score,
             bm25_score=bm25_score,
         )

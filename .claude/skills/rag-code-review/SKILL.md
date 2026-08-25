@@ -35,6 +35,7 @@ description: agentic-rag-proj(한국어 문서 RAG 적재 파이프라인)의 �
 | `rag_pipeline/ingestion/splitter/**`, `rag_pipeline/schemas/chunk.py` | `references/splitter.md` |
 | `rag_pipeline/ingestion/embedding/**` | `references/embedding.md` |
 | `rag_pipeline/ingestion/indexing/**`, `rag_pipeline/schemas/vector.py` | `references/indexing.md` |
+| `rag_pipeline/answer_cache/**` | `references/indexing.md` (qdrant 컬렉션·잠금이 같은 축이다. 전용 reference 는 임계값이 정해질 때) |
 | `rag_pipeline/ingestion/retriever/**` | `references/next-stages.md` |
 | `rag_pipeline/schemas/document.py` | `references/contracts.md` (전 단계 공통 계약의 원본) |
 | `rag_pipeline/ingestion/pipeline.py` | `contracts.md` + 추가·변경된 단계의 reference |

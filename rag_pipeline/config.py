@@ -153,12 +153,44 @@ class EmbeddingConfig(BaseSettings):
     # 각자 읽는 것이다 — 임베딩만 끄고 Vision 은 살리는 식의 조합이 가능해야 한다
     openai_api_key: str | None = None
 
-    # **임시값이고 실측 전이다.** 모델 간 한국어 검색 품질은 지금 못 잰다 — 정답 질의 세트가
-    # 없다(plan_log/평가-세트.md). 싼 쪽에서 시작하고 캐시 salt 로 교체 가능하게 뒀다
-    embedding_model: str = "text-embedding-3-small"
+    # 어느 구현체로 임베딩하나. **구현체가 둘이 되어서 여는 설정이다** — 하나뿐일 때는
+    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(plan_log/embedding.md 3회차).
+    # `local` 은 sentence-transformers 경로다.
+    #
+    # **기본값이 `local` 인 것이 이 설정의 위험한 쪽이다** — 로컬 갈래는 **키가 없어도 돌아서**
+    # "키를 지운다" 라는 지금까지의 방어가 안 통한다. 예전에는 `torch` 가 기본 설치에 없는 것이
+    # 두 번째 겹이었는데 **본체로 옮기면서 그 겹이 사라졌다.** 그래서 지금은
+    # `tests/conftest.py` 의 `offline_config` 가 이 값을 못 박는 것이 **유일한 방어**다
+    embedding_provider: Literal["openai", "local"] = "local"
+
+    # **실측으로 고른 값이다.** 같은 정답 세트 60건에서 `hit@10` 이 KURE-v1 **0.8500** vs
+    # `text-embedding-3-small` **0.4833** 이고(miss 9 vs 31, `MRR` 0.5078 vs 0.2530),
+    # 그래서 2026-08-25 에 갈아탔다 — 전에 여기 적혀 있던 *"임시값이고 실측 전"* 은 끝났다.
+    # 수치는 `verify_log/2026-08-25-융합-되돌리기.md`, 판단은 `plan_log/embedding.md` 5회차.
+    # `provider="local"` 이라 HuggingFace 리포지터리 이름이다
+    embedding_model: str = "nlpai-lab/KURE-v1"
+
+    # 로컬 모델을 어느 장치에 올리나. **`provider="openai"` 면 안 쓴다.**
+    #
+    # **기본이 `cpu` 인 것은 재현성이다** — cu 빌드를 깐 머신에서만 GPU 로 가면 같은 명령이
+    # 다른 벡터를 내고 *"baseline 은 재현될 때만 기준선"* 이 무너진다. 그래서 자동 감지
+    # (`cuda if available`)를 **일부러 안 한다** — 조용히 갈리는 것이 이 축의 사고다.
+    # GPU 로 가려면 이 값을 명시로 바꾸고 PyPI 밖 `--index-url` 로 cu 빌드 torch 를 깐다
+    # (PyPI 휠은 CPU 빌드다).
+    #
+    # **캐시 salt·컬렉션 이름에는 안 들어간다.** 같은 모델·같은 차원이고 차이가 float 오차
+    # 수준일 것으로 보기 때문인데, **아직 실측이 아니다**(이 저장소에 CUDA 머신이 없었다).
+    # 넣으면 GPU 로 옮기는 순간 임베딩 캐시가 전량 미스가 되고 컬렉션이 갈려 옛 색인이
+    # 고아가 된다. 처음 GPU 를 쓸 때 CPU 벡터와의 코사인 차이를 재기로 했다
+    # (`plan_log/embedding.md` 미결)
+    embedding_device: str = "cpu"
 
     # None 이면 모델 기본 차원. text-embedding-3-* 는 이 값으로 차원을 줄일 수 있어
-    # "차원은 모델이 정한다"가 반만 맞다 — 설정값이므로 캐시 salt 에 함께 들어간다
+    # "차원은 모델이 정한다"가 반만 맞다 — 설정값이므로 캐시 salt 에 함께 들어간다.
+    #
+    # **뜻은 provider 를 안 탄다 — "차원을 줄여라" 하나다.** OpenAI 는 할 수 있고 bge-m3
+    # 계열은 MRL 미학습이라 못 하므로, `provider="local"` 에서 값이 오면 예외로 거절한다.
+    # 앞 N 차원을 잘라 재정규화하는 것은 품질이 **조용히** 나빠지는 길이라 안 한다
     embedding_dimensions: int | None = None
 
     # 한 번에 보낼 텍스트 개수. 실측상 문서당 청크가 45~102개라 대부분 1회 호출로 끝난다.
@@ -197,6 +229,82 @@ class IndexingConfig(BaseSettings):
     upsert_batch_size: int = 128
 
 
+# 여러 검색 경로의 후보를 어디까지 모으고 어떻게 합칠지 정하는 설정. 과금 항목이 없다
+class RetrievalConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 각 경로(dense·BM25)에서 뽑아 RRF 로 합칠 후보 수. **임시값이고 실측 전이다** —
+    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(plan_log/검색-생성.md 2회차).
+    # 50 은 새로 지어낸 수가 아니라 schemas/retrieval.py docstring 이 이미 쓴 수이고,
+    # 문서당 청크가 45~104개이므로 대략 한 문서치다.
+    # **두 경로에 같은 값을 쓴다** — 한쪽만 길면 RRF 가 긴 쪽에 유리해져, 기울기가 숫자가
+    # 아니라 구조에서 나오고 원인을 못 짚는다
+    candidate_k: int = 50
+
+    # RRF 의 순위 완충 상수. score = Σ 1/(rrf_k + rank) 의 그 값이다.
+    # **우리가 고른 수가 아니라 RRF 원 논문 값이라** 분포의 틈을 찾을 필요가 없었다.
+    # 크면 상위권 순위차를 뭉개고 작으면 1등을 과대평가한다
+    rrf_k: int = 60
+
+    # top_k 는 여기 없다. 지금 retrieve() 인자이자 GenerationConfig.generation_top_k 에서
+    # 오는데, 셋째 출처를 만들면 어느 것이 이겼는지 호출부마다 달라진다
+
+
+# 후보 풀을 다시 정렬할 때 쓰는 설정. **RetrievalConfig 와 갈라 둔 것은 과금 축이 다르기
+# 때문이다** — 저쪽은 과금 항목이 없어 `EVAL_SETTINGS["retrieval"]` 이 통째로 고정하는데,
+# 섞으면 리랭커를 안 켠 dense·hybrid 실행에도 모델 이름과 과금 설정이 실린다
+class RerankConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ContentRoutingConfig·EmbeddingConfig·GenerationConfig 와 같은 .env 키를 읽는다.
+    # 중복이 아니라 각 설정 객체가 독립이라 각자 읽는 것이다
+    openai_api_key: str | None = None
+
+    # 어느 구현체로 다시 정렬하나. **구현체가 둘이라 여는 설정이다** — `embedding_provider`
+    # 와 같은 잣대이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
+    # `local` 은 sentence-transformers CrossEncoder 경로다.
+    # **키가 없어도 도는 갈래라** tests/conftest.py 의 offline_config 가 이 값을 못 박는다
+    rerank_provider: Literal["openai", "local"] = "openai"
+
+    # 무슨 모델로. **기본값이 없는 것이 설계다** — 비어 있으면 `get_reranker()` 가 None 을
+    # 돌려줘 리랭커가 통째로 꺼진다(`answer_cache_threshold` 와 같은 모양).
+    # 여기서 켜는 순간 **질의당 LLM 호출이 1회에서 2회가 되므로**, 값을 하는지 재기 전에
+    # 과금이 먼저 붙는 것을 막는다. 재는 방법은 plan_log/검색-생성.md 5회차.
+    # `provider="openai"` 면 `gpt-4.1-mini` 꼴, `local` 이면 HuggingFace 리포지터리 이름이다
+    rerank_model: str | None = None
+
+    # 로컬 구현체를 어느 장치에 올리나. **`embedding_device` 와 이름 규칙·기본값을 맞춘다** —
+    # 같은 함정이라서다. 안 못 박으면 CPU 와 GPU 가 미세하게 다른 점수를 내, 같은 명령이
+    # 머신마다 다른 순위를 만들고 비교표가 에러 없이 흔들린다. provider="openai" 면 안 쓴다
+    rerank_device: str = "cpu"
+
+    # 후보를 몇 개까지 먹이나. **`candidate_k` 와 같은 수지만 축이 다르다** — 저쪽은 각 경로가
+    # *뽑는* 폭이고 이쪽은 리랭커가 *보는* 폭이다. 지금 같은 값인 것은 우연이 아니라
+    # "풀 전부를 먹인다"가 결정이어서다: 20으로 자르면 실측으로 후보 #30·#26 에 있던 정답을
+    # 버린다(verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
+    rerank_candidates: int = 50
+
+    # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다
+    rerank_max_tokens: int = 4096
+
+    # 점수는 재현돼야 한다. 생성(0.2)과 달리 0 인 이유는 **추릴 여지를 남길 데가 없어서**다 —
+    # 여기서 모델이 하는 일은 문장을 쓰는 것이 아니라 순서를 매기는 것 하나뿐이다
+    rerank_temperature: float = 0.0
+
+    # 같은 (질의, 후보 집합) 을 두 번 채점하지 않는다. 콘텐츠·임베딩 캐시와 수명이 달라
+    # 디렉터리를 가른다. **평가를 여러 번 돌리는 것이 공짜가 되는 자리다**
+    rerank_cache_enabled: bool = True
+    rerank_cache_dir: Path = PROJECT_ROOT / ".cache" / "rerank"
+
+
 # 검색된 청크로 답변을 만들 때 쓰는 설정. 질의당 LLM 1회가 비용의 전부다
 class GenerationConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -210,7 +318,7 @@ class GenerationConfig(BaseSettings):
     openai_api_key: str | None = None
 
     # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
-    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(plan_log/frontend.md).
+    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(plan_log/backend.md).
     # Vision 과 같은 모델을 쓰는 것은 우연이 아니라 싼 쪽에서 시작한다는 같은 판단이다
     generation_model: str = "gpt-4.1-mini"
 
@@ -225,6 +333,28 @@ class GenerationConfig(BaseSettings):
     # @10 0.483 / @20 0.617 이라 늘리면 오르는 것은 알지만, 대가(컨텍스트 토큰·답변 품질)를
     # 재는 쪽이 없어 값을 못 정한다. plan_log/indexing.md 의 top_k 미결과 한 줄이다
     generation_top_k: int = 5
+
+
+# 비슷한 질문에 이전 답변을 되돌려줄 때 쓰는 설정. **과금을 줄이는 쪽이라 켜는 것이 비용이
+# 아니라 틀리는 것이 비용이다** — 임계값이 헐거우면 다른 질문에 옛 답을 준다
+class AnswerCacheConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 캐시 컬렉션 이름의 앞부분. 실제 이름은 IndexingConfig.collection_name 과 **같은 함수**
+    # (qdrant_store.collection_name_for)로 파생해 모델·차원이 뒤에 붙는다. 고정 이름을 쓰면
+    # 임베딩 모델을 바꿨을 때 옛 모델 벡터가 든 캐시에 새 모델 질의 벡터로 유사도를 재게 된다
+    answer_cache_collection_name: str = "qa_cache"
+
+    # 이 값 이상이면 "같은 질문"으로 본다. **기본값이 없는 것이 설계다.**
+    # None 이면 get_answer_cache() 가 None 을 돌려줘 캐시가 통째로 꺼진다 — 이 저장소의
+    # 임계값은 전부 분포의 틈에서 나왔는데(표 되붙이기 12pt, 표시 면적비 0.08 vs 1.00)
+    # 이 축은 아직 안 쟀다. 근거 없는 수를 기본값으로 두면 그 사실이 조용히 묻힌다.
+    # 재는 방법은 plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
+    answer_cache_threshold: float | None = None
 
 
 # 적재 파이프라인 전체 설정
@@ -280,6 +410,24 @@ class IngestConfig(BaseSettings):
             object.__setattr__(self, "_indexing", IndexingConfig())
         return self._indexing  # type: ignore[attr-defined]
 
+    # 검색 단계 설정. 같은 lazy 형태라 테스트·평가에서 _retrieval 로 덮어쓸 수 있다.
+    # **적재 설정 객체에 붙는 것이 어색해 보이지만 generation 이 이미 그렇다** — 검색만 밖에
+    # 두면 이유 없는 비대칭이 되고, offline_config 픽스처도 둘로 갈린다
+    @property
+    def retrieval(self) -> RetrievalConfig:
+        if not hasattr(self, "_retrieval"):
+            object.__setattr__(self, "_retrieval", RetrievalConfig())
+        return self._retrieval  # type: ignore[attr-defined]
+
+    # 리랭커 설정. 같은 lazy 형태라 테스트·평가에서 _rerank 로 덮어쓸 수 있다.
+    # **덮어쓰기가 두 겹이어야 한다** — 키를 지우는 것만으로는 부족하다. 로컬 갈래는 키가
+    # 없어도 돌아 모델을 내려받으므로, offline_config 가 provider 와 model 을 함께 못 박는다
+    @property
+    def rerank(self) -> RerankConfig:
+        if not hasattr(self, "_rerank"):
+            object.__setattr__(self, "_rerank", RerankConfig())
+        return self._rerank  # type: ignore[attr-defined]
+
     # 생성 단계 설정. 같은 lazy 형태라 테스트에서 _generation 으로 덮어쓸 수 있다.
     # **그 덮어쓰기가 offline_config 의 실키 차단이다** — GenerationConfig() 가 .env 를 직접
     # 읽으므로, lazy 가 아니면 픽스처가 키를 지운 객체를 꽂을 자리 자체가 없다
@@ -288,6 +436,16 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_generation"):
             object.__setattr__(self, "_generation", GenerationConfig())
         return self._generation  # type: ignore[attr-defined]
+
+
+    # 답변 캐시 설정. 같은 lazy 형태라 테스트에서 _answer_cache 로 덮어쓸 수 있다.
+    # **generation 과 같은 이유로 lazy 여야 한다** — AnswerCacheConfig() 가 .env 를 직접
+    # 읽으므로, 안 덮으면 개발자 머신의 임계값이 픽스처에 실려 테스트가 사람마다 달라진다
+    @property
+    def answer_cache(self) -> AnswerCacheConfig:
+        if not hasattr(self, "_answer_cache"):
+            object.__setattr__(self, "_answer_cache", AnswerCacheConfig())
+        return self._answer_cache  # type: ignore[attr-defined]
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

@@ -21,7 +21,14 @@ Windows + uv + Python 3.11.9. `.venv` 는 프로젝트 루트에 있다.
 # 린트
 .\.venv\Scripts\python.exe -m ruff check .
 
-# 의존성 설치
+# 의존성 설치. **torch·sentence-transformers 가 여기 들어 있다** —
+# 기본 임베더가 로컬 KURE-v1 이라 선택 사항이 아니다(첫 색인에 가중치 2.27GB 를 받는다).
+# GPU 로 가려면 PyPI 밖 --index-url 로 cu 빌드 torch 를 따로 깔고 *_DEVICE 를 바꾼다.
+# **인덱스를 아무거나 고르면 torch 가 조용히 내려간다** — 2026-08-26 실측(RTX 5060·Blackwell·sm_120):
+#   cu130 = 2.13.0 유지 / cu129 = 2.9.0 / cu128 = 2.11.0 / cu131 = 없음.
+#   버전이 내려가면 그 위의 sentence-transformers 부터 다시 검증 대상이 된다.
+#   `--dry-run` 으로 먼저 물어보면 공짜로 갈린다. 재설치는 requirements.txt 를 다시 깔아도
+#   안 되돌아간다(torch 가 버전 없이 적혀 있어 이미 만족한 것으로 본다 — 확인함)
 uv pip install -r requirements.txt
 ```
 
@@ -33,7 +40,7 @@ uv pip install -r requirements.txt
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
-- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store` 와 `embedder` 를 인자로 받는 유일한 진입점**이고, 그 이유는 아래 qdrant 잠금 함정에 있다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`reranker`·`cache` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. 뒤 셋은 안 넘기면 그 갈래 없이 도는 것이 곧 스위치다 — 다만 **`bm25`·`cache` 는 설정이 없고 `reranker` 는 있다**(`RERANK_PROVIDER`·`RERANK_MODEL`). 구현체가 둘이라 고를 축이 실재하기 때문이고, `RERANK_MODEL` 이 비면 `get_reranker()` 가 `None` 을 돌려 꺼진다. **반대로 켜는 데는 세 줄이 든다** — `rerank_provider` 기본값이 `openai` 라 모델 이름만 넣으면 HuggingFace 이름을 유료 리랭커에 물고, 로컬 갈래는 `RERANK_DEVICE` 까지 함께다(`cpu` 면 질의당 63.9초 · `cuda` 면 2.988초, 2026-08-26 실측). **저장소 커밋본은 꺼진 채다** — 켜는 것은 GPU 가 있는 머신의 `.env` 결정이다. **붙는 자리도 셋이 다르다** — `cache` 는 `retrieve()` 앞, `bm25` 는 그 안의 한 갈래, `reranker` 는 그 안에서 RRF 뒤·절단 앞이다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 
@@ -94,10 +101,10 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 
 ### backend ↔ rag_pipeline 분리
 
-- `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리만 한다. 파싱은 전부 `ingest()` 가 한다
+- `backend/app/api/routes/documents.py` 는 업로드 수신 / 확장자 화이트리스트 1차 검증 / UUID 임시저장 / 정리 / **원본 보관·서빙·삭제**만 한다. 파싱은 `ingest()`, 색인은 `index_document()` 가 한다. **원본이 `Settings.originals_dir` 에 남는 것은 backend 만의 일이다** — 저장 이름은 예약 문자를 치환하고 `sha256(document_id)` 앞 6자를 **항상** 붙인 것이라 `document_id` 만으로 계산된다(매핑 파일이 없는 이유이고, 부딪힐 때만 붙이면 그 계산이 깨져 두 번째 진실이 생긴다). 치환만 하면 `보고서:1.pdf` 와 `보고서_1.pdf` 가 같은 파일이 되어 **한쪽의 원문 보기가 남의 파일을 에러 없이 보여준다**. **저장은 색인이 성공한 뒤**이고 파싱 전용 `upload` 는 저장하지 않는다 — 목록에 없는 파일이 쌓이면 화면과 어긋난다. **삭제는 색인과 원본을 함께 지운다.** **업로드와 색인이 두 엔드포인트인 이유**: `upload` 의 반환이 곧 공개 API 스키마(`ParsedDocument`)라 거기에 색인을 얹으면 파싱만 원하던 소비자의 응답이 바뀐다. 화면의 업로드 버튼은 색인 쪽을 부른다. **색인 쪽은 HTML 조각이 아니라 204 + `HX-Trigger` 를 돌려준다** — 문서 목록 조각은 `routes/query.py` 의 `GET /documents` 가 이미 만들고, 여기서 다시 렌더하면 같은 목록의 두 번째 진실이 생긴다. 색인 뒤 `app.state.bm25` 는 되돌리고(저장소를 전량 훑은 **스냅샷**이라 낡는다) **답변 캐시는 객체를 두고 `clear()` 로 내용만 비운다** — 스냅샷이 아니라 갈아끼울 이유가 없고(경고만 잃는다), 낡은 항목은 조회 시점에 근거 청크를 되짚어 스스로 걸러낸다. 그런데도 비우는 것이 따로 필요한 이유는 그 대조가 **새 문서가 들어온 경우를 원리적으로 못 잡아서**다(사라진 것이 없어 옛 답의 근거는 멀쩡하다)
 - 화면은 서버 렌더다(Jinja2 + 벤더링한 htmx, Node 툴체인 없음). `routes/pages.py` 가 화면을, `routes/query.py` 가 HTMX 가 부를 **HTML 조각**을 돌려준다 — JSON 을 주고 브라우저에서 다시 조립하면 템플릿이 두 벌이 된다. 빈 `frontend/` 는 이 결정 이후로 쓰이지 않는다
 - 로더는 동기·CPU 바운드라 `run_in_threadpool` 로 넘긴다
-- `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다
+- `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다. **화면에서 온 요청(`HX-Request` 헤더)에는 같은 상태코드로 HTML 조각을 준다** — htmx 가 4xx/5xx 를 swap 안 하는 것을 200 으로 낮춰 피하면 그 계약이 화면 경로만 우회하는데, 그것이 SSE 를 기각한 자리와 같다. 뒤집는 것은 `chat.html` 의 `htmx:beforeSwap` 한 줄이다. **업로드가 제일 자주 낼 415·413 은 이 매핑을 안 탄다** — `routes/documents.py` 가 던지는 `HTTPException` 이라 `StarletteHTTPException` 핸들러가 따로 같은 규칙을 태운다. 그쪽을 빼먹으면 나머지가 전부 통과하는 채로 **확장자 오류만 화면에서 조용하다**
 - 설정도 둘로 나뉜다: `backend/app/core/config.py`(웹) vs `rag_pipeline/config.py`(파싱). 둘 다 `PROJECT_ROOT/.env` 를 읽는다
 
 ## 코드 컨벤션
@@ -110,8 +117,8 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 테스트 패턴
 
 - `tests/conftest.py` 가 샘플 파일을 **코드로 생성**한다(docx/pptx/xlsx/pdf/png/hwpx). 바이너리를 저장소에 커밋하지 않는 방침
-- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다. **생성 설정도 임베딩과 같은 이유로 키를 지운다** — `IngestConfig.generation` 이 lazy 프로퍼티인 것이 그 덮어쓰기를 가능하게 하는 전제라, lazy 를 없애면 이 차단이 조용히 사라진다
-- `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다. **설정 클래스가 전부 `extra="ignore"` 라 필드 이름을 틀리면 예외 없이 그 항목만 조용히 안 먹는다** — 덮어썼다고 믿는 값이 실은 `.env` 를 탄다. 이름을 코드에 못 박는 곳(`evaluation/config.py` 의 `EVAL_SETTINGS`)은 `model_fields` 와 대조해 막는다
+- `offline_config` 픽스처 = 키 없음 + `table_pdf_handler="pymupdf"` + `image_handler="ocr"` + 캐시 끔. 단위 테스트의 기본값. **임베딩 설정도 여기서 키를 지운다** — `ingest()` 가 임베딩을 안 부르지만 `EmbeddingConfig()` 는 `.env` 를 읽으므로, 안 지우면 개발자 머신의 실키가 픽스처에 실린다. **거기에 더해 `embedding_provider="openai"` 를 못 박는다 — 이건 키와 다른 축이고, 2026-08-25 부터 유일한 방어다.** 로컬 갈래는 **키가 없어도 돌아서** 기본 pytest 가 모델 가중치 2.27GB 를 내려받는 경로가 **아무 에러 없이** 열린다. 전에는 `requirements-local.txt` 로 의존성을 가른 것이 두 번째 겹이었는데, **기본 임베더가 로컬 KURE-v1 이 되면서 `torch` 가 본체로 와 그 겹이 사라졌다.** 게다가 이제는 `.env` 와 무관하게 **코드 기본값 자체가 `local`** 이라, 핀이 없으면 기본 상태가 곧 가중치 적재다. **그 한 겹은 실제로 뚫린 적이 있다** — 이관 당일 `tests/ingestion/embedding/conftest.py` 가 provider 를 안 박고 기본값에 기대고 있어 OpenAI 갈래 테스트 27개가 로컬로 새어 2.2GB 를 적재했다(그 폴더가 241초). **새 픽스처를 만들 때 provider 를 빠뜨리면 같은 일이 난다.** **색인 설정은 키가 아니라 저장 위치를 덮는다** — `IndexingConfig()` 의 기본 `qdrant_path` 가 `PROJECT_ROOT/.qdrant` 라 안 덮으면 테스트가 개발자의 실제 색인을 건드리고 테스트끼리 상태를 물려받는다. 그래서 이 픽스처가 `tmp_path` 를 받는다. **생성 설정도 임베딩과 같은 이유로 키를 지운다** — `IngestConfig.generation` 이 lazy 프로퍼티인 것이 그 덮어쓰기를 가능하게 하는 전제라, lazy 를 없애면 이 차단이 조용히 사라진다. **저장 위치를 덮어야 하는 곳이 하나 더 있다** — `Settings.originals_dir` 기본값이 `PROJECT_ROOT/original_files` 라 색인 라우트를 부르는 테스트가 개발자의 실제 보관함에 파일을 쓴다(실제로 `test_index_route.py` 가 22바이트짜리를 남겼고 **아무 에러도 안 났다**). `tests/api/conftest.py` 의 **autouse** 픽스처가 `ORIGINALS_DIR` 환경변수로 덮는다 — 각 테스트가 손으로 덮는 규약이면 새 테스트가 잊는 순간 다시 새고, 환경변수인 것은 `get_settings()` 에 `lru_cache` 가 없어 한 줄이 모든 호출부에 먹기 때문이다(모듈별 patch 는 새 호출부가 생길 때마다 빠뜨린다)
+- `IngestConfig.content` · `cleaner` · `splitter` · `embedding` 은 lazy 프로퍼티라 테스트에서 `object.__setattr__(config, "_content", ContentRoutingConfig(...))` 형태로 덮어쓴다. **설정 클래스가 전부 `extra="ignore"` 라 필드 이름을 틀리면 예외 없이 그 항목만 조용히 안 먹는다** — 덮어썼다고 믿는 값이 실은 `.env` 를 탄다. 이름을 코드에 못 박는 곳(`evaluation/config.py` 의 `EVAL_SETTINGS` 와 `EVAL_EMBEDDINGS`)은 `model_fields` 와 대조해 막는다 — **프로필을 더할 때 기본 프로필만 대조하면 새 프로필의 오타가 그대로 산다**
 - **모킹 이음새는 각 API 핸들러의 모듈 레벨 `_make_client()`** 다. `mocker.patch.object(image_vision, "_make_client", return_value=fake)` 형태로 쓴다. 이 함수를 인라인화하면 외부 API 테스트가 전부 깨진다
 - 실파일 회귀 테스트는 `tests/fixtures/` 에 파일이 있을 때만 돌고 없으면 조용히 skip한다. 지금 다섯이다 — `loader/document/test_hwpx_real.py`(한컴 파싱 실측), `cleaner/test_real.py`(PDF 제어문자·반복 머리말 실측), `splitter/test_splitter_real.py`(요소→청크 병합률·상한), `embedding/test_embedding_real.py`(청크 토큰 분포·문자/토큰 비율), `indexing/test_indexing_real.py`(청크 수백 개에서의 자리 밀림·실제 한글 파일명). 합성 문서로는 "이 규칙이 실제로 필요한가"를 못 보여주기 때문에 따로 둔다
 - **테스트 파일 이름은 저장소 전체에서 유일해야 한다.** `tests/` 에 `__init__.py` 가 없어 basename 이 곧 모듈명이라, 같은 이름이 두 폴더에 있으면 pytest 가 collection error 로 죽는다. 영역 테스트만 돌릴 때는 안 나고 전체에서만 난다. 그래서 실파일 테스트가 `test_hwpx_real.py` · `test_splitter_real.py` 처럼 영역 이름을 달고 있다. **`conftest.py` 도 같은 규칙 아래 있다** — 루트 `tests/conftest.py` 가 `sys.modules["conftest"]` 를 먼저 차지해, 하위 폴더 테스트에서 `import conftest` 하면 엉뚱한 모듈을 집는다. 그래서 conftest 끼리 나눠 쓸 값은 이름이 겹치지 않는 모듈에 둔다(`tests/hooks/_escape_hatches.py`)
@@ -119,8 +126,11 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 ## 알고 있어야 할 함정
 
 - **LlamaParse SDK**: `llama-parse` 와 `llama-cloud-services` 는 둘 다 deprecated다. `llama-cloud>=1.0` 의 `Client.parsing.parse()` 를 쓴다. **응답의 `markdown` 은 문자열이 아니다** — `pages` 를 담은 pydantic 모델이고 성공한 페이지에만 `markdown: str` 이, 실패한 페이지에는 `error` 가 들어온다. 문자열로 알고 `.strip()` 을 부르다 `AttributeError` 로 적재 전체가 멈춘 적이 있다(2026-08-18, 유료 표 경로 첫 실행). **가짜 응답을 문자열로 만들면 테스트가 이 오해를 그대로 검증한다** — 그래서 `test_router.py` 의 가짜는 실제 `pages` 모양이다
-- **같은 문서라도 포맷이 청크 수를 가른다**: 시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배 차이다(실측). 요소 수는 285 vs 435 로 1.5배뿐이라 요소가 잘아진 것만으로는 설명이 안 된다. 어느 쪽이 검색에 유리한지는 **아직 안 쟀다** — 막고 있던 정답 질의 세트는 `evaluation/` 에 생겼고(60건, 사람 검수 완료) 포맷 비교 실행이 남았다. 반대로 가로쪽 판은 세로판과 요소·청크가 완전히 같아, 가로 쪽 기하 보정은 청킹을 바꾸지 않는다
+- **같은 문서라도 포맷이 청크 수를 가르는데, 방향이 문서마다 다르다**: 실측(2026-08-23 고정 설정) — 시행령 HWPX 67 vs PDF 118(1.76배) · 학교기록물 105 vs 122(1.16배) · **중등은 HWPX 113 vs PDF 103 으로 반대**다. "HWPX 가 늘 성글다"로 일반화하면 틀린다. 반대로 가로쪽 판은 세로판과 요소·청크가 완전히 같아, 가로 쪽 기하 보정은 청킹을 바꾸지 않는다
+- **어느 포맷이 검색에 유리한지 — 쟀고, 답이 "문서마다 다르다"였다**: 같은 45건을 3그룹으로 양쪽 다 돌린 실측이다(`verify_log/2026-08-23-포맷비교.md`). `hit@10` 은 PDF 0.533 / HWPX 0.444 인데 **그 총합을 쓰면 안 된다** — 중등 한 그룹이 −5 로 전부 만들고 시행령은 **+1 로 반대**, 학교기록물은 0이다. k 를 바꾸면 부호가 뒤집히고(@3 +2 · @20 +1) **35/45(78%)는 포맷을 안 탄다.** 그래서 *"PDF 적재 결함의 검색 대가"* 에 **숫자 하나를 못 붙였다.** 얻은 것은 갈래다 — 진 질의 8건 중 **6건이 두 판 모두 못 잡혀 적재 밖으로 확정**됐고, 곧 **로더를 고쳐도 그 여섯은 안 고쳐진다.** 대조군을 `baseline.json`(4그룹)으로 쓰면 경쟁 집합이 달라 성립하지 않는다 — 절차는 `evaluation/README.md`
+- **이 코퍼스에서 제목 관련 가설은 세 번 연속 기각됐다**: 정답 청크의 제목 머리 비율(miss 15.6% vs hit 16.6%) · 머리지배 청크의 상위 잠식(25% vs 코퍼스 31%로 **오히려 덜** 올라온다) · 중등 HWPX 가 `추진과제 1~4` 를 `Ⅴ` 하나로 접는 것(퇴보 5/5 인데 **정상 6/6 도 같아** 승패를 못 가른다). 제목이 그럴듯한 원인으로 계속 떠오르지만 **실측은 매번 아니라고 답했다** — 네 번째로 세울 때는 반드시 *진 쪽과 이긴 쪽을 같이* 재고 시작한다
 - **Vision 에 보낼 이미지 포맷은 `blob_kind` 가 아니라 바이트에서 읽는다**: 로더들이 이미지 리전의 `blob_kind` 에 `"png"` 를 하드코딩하는데 `blob` 은 문서에 박힌 **원본 바이트**다(PDF 는 `extract_image()` 결과, HWPX 는 zip 의 BinData 그대로). `image_vision` 이 그것을 `data:image/png` 로 붙여 보내다가 **jpx·bmp 가 전부 `BadRequestError` 로 거절**당했다 — 실측으로 AI가이드 PDF(jpx 4/4) · 시행령 HWPX · 가로쪽(bmp 12/12)이 `vision_calls=0` 이었고, 유일하게 전부 성공한 AI가이드 HWPX 는 jpeg 28/28 이었다(5/5 일치). 그래서 `_normalize_for_vision()` 이 `PIL.Image.format` 으로 판정한다. **지원 포맷(png·jpeg·gif·webp)은 재인코딩하지 않는다** — 전부 PNG 로 구우면 JPEG 사진이 3배로 부풀어(3.8MB→11.1MB) base64 가 20MB 상한의 74%까지 간다. 못 받는 것만 구우면 25%다. 확장자도 못 믿는다: 학교기록물 HWPX 의 `.jpg` 7개 중 4개가 실제로는 MPO 다
+- **전면 스캔 PDF 는 Tesseract 가 적재 시간의 90%다 — 그래서 `route_all()` 이 무료 OCR 만 병렬로 돈다**: 실측(2026-08-24, 47쪽·13MB·추출 가능 텍스트 **0자**·이미지 47/47 OCR)으로 `ingest()` 237.5초 중 213.9초가 Tesseract 이고 쪽당 4.55초다(`image_to_data` 2.30 + `image_to_string` 2.25). `pytesseract` 는 subprocess 라 대기 중 GIL 을 놓아 스레드가 듣는다 — 워커 8에서 **51.8초**(요소 수·본문 자수·회귀 기준선 documents 10건 전부 동일). **유료 Vision·LlamaParse 는 일부러 직렬로 남겼다** — 상한 검사가 `if ctx.vision_calls >= 상한` 과 증가로 **갈라져** 있고 `mark_symbols` 메모도 조회와 기록이 갈라져 있어, 병렬로 올리면 상한을 넘겨 과금되고 '서명당 1회'가 여러 번이 되는데 **키 없는 기본 pytest 가 그걸 못 잡는다**. 같은 이유로 **워커는 공유 `ctx` 가 아니라 자식 `LoadContext` 에 쓰고 조립 구간이 문서 순서로 `absorb()` 한다** — 경고는 문자열이라 자기 자리를 몰라 `e.order` 재정렬로 못 되돌리기 때문이고(요소와 갈리는 지점이다), **그 `absorb()` 가 자식의 유료 카운터가 비었는지 검사해 경계를 구조로 지킨다**(어기면 조용히 과금되는 대신 `RuntimeError` 로 터진다). **`classify()` 가 `LoadContext` 를 인자로 안 받는 것이 이 병렬화의 전제다**(판정이 비용의 절반인 108.0초라 병렬 구간 안에 있어야 하고, 그럴 수 있는 근거가 그것 하나다). **여는 것·판정·무료 OCR 이 한 워커 안에서 끝나는 것도 되돌리면 안 된다** — 판정 결과를 모아 두면 `preprocess()` 가 `load()` 를 강제해 디코드된 픽셀 약 1.2GB 가 동시에 산다(2500x3535 RGB × 47, 계산값). 워커 8은 **한계값이 아니라 무릎**이다 — 16이 42.3초로 18% 더 빠르지만 같은 uvicorn 이 질의도 받는다(직전 대비 -102.1/-62.1/-23.8/**-9.5**초). **병렬로 안 되는 바닥이 23.6초 남아 20~30초대에는 못 간다**(PyMuPDF 쪽 루프·300dpi 래스터·cleaner, 아직 안 쪼갬)
 - **OCR 한국어**: `ocr_psm=6` 을 쓴다(기본 3은 한글 한 줄을 세로로 오인식). `preserve_interword_spaces=1` 이 없으면 "주식회사"가 "주 식 회 사"로 쪼개져 임베딩·검색이 망가진다. 다만 `image_to_data` 는 이 옵션을 무시하므로 **신뢰도는 `image_to_data`, 최종 텍스트는 `image_to_string`** 으로 용도를 분리해 뒀다 — 합치지 말 것
 - **이미지 전처리**: 600px 미만일 때만 확대한다. 이미 큰 이미지를 늘리면 보간 흐림 때문에 인식률이 떨어진다(실측: 원본 7토큰 → 미세 업스케일 후 0토큰)
 - **HWPX 쪽 번호**: `hp:tbl` 의 `hp:sz height` 를 믿으면 안 된다. 쪽을 넘기는 표는 이 값이 **시작 쪽에 남은 공간으로 잘려서** 저장돼 있다(실측: 43행 표가 선언 34206 / 실제 98326). 실제 높이는 `hp:cellSz height` 를 `hp:cellSpan rowSpan` 으로 나눠 복원해야 나온다. vertpos만 보고 쪽을 세면 쪽 넘긴 표 뒤로 쪽 번호가 전부 밀린다
@@ -141,14 +151,14 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - **HWPX 제목은 스타일로 못 찾는다**: 한컴이 서식을 문단 스타일이 아니라 `charPr` 로 직접 박는 문서가 흔하다. 실측으로 신뢰가능 AI 가이드 HWPX 의 `Contents/header.xml` 에는 스타일이 `Normal` **하나뿐**이었다(글자 높이는 240~2617 로 살아 있다). 그래서 `headings.py` 가 글자 크기를 쓴다. 판정 규칙 셋(문서별 최빈값 / 배율 아닌 부등호 / `min` 이지 `max` 가 아님)은 그 파일 docstring에 근거와 함께 있다 — **되돌리면 강조가 제목이 되거나 제목이 통째로 사라진다**
 - **PDF 는 제목 요소의 글자를 청크에서 잃는다** (미해결): splitter 가 `TITLE` 을 경계로 쓰고 뒤 청크의 머리로 붙이는데, **제목이 연달아 나와 사이에 본문 요소가 없으면** 그 제목 텍스트가 어느 청크에도 안 들어간다. 실측(표·1200자 초과 요소 제외) — HWPX 는 네 문서 모두 **0.0%** 인데 PDF 는 중등 기초학력 **39.0%**(요소 131개·3,479자) · 시행령 **22.9%**(87개·2,949자)다. 유실 요소는 **전부 `TITLE`** 이고 목차 줄(`Ⅰ. 추진 배경 및 목적·····`)이 전형이다. 검색 관점에서는 **문서당 수천 자가 영원히 안 잡힌다**. 확인 경로: 시행령 PDF 의 `order=235`(12쪽, `…6개 영역 36개 항목으로 구성`)를 담은 청크가 0개다
 - **PDF 는 한국어 낱말 사이 공백을 잃는다**: 같은 문장이 HWPX 는 `데이터세트는 물리적 이관시 그 특성이 변할 수 있어`, PDF 는 `데이터세트는물리적이관시그특성이 변할수있어` 로 나온다 — 없어야 할 자리에 공백이 있고 있어야 할 자리에 없다. **두 포맷의 텍스트를 대조하는 코드는 공백을 지우고 비교해야 한다**(`evaluation/scoring.py:squash()`). 안 그러면 PDF 판이 내용이 같은데도 안 맞는 것으로 나와, 포맷 비교가 검색이 아니라 추출 품질을 재게 된다. 규모는 아직 안 쟀다
-- **두 포맷의 내용을 청크 텍스트로 대조하면 안 된다**: `include_heading_in_text` 가 청크 앞에 `[제목 > 경로]` 를 붙이는데 **그 경로가 포맷마다 다르다**(같은 대목을 HWPX 는 `[Ⅱ.세부실행방안>□업무역할별실행사항]`, PDF 는 `[행정정보데이터세트시행령개정관련상세안내>ⅲ.추진사항>…]`). 실측으로 청크 기준 겹침이 **32~45%** 로 나와 '두 판이 다른 판본'으로 결론 낼 뻔했는데, **요소 텍스트로는 87~98%** 였다. 대조는 요소 텍스트로 한다
+- **두 포맷의 내용을 청크 텍스트로 대조하면 안 된다**: `include_heading_in_text` 가 청크 앞에 `[제목 > 경로]` 를 붙이는데 **그 경로가 포맷마다 다르다**(같은 대목을 HWPX 는 `[Ⅱ.세부실행방안>□업무역할별실행사항]`, PDF 는 `[행정정보데이터세트시행령개정관련상세안내>ⅲ.추진사항>…]`). 실측으로 청크 기준 겹침이 **32~45%** 로 나와 '두 판이 다른 판본'으로 결론 낼 뻔했는데, **요소 텍스트로는 87~98%** 였다. 대조는 요소 텍스트로 한다. **같은 기전이 채점에서도 문다** — 정답 span 이 **본문이 아니라 그 머리에만** 있는 청크가 있는데, `scoring.hit_rank()` 는 머리를 포함한 청크 텍스트를 보므로 그것을 정답으로 센다. 실측(LLM 세트 60건, 2026-08-25)으로 그런 청크가 **4건**이고, 리랭커를 켰을 때 **짐 2 · 그대로 2 · 이김 0** 이다(본문 56건은 이김 24 · 짐 8 · 그대로 24). 시행령 그룹을 혼자 끌어내린 `sih-06`(1→12)·`sih-14`(3→15)가 둘 다 여기다 — `:0002` 의 본문은 각주 한 줄이고 `:0007` 의 본문은 *제25조* 인데 정답은 *제2조* 라, **리랭커가 올린 쪽이 실제로 질문에 답한다.** 표본 4에 반례 1(`sih-05` 1→1)이라 규칙은 못 세우지만, **dense 가 머리로 1위를 만들고 본문을 읽는 단계가 그것을 내리는 자리**라는 것은 확실하다. `evaluation/rerank_diff.py` 가 이것을 읽는다
 - **PDF 제어문자**: PDF는 글머리 기호를 제어 코드포인트로 떨어뜨린다(실측: 신뢰가능 AI 가이드 PDF에서 U+0001 192개 / U+0007 47개 / U+0008 4개, `작성 \x07김동현 수석` 처럼 본문 한가운데에 박혀 있다). 같은 문서의 HWPX 판은 0개다 — 정리 단계가 실제로 필요한 쪽은 PDF 경로다
 - **`\n` 은 지우면 안 된다**: 실측 560개가 전부 표 요소에 있는 마크다운 표의 행 구분자다. 같이 지우면 `| 구 분 | 추진내용 || --- |` 처럼 한 줄로 뭉개져 표가 통째로 깨진다
 - **Cf 제거의 감수 사항**: ZWJ(U+200D)도 Cf라서 이모지 결합(가족 이모지 등)이 쪼개진다. 한국 공문서 코퍼스에는 사실상 안 나와 예외로 두지 않았다. 살려야 하는 코퍼스가 생기면 `cleaner/characters.py` 의 `_KEEP` 에 추가한다
 - `.hwp`/`.doc`/`.ppt` 는 감지는 되지만 파싱하지 않는다. `UnsupportedLegacyLoader` 가 변환 안내와 함께 415로 거부한다. 정확한 안내를 주려면 업로드 자체는 받아야 하므로 `SUPPORTED_EXTENSIONS` 에는 포함돼 있다
 - Tesseract는 외부 설치가 필요하다(5.5.0 + 한국어 traineddata). PATH에 없으면 `.env` 의 `TESSERACT_CMD` 로 지정한다
 - zip bomb 방어는 `loader/detect.py:MAX_UNCOMPRESSED_BYTES`(500MB) 에 있다
-- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `get_store()` 로 **자기 클라이언트를 직접 열므로**, 업로드를 실연결하는 순간 같은 uvicorn 안에서 자기 자신과 충돌한다(그래서 지금 업로드 버튼이 목업이다). `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. `.qdrant/` 는 `.gitignore` 에 있다
+- **qdrant 저장 경로는 한 번에 한 프로세스만 연다**: 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어, 두 번째 클라이언트는 `RuntimeError: Storage folder ... is already accessed by another instance` 로 죽는다. 서버(`uvicorn`)를 띄운 채 스크립트로 색인하면 이것에 걸린다 — 한쪽을 내리거나 `QDRANT_PATH` 를 갈라야 한다. **프로세스가 달라야 걸리는 것이 아니다**: backend 는 startup 에 하나 열어 앱 수명 내내 들고 있는데 `index_document()` 는 `store` 를 **안 넘기면** `get_store()` 로 자기 클라이언트를 열어, 같은 uvicorn 안에서 자기 자신과 충돌한다. 그래서 색인 라우트가 `store=` 로 싱글턴을 넘긴다. **소유권 규칙은 "연 쪽이 닫는다"이고 방향을 거꾸로 잡으면 한쪽이 반드시 죽는다** — 주입받은 것을 닫으면 backend 가 다음 요청에서 죽고, 자기가 연 것을 안 닫으면 `evaluation/run_eval.py` 가 색인 루프 **직후** 자기 `get_store()` 를 열다가 죽는다. 같은 이유로 `store=` 를 안 넘겼을 때 `config.indexing.qdrant_path` 가 계속 존중돼야 한다 — 평가가 실행마다 경로를 가르는데 기본 경로로 떨어지면 기준선이 에러 없이 **수치로만** 오염된다. `answer_question()` 이 store 를 인자로 받는 이유도 이것이고, 편의로 기본값을 만들면 그 경로를 밟은 두 번째 호출이 죽는데 원인이 함수에 안 보인다. **다른 컬렉션이 필요할 때는 클라이언트를 빌린다** — `QdrantStore.client` 가 `_qdrant` 를 그대로 통과시키고(게으름 유지), 답변 캐시가 그것으로 같은 클라이언트에 `qa_cache_*` 컬렉션을 연다. 한 클라이언트가 여러 컬렉션을 보는 것은 qdrant 의 정상 사용이라 잠금이 안 걸리고 닫을 것도 하나뿐이다 — `get_store()` 를 한 번 더 부르는 것과 갈린다. `.qdrant/` 는 `.gitignore` 에 있다
 
 ## 새 포맷 추가
 
@@ -220,7 +230,9 @@ plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라�
 
 여기에 현재 상태를 적지 않는다. 적는 순간 낡기 때문이다. 각각의 출처는 이렇다.
 
-- **구현된 단계** — `rag_pipeline/ingestion/` 아래 디렉터리가 전부다
+- **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다. 여기 이름을 옮겨 적지 않는다 — 옮기는 순간 다음 디렉터리가 생길 때 조용히 거짓이 된다(실제로 `answer_cache/` 가 생기며 그렇게 됐다)
+- **품질을 무엇으로 재나** — **검색**은 `evaluation/README.md`(정답 질의 세트와 러너),
+  **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
 - **어떻게 여기까지 왔나** — `task_log/INDEX.md`
 - **아직 논의 중인 설계** — `plan_log/INDEX.md`

@@ -7,6 +7,7 @@ store 는 가짜를 app.state 에 직접 꽂는다. TestClient 를 `with` 없이
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,11 +16,14 @@ from fastapi.testclient import TestClient
 from backend.app.main import create_app
 from rag_pipeline.config import GenerationConfig, IngestConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, CacheOrigin
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
-# list_documents 와 search 만 가진 가짜 저장소
+# list_documents 와 열거만 가진 가짜 저장소.
+# **iter_chunks() 는 Protocol 에 있어 빼면 안 된다** — 질의 라우트가 첫 질의에 BM25 를 지으며
+# 이걸 부르고, 없으면 AttributeError 가 그대로 500 이 된다. list_documents 와 달리
+# 이쪽은 계약이라 관대하게 넘어가지 않는다 (rag_pipeline/ingestion/indexing/base.py)
 class FakeStore:
     def __init__(self, documents=None, error: Exception | None = None) -> None:
         self._documents = documents or []
@@ -31,12 +35,19 @@ class FakeStore:
             raise self._error
         return self._documents
 
+    def iter_chunks(self):  # noqa: ANN201 - Iterator[StoredChunk]. 여기서는 늘 비어 있다
+        return iter(())
+
     def close(self) -> None:
         self.closed = True
 
 
-# list_documents 가 아예 없는 저장소. Protocol 만 지키는 두 번째 구현체를 흉내낸다
+# list_documents 가 아예 없는 저장소. Protocol 만 지키는 두 번째 구현체를 흉내낸다 —
+# 그래서 Protocol 에 있는 iter_chunks() 는 있고 없는 list_documents() 만 없다
 class ProtocolOnlyStore:
+    def iter_chunks(self):  # noqa: ANN201 - Iterator[StoredChunk]
+        return iter(())
+
     def close(self) -> None:
         pass
 
@@ -323,3 +334,103 @@ def test_existing_routes_survive():
 @pytest.mark.parametrize("path", ["/api/v1/", "/api/v1"])
 def test_page_is_not_under_api_prefix(path: str):
     assert _client().get(path).status_code == 404
+
+
+# --- 캐시 배지 ----------------------------------------------------------------
+
+
+# 캐시에서 온 답이면 배지에 **원 질문**이 그대로 실린다. 임계값이 살짝 헐거워도
+# 오답이 아니라 사용자가 알아볼 수 있는 오류가 되는 것이 이 표시의 목적이다
+def test_cached_answer_renders_badge_with_original_question(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="유예기간 언제까지죠?",
+            text="6개월입니다.",
+            sources=[_chunk()],
+            cached_from=CacheOrigin(
+                query="유예기간이 언제까지인가요?",
+                created_at=datetime.now(UTC) - timedelta(days=3),
+                score=0.964,
+            ),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "유예기간 언제까지죠?"}).text
+
+    assert "유예기간이 언제까지인가요?" in body
+    assert "3일 전" in body
+    # 진짜 값인데 흐림·클릭 불가를 물려받으면 안 된다
+    badge = body.split("badge-row", 1)[1].split("</div>", 1)[0]
+    assert "is-placeholder" not in badge
+
+
+# 캐시가 아니면 배지 줄 자체가 없다. 빈 배지가 남으면 사용자는 캐시가 켜져 있다고 읽는다
+def test_fresh_answer_has_no_cache_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[_chunk()]),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "badge-row" not in body
+
+
+# --- 리랭커 --------------------------------------------------------------------
+
+
+# **embedder 와 같은 축이다** — 로컬 갈래는 cross-encoder 가중치를 올리므로 startup 에서
+# 만들면 그 시간만큼 서버가 안 뜬다. 첫 질의에 만들고 그 뒤로는 재사용한다
+def test_reranker_is_created_lazily(mocker):
+    app = create_app()
+    config = IngestConfig()
+    object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
+    app.state.ingest_config = config
+    app.state.store = FakeStore()
+    app.state.embedder = object()
+    app.state.reranker = None
+    made = mocker.patch(
+        "backend.app.api.routes.query.get_reranker", return_value="fake-reranker"
+    )
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+    client = TestClient(app)
+
+    # 문서 목록만 봐서는 안 만든다
+    client.get("/api/v1/documents")
+    made.assert_not_called()
+
+    client.post("/api/v1/query", data={"query": "질문"})
+    assert made.call_count == 1
+    assert asked.call_args.kwargs["reranker"] == "fake-reranker"
+
+    # 두 번째 질의는 다시 안 만든다
+    client.post("/api/v1/query", data={"query": "또 질문"})
+    assert made.call_count == 1
+
+
+# **`None` 이 정상값이라 그것도 기억해야 한다.** 꺼진 상태를 "아직 안 만들었다"로 읽으면
+# 질의마다 다시 만드는데, 로컬 갈래에서는 그 자리가 곧 모델 적재다
+def test_disabled_reranker_is_not_rebuilt_every_query(mocker):
+    app = create_app()
+    config = IngestConfig()
+    object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
+    app.state.ingest_config = config
+    app.state.store = FakeStore()
+    app.state.embedder = object()
+    app.state.reranker = None
+    made = mocker.patch("backend.app.api.routes.query.get_reranker", return_value=None)
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+    client = TestClient(app)
+
+    client.post("/api/v1/query", data={"query": "질문"})
+    client.post("/api/v1/query", data={"query": "또 질문"})
+
+    assert made.call_count == 1
+    assert asked.call_args.kwargs["reranker"] is None

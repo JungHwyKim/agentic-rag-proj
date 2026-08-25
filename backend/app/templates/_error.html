@@ -1,0 +1,9 @@
+{# 실패 한 건을 그리는 조각. 업로드(사이드바)와 질의(#messages) **둘 다** 이것을 쓴다.
+
+   **모양을 인자로 받지 않는다.** variant 같은 것을 받으면 예외 핸들러가 어느 라우트인지
+   알아야 하는데, 그러면 HX-Request 헤더 하나로 가르기로 한 이유가 사라진다. 대신 자리마다
+   다른 모양은 app.css 의 `#messages .error` 가 덧입힌다 — 조각은 한 벌이다.
+
+   message 는 _STATUS_BY_EXCEPTION 이 내보내는 user_message(한국어) 그대로다.
+   여기서 문구를 새로 짓지 않는다 (main.py) #}
+<p class="error" role="alert">{{ message }}</p>
