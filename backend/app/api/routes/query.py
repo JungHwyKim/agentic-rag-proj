@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 
 from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
@@ -116,15 +117,28 @@ def _reranker(app: FastAPI):  # noqa: ANN202 - Reranker 를 라우트 시그니�
         return state.reranker
 
 
-# 워밍업이 쓰는 버리는 입력. 캐시에 항목이 각 1건 남는데 무해하다
-_WARMUP_TEXT = "워밍업"
+# 워밍업이 쓰는 버리는 입력. **호출마다 달라야 한다.**
+#
+# 임베딩 캐시도 리랭크 캐시도 **텍스트로 키를 만든다.** 고정 문자열을 쓰면 워밍업이
+# **자기 입력을 캐시에 넣고**, 다음 기동부터는 그 캐시에 걸려 **모델을 안 올린다** —
+# 그런데 예외가 없어서 `warmup_errors` 는 빈 채이고 첫 질의만 다시 21.8초를 문다.
+# 실제로 그렇게 만들었다가 잡았다(`task_log/2026-08-26-기동-워밍업.md` 4절).
+#
+# 대가는 기동당 캐시 항목 2건(질문 벡터 1 · 점수 1)이고, 서버 재시작 수만큼만 쌓인다.
+#
+# **`time.time_ns()` 를 쓰면 안 된다** — Windows 의 시계 분해능이 거칠어 연달아 부르면
+# **같은 값이 나온다**(실측: 한 테스트 안의 두 호출이 동일). 유일성이 목적이므로 유일성을
+# 보장하는 것을 쓴다
+def _warmup_text() -> str:
+    return f"워밍업 {uuid.uuid4().hex}"
 
 
 # 리랭커를 데울 후보. **둘이어야 한다** — `rerank()` 가 후보 1개 이하면 모델을 안 올리고
-# 받은 것을 그대로 돌려준다(`local_ce.py`). 하나만 주면 워밍업이 조용히 아무것도 안 한다
-def _warmup_candidates() -> list[RetrievedChunk]:
+# 받은 것을 그대로 돌려준다(`local_ce.py`). 하나만 주면 워밍업이 조용히 아무것도 안 한다.
+# **후보 텍스트도 질의와 함께 캐시 키에 들어가므로** 같이 달라진다
+def _warmup_candidates(text: str) -> list[RetrievedChunk]:
     return [
-        RetrievedChunk(chunk_id=f"warmup:{i}", document_id="warmup", text=f"{_WARMUP_TEXT} {i}")
+        RetrievedChunk(chunk_id=f"warmup:{i}", document_id="warmup", text=f"{text} {i}")
         for i in range(2)
     ]
 
@@ -143,15 +157,16 @@ def _warmup_candidates() -> list[RetrievedChunk]:
 # 안 데워진 채로 두고 첫 질의가 지금처럼 물면 된다 — 다만 **조용히 넘기지는 않는다**
 def warm_up(app: FastAPI) -> None:
     errors: list[str] = []
+    text = _warmup_text()
     try:
-        _embedder(app).embed_query(_WARMUP_TEXT)
+        _embedder(app).embed_query(text)
     except Exception as exc:  # noqa: BLE001 - 워밍업 실패는 기능이 아니다. 게으른 적재로 떨어진다
         errors.append(f"embedder: {exc}")
     try:
         reranker = _reranker(app)
         # None 이 정상값이다 — `RERANK_MODEL` 이 비면 리랭커가 꺼진 것이라 데울 것이 없다
         if reranker is not None:
-            reranker.rerank(_WARMUP_TEXT, _warmup_candidates())
+            reranker.rerank(text, _warmup_candidates(text))
     except Exception as exc:  # noqa: BLE001 - 위와 같다
         errors.append(f"reranker: {exc}")
     app.state.warmup_errors = errors

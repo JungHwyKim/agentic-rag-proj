@@ -40,9 +40,11 @@ class FakeEmbedder:
 class FakeReranker:
     def __init__(self) -> None:
         self.calls: list[int] = []
+        self.queries: list[str] = []
 
     def rerank(self, query: str, candidates: list) -> list:  # noqa: ANN401
         self.calls.append(len(candidates))
+        self.queries.append(query)
         return candidates
 
 
@@ -124,6 +126,21 @@ def test_warm_up_feeds_the_reranker_more_than_one_candidate() -> None:
     query_routes.warm_up(_app_with(FakeEmbedder(), reranker))
 
     assert reranker.calls[0] >= 2
+
+
+# **입력이 호출마다 달라야 한다.** 임베딩·리랭크 캐시가 텍스트로 키를 만들어서, 고정
+# 문자열이면 워밍업이 **자기 입력을 캐시에 넣고 다음 기동부터 그 캐시에 걸려 모델을 안
+# 올린다.** 실제로 그렇게 만들었다가 잡았다 — `warmup_errors` 는 빈 채이고 VRAM 만 평탄해서
+# **가짜로는 안 보이고 실제 서버에서만 드러났다.** 그래서 여기서 잠근다
+def test_warm_up_uses_a_fresh_input_each_time() -> None:
+    embedder, reranker = FakeEmbedder(), FakeReranker()
+    app = _app_with(embedder, reranker)
+
+    query_routes.warm_up(app)
+    query_routes.warm_up(app)
+
+    assert len(set(embedder.queries)) == 2, "임베더 입력이 같다 — 두 번째 기동은 캐시에 걸린다"
+    assert len(set(reranker.queries)) == 2, "리랭커 입력이 같다 — 두 번째 기동은 캐시에 걸린다"
 
 
 # 리랭커가 꺼져 있으면(`RERANK_MODEL` 이 빔) 그 갈래는 그냥 건너뛴다
