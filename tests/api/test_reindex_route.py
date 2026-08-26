@@ -175,3 +175,15 @@ def test_document_list_hides_reindex_when_original_missing(originals_dir: Path):
     # 버튼은 원본이 있는 하나에만 그려진다
     assert html.count("/reindex") == 1
     assert html.count("원본 없음") == 1
+
+
+# 업로드 라우트와 같은 계약이다 — 청크가 바뀌어 임베딩 캐시를 빗나가면 여기서도 모델이
+# 올라오므로, 앱 하나짜리 인스턴스를 넘겨야 문서마다 2.27GB 를 다시 안 올린다
+def test_reindex_passes_the_app_wide_embedder(mocker, originals_dir: Path):
+    indexer = mocker.patch("backend.app.api.routes.documents.index_document")
+    _place_original(originals_dir, "안내서.pdf")
+    client, app = _client()
+
+    client.post("/api/v1/documents/안내서.pdf/reindex")
+
+    assert indexer.call_args.kwargs["embedder"] is app.state.embedder

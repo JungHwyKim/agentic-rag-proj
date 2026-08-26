@@ -15,8 +15,26 @@ from __future__ import annotations
 import pytest
 
 from rag_pipeline.exceptions import EmbeddingError
+from rag_pipeline.ingestion.embedding import EmbeddingUsage
 from rag_pipeline.ingestion.indexing import get_store
 from rag_pipeline.ingestion.pipeline import index_document, ingest
+
+
+# 주입 계약만 보는 임베더. 실제 모델을 안 올리는 것이 요점이다
+class _CountingEmbedder:
+    def __init__(self, dim: int = 8) -> None:
+        self.dim = dim
+        self.usage = EmbeddingUsage()
+        self.batches = 0
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.batches += 1
+        self.usage.api_calls += 1
+        self.usage.total_tokens += 7 * len(texts)
+        return [[0.1] * self.dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [0.1] * self.dim
 
 
 # 색인이 끝난 뒤 저장소를 다시 열어 확인한다. index_document() 가 잠금을 풀었어야 열린다
@@ -174,3 +192,42 @@ def test_own_store_is_still_closed(docx_file, offline_config, fake_embedding_api
 
     # 닫혔어야 열린다. 안 닫혔으면 여기서 RuntimeError 로 죽는다
     assert reopen().count() > 0
+
+
+# **임베더를 주입하면 새로 만들지 않는다.** 이것이 없으면 `get_embedder()` 가 메모이즈를
+# 안 해 문서마다 새 `LocalEmbedder` 가 되고, 로컬 갈래는 임베딩 캐시가 빗나갈 때 가중치를
+# 올리므로 **새 문서마다 KURE-v1 2.27GB 를 처음부터 적재한다**
+# (실측 2026-08-26: 새 문서 업로드 65초 · 그중 파싱 0.8초).
+#
+# **재색인만으로는 이 회귀를 못 잡는다** — 같은 문서는 전량 캐시 히트라 모델이 안 올라와
+# 1.3초로 멀쩡해 보인다. 그래서 계약을 여기서 직접 잠근다
+def test_injected_embedder_replaces_the_built_one(docx_file, offline_config, mocker):
+    made = mocker.patch("rag_pipeline.ingestion.pipeline.get_embedder")
+    embedder = _CountingEmbedder()
+
+    result = index_document(
+        docx_file, original_name="안내서.docx", config=offline_config, embedder=embedder
+    )
+
+    made.assert_not_called()
+    assert embedder.batches == 1
+    assert result.indexed_count == result.chunk_count
+
+
+# **주입받은 임베더의 `usage` 는 누적이라 이 문서 몫만 빼서 낸다.**
+# `reset()` 으로 하면 같은 인스턴스를 쓰는 질의 쪽과 `evaluation/run_eval.py` 의 회계가
+# 조용히 0 이 된다 — 저쪽은 루프를 다 돈 뒤 `total_tokens` 를 읽는다
+def test_injected_embedder_usage_is_this_document_only(docx_file, offline_config):
+    embedder = _CountingEmbedder()
+    embedder.usage.api_calls = 5  # 다른 문서·질의가 이미 쌓아 둔 값
+    embedder.usage.total_tokens = 999
+
+    result = index_document(
+        docx_file, original_name="안내서.docx", config=offline_config, embedder=embedder
+    )
+
+    assert result.usage.api_calls == 1
+    assert result.usage.total_tokens == 7 * result.chunk_count
+    # 공유 카운터는 안 건드린다
+    assert embedder.usage.api_calls == 6
+    assert embedder.usage.total_tokens == 999 + 7 * result.chunk_count

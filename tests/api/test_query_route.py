@@ -209,8 +209,10 @@ def test_embedder_is_created_lazily(mocker):
     app.state.ingest_config = config
     app.state.store = FakeStore()
     app.state.embedder = None
+    # **이음새는 `core/singletons.py` 다** — getter 가 그리로 옮겨갔다(적재 라우트도
+    # 같은 인스턴스를 써야 하는데 routes 끼리 import 하면 순환이라서다)
     made = mocker.patch(
-        "backend.app.api.routes.query.get_embedder", return_value="fake-embedder"
+        "backend.app.core.singletons.get_embedder", return_value="fake-embedder"
     )
     mocker.patch(
         "backend.app.api.routes.query.answer_question",

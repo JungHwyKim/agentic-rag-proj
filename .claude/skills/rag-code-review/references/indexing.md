@@ -35,6 +35,15 @@
 - **`document_id` 는 파일명에서 뽑는다** (`document_id_for()`). `Chunk.document_key` 의
   기본값인 파싱 결과 해시로 바꾸자는 제안은 기각이다 — 문서를 고치면 키가 바뀌어
   `delete_by_document_id()` 가 옛 청크를 못 찾고 **문서가 통째로 두 벌 남는다**
+- **`index_document()` 의 `embedder=` 주입.** 안 넘기면 `get_embedder()` 로 만드는 것이
+  계약이고 그때 `config.embedding` 을 존중해야 한다(`store` 와 같다). 다만 **이유가
+  다르다** — `store` 는 배타 잠금, 이쪽은 **모델 적재**다. `get_embedder()` 는
+  메모이즈하지 않고 로컬 임베더는 임베딩 캐시가 빗나갈 때 가중치를 올리므로, 긴 수명
+  프로세스(backend·평가 루프)가 안 넘기면 **문서마다 2.27GB 를 다시 적재한다.**
+  그리고 주입받았을 때 `IndexResult.usage` 는 **앞뒤 차**여야 한다 — `usage.reset()`
+  으로 바꾸자는 제안은 기각이다. 같은 인스턴스를 질의 쪽도 쓰고 `run_eval` 은 루프를
+  다 돈 뒤 `total_tokens` 를 읽어, 여기서 0으로 만들면 그 회계가 조용히 사라진다.
+  **임베더는 닫지 않는다** — `close()` 가 없어 `store` 의 소유권 규칙이 안 딸려온다
 - **`unicodedata.normalize("NFC", ...)`.** 지우면 macOS(NFD)와 Windows(NFC)의 같은 한글
   파일명이 다른 키가 되어 같은 사고가 난다
 - **`VectorRecord.id` 는 `uuid5(chunk_id)` 다.** "`chunk_id` 를 그대로 쓰자"는 제안은

@@ -195,3 +195,16 @@ def test_failed_index_keeps_bm25(mocker):
         client.post("/api/v1/documents/index", files=_files())
 
     assert app.state.bm25 is index
+
+
+# **임베더도 넘긴다 — 안 넘기면 문서마다 모델을 다시 올린다.** `get_embedder()` 는
+# 메모이즈하지 않고, 로컬 임베더는 임베딩 캐시가 빗나갈 때 가중치를 올리므로 *새 문서*
+# 하나마다 KURE-v1 2.27GB 가 처음부터 적재된다(실측 2026-08-26: 업로드 65초).
+# 넘길 것은 `core/singletons.py` 가 들고 있는 **앱 하나짜리 인스턴스**다
+def test_index_passes_the_app_wide_embedder(mocker):
+    indexer = mocker.patch("backend.app.api.routes.documents.index_document")
+    client, app = _client()
+
+    client.post("/api/v1/documents/index", files=_files())
+
+    assert indexer.call_args.kwargs["embedder"] is app.state.embedder

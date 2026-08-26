@@ -40,6 +40,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from backend.app.core.config import SHADOW_EMBEDDING, Settings, get_settings
+from backend.app.core.singletons import embedder_for
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.ingestion.indexing import document_id_for
 from rag_pipeline.ingestion.loader.registry import SUPPORTED_EXTENSIONS
@@ -260,6 +261,11 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
             original_name=original_name,
             config=request.app.state.ingest_config,
             store=request.app.state.store,
+            # **임베더도 넘긴다 — 안 넘기면 문서마다 KURE 2.27GB 를 다시 올린다.**
+            # 실측(2026-08-26): 새 문서 업로드가 65초였고 그중 파싱은 0.8초였다.
+            # 재색인은 임베딩 캐시가 전량 적중해 모델이 안 올라오므로 1.3초라,
+            # **재색인만 재면 이 비용이 안 보인다** (rag_pipeline/ingestion/pipeline.py)
+            embedder=embedder_for(request.app),
             shadow=_shadow(request),
         )
         # **색인이 성공한 뒤에만** 원본을 남긴다 (_keep_original 주석 참고).
@@ -368,6 +374,8 @@ async def reindex_document(request: Request, document_id: str) -> Response:
         original_name=key,
         config=request.app.state.ingest_config,
         store=request.app.state.store,
+        # 업로드 쪽과 같은 이유다 — 청크가 바뀌어 캐시를 빗나가면 여기서도 모델이 올라온다
+        embedder=embedder_for(request.app),
         shadow=_shadow(request),
     )
 

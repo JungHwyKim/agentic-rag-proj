@@ -50,7 +50,6 @@ startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 �
 
 from __future__ import annotations
 
-import threading
 import time
 import uuid
 
@@ -61,41 +60,24 @@ from starlette.concurrency import run_in_threadpool
 from backend.app.api.routes.documents import original_exists
 from backend.app.core.config import get_settings
 from backend.app.core.query_log import append_query_log
+from backend.app.core.singletons import BUILD_LOCK, embedder_for
 from backend.app.core.templates import templates
-from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
 from rag_pipeline.retrieval import build_bm25_index, get_reranker
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 router = APIRouter(tags=["query"])
 
-# 셋을 만드는 구간을 한 번에 하나만 지나가게 한다.
-#
-# **워밍업이 이 락을 필요하게 만들었다.** 전에는 만드는 쪽이 요청 하나뿐이라 경쟁이 없었는데,
-# 이제 배경 스레드가 같은 getter 를 부른다. 락이 없으면 워밍업이 `state.embedder` 를 세팅하기
-# **전에** 들어온 질의가 자기 것을 또 만들어 **KURE 2.27GB 가 두 벌** 뜬다 — 에러 없이
-# 메모리만 두 배가 되므로 눈에 안 띈다. `_rerank_ready` 는 표시지 락이 아니다
-_BUILD_LOCK = threading.Lock()
-
-
-# 앱 수명 동안 하나뿐인 embedder 를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고).
-#
-# **`Request` 가 아니라 `FastAPI` 를 받는 것은 워밍업 때문이다** — lifespan 의 배경 스레드에는
-# 요청이 없다. 요청 밖에서도 부를 수 있어야 두 경로가 **같은 인스턴스**를 공유한다
-def _embedder(app: FastAPI):  # noqa: ANN202 - Embedder Protocol 은 런타임 타입이 아니다
-    with _BUILD_LOCK:
-        embedder = getattr(app.state, "embedder", None)
-        if embedder is None:
-            embedder = get_embedder(app.state.ingest_config.embedding)
-            app.state.embedder = embedder
-        return embedder
+# **embedder getter 와 그 락은 `core/singletons.py` 로 옮겼다** — 적재 라우트도 같은
+# 인스턴스를 써야 하는데 `routes/query.py` 가 이미 `routes/documents.py` 를 import 해서,
+# 반대 방향 import 가 순환이 되기 때문이다. `_rerank_ready` 는 표시지 락이 아니다.
 
 
 # 앱 수명 동안 하나뿐인 BM25 인덱스를 얻는다. 없으면 이때 짓는다 (모듈 docstring 참고).
 # **예외를 안 던진다** — build_bm25_index() 가 실패를 빈 인덱스 + 경고로 바꿔 주므로,
 # 색인 전이라도 질의는 dense 로 돈다
 def _bm25(app: FastAPI):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처에 노출하지 않는다
-    with _BUILD_LOCK:
+    with BUILD_LOCK:
         index = getattr(app.state, "bm25", None)
         if index is None:
             index = build_bm25_index(app.state.store)
@@ -110,7 +92,7 @@ def _bm25(app: FastAPI):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처�
 # **꺼져 있을 때 질의마다 다시 만들게 된다.** 지금은 만드는 비용이 없지만 로컬 갈래에서는
 # 그 자리가 곧 모델 적재라, 만들었다는 사실 자체를 `_rerank_ready` 로 따로 표시한다
 def _reranker(app: FastAPI):  # noqa: ANN202 - Reranker 를 라우트 시그니처에 노출하지 않는다
-    with _BUILD_LOCK:
+    with BUILD_LOCK:
         state = app.state
         if not getattr(state, "_rerank_ready", False):
             state.reranker = get_reranker(state.ingest_config.rerank)
@@ -160,7 +142,7 @@ def warm_up(app: FastAPI) -> None:
     errors: list[str] = []
     text = _warmup_text()
     try:
-        _embedder(app).embed_query(text)
+        embedder_for(app).embed_query(text)
     except Exception as exc:  # noqa: BLE001 - 워밍업 실패는 기능이 아니다. 게으른 적재로 떨어진다
         errors.append(f"embedder: {exc}")
     try:
@@ -191,7 +173,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # **임베더도 threadpool 로 넘긴다** — 리랭커와 같은 이유인데 이쪽이 더 크다.
         # 워밍업이 꺼져 있으면 첫 인코딩이 11.8~14.7초이고(verify_log/2026-08-26-첫질의-대표값.md)
         # 그동안 이벤트 루프에서 하면 **서버 전체가 그만큼 멈춘다**
-        embedder=await run_in_threadpool(_embedder, request.app),
+        embedder=await run_in_threadpool(embedder_for, request.app),
         config=request.app.state.ingest_config,
         bm25=await run_in_threadpool(_bm25, request.app),
         # 모델 이름이 없으면 None 이라 RRF 순서로 돈다. 라우트에 스위치를 두지 않는 이유는

@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from backend.app.api.routes import query as query_routes
+from backend.app.core import singletons
 from backend.app.core.config import Settings
 from backend.app.main import create_app
 
@@ -175,11 +176,12 @@ def test_warm_up_does_not_raise_when_a_model_fails() -> None:
 # 에러가 안 나서 메모리로만 드러난다
 def test_getter_returns_one_instance(mocker) -> None:
     made = [object(), object()]
-    mocker.patch.object(query_routes, "get_embedder", side_effect=lambda _cfg: made.pop(0))
+    # getter 와 그 이음새는 `core/singletons.py` 에 있다 (적재 라우트와 공유한다)
+    mocker.patch.object(singletons, "get_embedder", side_effect=lambda _cfg: made.pop(0))
     app = _app_with(embedder=None)
 
-    first = query_routes._embedder(app)
-    second = query_routes._embedder(app)
+    first = singletons.embedder_for(app)
+    second = singletons.embedder_for(app)
 
     assert first is second, "두 번 만들었다 — 게으른 생성에 락이 없다"
 
@@ -192,14 +194,14 @@ def test_concurrent_getters_build_once(mocker) -> None:
         calls.append(1)
         return object()
 
-    mocker.patch.object(query_routes, "get_embedder", side_effect=_make)
+    mocker.patch.object(singletons, "get_embedder", side_effect=_make)
     app = _app_with(embedder=None)
     seen: list[object] = []
     barrier = threading.Barrier(4)
 
     def _worker() -> None:
         barrier.wait()
-        seen.append(query_routes._embedder(app))
+        seen.append(singletons.embedder_for(app))
 
     threads = [threading.Thread(target=_worker) for _ in range(4)]
     for thread in threads:
