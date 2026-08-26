@@ -885,7 +885,7 @@ $env:PYTHONIOENCODING = "utf-8"
 - **부정 예시는 `qa_set.jsonl` 이 아니라 `qa_set_human.jsonl` 에 있다**(2026-08-26).
   기본 세트 60건은 여전히 전부 정답이 실재하므로 **이 세트로는 Phase 4(Evaluator)와
   Phase 10(Hallucination)을 못 잰다** — "항상 충분"이라고만 답하는 Evaluator 가 100점을
-  받는다. 사람 세트가 긍정 20 + 부정 28 로 그 자리를 채운다. 부정은 `answerable: false` 이고
+  받는다. 사람 세트가 긍정 20 + 부정 23 으로 그 자리를 채운다(부정은 **23/23 사람 검수 완료**). 부정은 `answerable: false` 이고
   `gold_spans`·`gold_page` 가 비어 있으며, **검색 채점에서는 빠진다**(`run_eval` 의
   `split_scorable`, 리포트의 `skipped_unanswerable`). 이유는 `qa_set.py` 모듈 docstring
 - **부정 라벨은 문서 축이지 검색 축이 아니다.** *"이 코퍼스에 답이 없다"* 여야 하고
