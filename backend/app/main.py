@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -124,6 +125,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else None
     )
     app.state.shadow_embedder = None
+    # 기동 직후 배경에서 임베더·리랭커 가중치를 미리 올린다. **기본값은 꺼짐이다**
+    # (`core/config.py` 의 `warmup_on_startup` 주석 — 켜면 기본 pytest 가 2.27GB 를 적재한다).
+    #
+    # **스레드인 것이 요점이다.** 여기서 동기로 올리면 기동이 1초에서 20초가 되고, 모델을
+    # 못 받는 환경에서는 서버가 아예 안 떠 화면조차 못 본다 — `local_ce.py` 가 게으름을
+    # 계약으로 적어 둔 그 자리다. 배경으로 밀면 *"서버는 뜬다"* 를 지키면서 첫 질의만 덜 문다.
+    # `daemon` 인 것은 워밍업 도중에 서버를 내려도 프로세스가 안 붙잡히게 하기 위해서다
+    if settings.warmup_on_startup:
+        threading.Thread(
+            target=query.warm_up, args=(app,), daemon=True, name="warmup"
+        ).start()
     try:
         yield
     finally:

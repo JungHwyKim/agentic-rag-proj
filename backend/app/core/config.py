@@ -75,6 +75,24 @@ class Settings(BaseSettings):
     query_log_enabled: bool = True
     query_log_path: Path = PROJECT_ROOT / "data" / "queries.jsonl"
 
+    # 기동 직후 배경 스레드에서 임베더·리랭커 가중치를 미리 올릴지.
+    #
+    # **무엇을 사는가**: 첫 질의가 검색까지 21.8초 · 화면 왕복 25.1초인데 그중 임베더 첫
+    # 인코딩이 11.8~14.7초 · 리랭커 적재분이 6.2~6.5초다(verify_log/2026-08-26-첫질의-대표값.md).
+    # 정상 상태는 3.0~4.3초라 **회수되는 것이 약 19초**다. 서버 기동 자체는 1초이고 배경으로
+    # 미니 `local_ce.py` 의 *"로딩이 느리거나 실패해도 서버는 떠야 한다"* 계약을 안 깬다.
+    #
+    # **기본값이 꺼짐인 것이 요점이다.** `tests/api/test_query_route.py` 와
+    # `test_shadow_routes.py` 가 `with TestClient(...)` 로 **lifespan 을 실제로 돌린다** —
+    # 기본이 켜짐이면 기본 pytest 가 KURE 가중치 2.27GB 를 내려받고 적재한다. CLAUDE.md 가
+    # 임베딩 provider 핀으로 막아 둔 것과 **같은 종류의 유출**이고, 여기는 픽스처가 아니라
+    # 설정이 유일한 방어다. `RERANK_MODEL` 이 비면 꺼지는 것과 같은 모양이라, 켜는 것은
+    # 모델을 이미 받아 둔 머신의 `.env` 결정이다.
+    #
+    # **`RERANK_MODEL` 이 비어 있으면 리랭커 쪽은 저절로 건너뛴다** — `get_reranker()` 가
+    # None 을 돌려주므로 이 값만 켜도 임베더만 데워진다
+    warmup_on_startup: bool = False
+
     # 바이트 단위 업로드 상한
     @property
     def max_upload_bytes(self) -> int:
