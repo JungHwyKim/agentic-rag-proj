@@ -23,7 +23,7 @@
 **리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
 비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라
 결정이다**(켜는 순간 질의당 LLM 호출이 1→2 다). **품질은 아직 안 쟀다** — 2×2 비교표가
-`plan_log/검색-생성.md` 5회차에 비어 있다. **semantic cache 는 2026-08-24 에 생겼다**(`rag_pipeline/answer_cache/`) — 다만 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절).
+`plan_log/검색-생성.md` 5회차에 비어 있다. **답변 캐시는 2026-08-24 에 생겼고 2026-08-26 에 갈래가 둘이 됐다**(`rag_pipeline/answer_cache/`) — `ANSWER_CACHE_MODE` 가 `semantic`(벡터 유사도)과 `exact`(정규화한 문자열)를 고른다. **꺼짐 조건이 갈래마다 다르다**: `semantic` 은 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼지고, **`exact` 는 그 값을 아예 안 봐 모드 한 줄로 켜진다**(완전 일치에는 정할 임계값이 없다). 저장소 커밋본은 `semantic` + 빈 임계값이라 여전히 꺼진 채이고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절 · `plan_log/시맨틱-캐시.md` 4~6회차 — 양성·음성 분포가 겹쳐 임계값을 *"못 정한다"* 로 닫았다). **`exact` 를 "임계값 1.0" 으로 흉내 내자는 지적을 하지 않는다** — 그 안은 기각됐다(임계값은 *같은 벡터인가*를 재는 자[尺]인데 완전 일치가 묻는 것은 *같은 문자열인가*이고, 부동소수라 보장도 없다). 마찬가지로 **`put()`·무효화·`clear()` 가 갈래를 안 타는 것도 결정이다** — `exact` 에서도 진짜 벡터를 저장해야 나중에 `semantic` 으로 돌렸을 때 오염된 캐시를 검색하지 않는다.
 그래서 이 파일은 아직 `retriever.md` 로 승격하지 않았다(승격 규칙은 맨 아래). 있는 것에는
 아래 계약을 적용하고, 없는 것은 여전히 지적하지 않는다.
 

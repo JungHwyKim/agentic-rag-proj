@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     # (plan_log/embedding.md 5회차 미결)
     shadow_index_enabled: bool = True
 
+    # 실사용 질의를 한 줄씩 남길지, 그리고 어디에.
+    #
+    # **기본값이 켜짐인 것이 요점이다.** 이 로그가 있어야 답변 캐시를 켤지 정할 수 있는데
+    # (`ANSWER_CACHE_MODE` · plan_log/시맨틱-캐시.md 6회차), 꺼둔 채로는 아무것도 안 쌓여
+    # 그 판단이 영영 안 선다. 관측은 켜져 있어야 관측이다.
+    #
+    # **불리언을 따로 두는 이유**: 경로를 빈 문자열로 끄게 하면 `Path("")` 가 `.` 이 되어
+    # 조용히 저장소 루트에 쓴다. `shadow_index_enabled` 가 같은 클래스에서 이미 쓰는 모양이다.
+    #
+    # 상한도 자동 정리도 없다 — `originals_dir` 과 같은 판단이고, `data/` 는 gitignore 다.
+    # 남는 것이 사용자 질문 문자열이라 **테스트가 실제 경로를 밟으면 안 된다**:
+    # `tests/api/conftest.py` 의 autouse 픽스처가 `originals_dir` 과 함께 덮는다
+    query_log_enabled: bool = True
+    query_log_path: Path = PROJECT_ROOT / "data" / "queries.jsonl"
+
     # 바이트 단위 업로드 상한
     @property
     def max_upload_bytes(self) -> int:

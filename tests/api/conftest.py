@@ -1,4 +1,4 @@
-"""API 테스트가 개발자의 **실제** 원본 보관함을 건드리지 않게 막는다.
+"""API 테스트가 개발자의 **실제** 보관함·질의 로그를 건드리지 않게 막는다.
 
 `Settings.originals_dir` 의 기본값이 `PROJECT_ROOT/original_files` 라, 색인 라우트를 부르는
 테스트가 실제 폴더에 파일을 쓴다. `tests/conftest.py` 의 `offline_config` 가 `qdrant_path` 를
@@ -31,3 +31,18 @@ def originals_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "original_files"
     monkeypatch.setenv("ORIGINALS_DIR", str(directory))
     return directory
+
+
+# 질의 로그도 같은 이유로 돌린다. **`Settings.query_log_enabled` 기본값이 켜짐이라 이 픽스처가
+# 없으면 질의 라우트를 부르는 모든 테스트가 저장소의 `data/queries.jsonl` 에 줄을 쌓는다.**
+#
+# 원본 보관 때보다 대가가 크다 — 저쪽에 남은 것은 22바이트짜리 가짜 파일이었지만 여기 남는
+# 것은 **사용자 질문 문자열**이고, 그것이 개발자의 실제 반복률 통계에 섞이면 나중에 캐시를
+# 켤지 정하는 근거가 조용히 오염된다(테스트 질의는 늘 같은 문자열이라 반복률을 위로 민다).
+#
+# autouse 인 이유는 위와 같다: 손으로 덮는 규약이면 새 테스트가 잊는 순간 다시 샌다
+@pytest.fixture(autouse=True)
+def query_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "data" / "queries.jsonl"
+    monkeypatch.setenv("QUERY_LOG_PATH", str(path))
+    return path

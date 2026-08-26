@@ -50,11 +50,14 @@ startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 �
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend.app.core.config import get_settings
+from backend.app.core.query_log import append_query_log
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
@@ -108,6 +111,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         )
 
     # 검색·생성은 동기·네트워크 바운드라 이벤트 루프 밖으로 뺀다 (업로드가 로더를 넘기는 것과 같다)
+    started = time.perf_counter()
     answer = await run_in_threadpool(
         answer_question,
         text,
@@ -126,6 +130,16 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # 그때 여기서 죽으면 캐시가 없다는 이유로 질의 전체가 죽는다
         cache=getattr(request.app.state, "answer_cache", None),
     )
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+
+    # **성공한 질의만 남는다** — 위에서 예외가 나면 여기 못 온다. 그것이 분모의 뜻을
+    # "답이 나온 질의" 하나로 고정한다 (`core/query_log.py`). 파일 쓰기라 루프 밖으로 뺀다
+    settings = get_settings()
+    if settings.query_log_enabled:
+        await run_in_threadpool(
+            append_query_log, settings.query_log_path, text, answer, elapsed_ms=elapsed_ms
+        )
+
     return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
 
 

@@ -245,6 +245,27 @@ def test_local_rerank_profiles_pin_the_device(profile: str) -> None:
     assert "rerank_device" in block, f"로컬 프로필 '{profile}' 에 rerank_device 가 없다"
 
 
+# **모델을 가진 프로필은 provider 를 못 박아야 한다.** `rerank_provider` 기본값이 `openai` 라,
+# 안 박으면 HuggingFace 리포 이름이 **유료** 리랭커로 간다 — 임베딩 쪽 같은 구멍
+# (`test_every_profile_pins_its_provider`, 2026-08-25)보다 대가가 크다. 저쪽은 없는 모델
+# 이름으로 죽지만 이쪽은 **에러 없이 과금된다.**
+#
+# `off` 를 skip 하는 것은 거기서 provider 가 뜻이 없어서다 — `rerank_model=None` 이면
+# `get_reranker()` 가 None 을 돌려 구현체를 아예 안 고른다. 박아 두면 "합법값이 하나뿐인
+# 죽은 값"이 되는데 이 저장소는 그것을 일관되게 기각해 왔다. 바로 위
+# `test_local_rerank_profiles_pin_the_device` 가 쓰는 skip 패턴과 같은 모양이다
+@pytest.mark.parametrize("profile", sorted(EVAL_RERANKERS))
+def test_rerank_profiles_with_a_model_pin_their_provider(profile: str) -> None:
+    block = EVAL_RERANKERS[profile]
+    if block.get("rerank_model") is None:
+        pytest.skip("모델이 없으면 구현체를 안 고른다 — provider 가 뜻이 없다")
+    assert "rerank_provider" in block, (
+        f"리랭커 프로필 '{profile}' 이 rerank_provider 를 안 박았습니다 — "
+        "코드 기본값이 'openai' 라 HuggingFace 모델 이름이 유료 리랭커로 갑니다. "
+        "임베딩 쪽 같은 구멍은 없는 모델로 죽었지만 이쪽은 에러 없이 과금됩니다"
+    )
+
+
 # 없는 이름이면 조용히 꺼짐으로 안 돌아간다. 돌아가면 리랭커를 켠 줄 알고 대조군을 두 번
 # 재게 되고, 두 실행이 같은 수치를 내는 것이 "리랭커가 효과 없다"로 읽힌다
 def test_unknown_rerank_profile_stops() -> None:
