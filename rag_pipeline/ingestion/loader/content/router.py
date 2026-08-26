@@ -55,6 +55,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+from rag_pipeline.config import ContentRoutingConfig
 from rag_pipeline.ingestion.loader.content import (
     image_ocr,
     image_vision,
@@ -81,9 +82,10 @@ from rag_pipeline.schemas.document import Element
 # cleaner — 직렬 237.5초에서 Tesseract 213.9초를 뺀 값). 16워커의 이론 하한이 37초라
 # 실측 42.3초는 이미 그 근처다 — 워커를 더 늘려서 얻을 것이 없다.
 #
-# **설정(.env)으로 열지 않았다.** 이 저장소는 합법값이 실제로 갈리는 두 번째 경로가 생긴
-# 뒤에 설정을 연다 — 지금은 실측으로 값 하나를 고르면 되는 자리다
-_MAX_OCR_WORKERS = 8
+# **2026-08-26 에 설정(`OCR_MAX_WORKERS`)으로 열었다.** 그전 근거는 *"합법값이 실제로
+# 갈리는 두 번째 경로가 생긴 뒤에 연다"* 였고, 그 경로가 생겼다 — **발열**이다.
+# Tesseract 는 서브프로세스라 `TORCH_NUM_THREADS` 가 안 먹고 GPU 로도 못 옮겨서, 적재 쪽
+# CPU 부하를 낮출 손잡이가 이것 하나뿐이다. 기본값 8은 그대로라 동작은 안 바뀐다
 
 
 # 병렬 구간이 이미지 리전 하나에 대해 내놓는 것.
@@ -100,9 +102,10 @@ class ImageOutcome:
     context: LoadContext
 
 
-# 실제로 띄울 워커 수. 리전이 적으면 그만큼만 띄운다
-def _ocr_workers(count: int) -> int:
-    return max(1, min(_MAX_OCR_WORKERS, os.cpu_count() or 1, count))
+# 실제로 띄울 워커 수. 리전이 적으면 그만큼만 띄운다.
+# **셋의 최솟값인 것이 요점이다** — 설정 상한 · 이 머신의 코어 수 · 실제 할 일의 수
+def _ocr_workers(count: int, config: ContentRoutingConfig) -> int:
+    return max(1, min(config.ocr_max_workers, os.cpu_count() or 1, count))
 
 
 # 이미지 리전 하나를 병렬 구간에서 처리한다 — 여는 것 · 판정 · **무료 OCR 까지**.
@@ -151,7 +154,7 @@ def _route_images_free(
     if len(targets) == 1:
         return {targets[0]: _route_image_free(ordered[targets[0]], ctx, router)}
 
-    with ThreadPoolExecutor(max_workers=_ocr_workers(len(targets))) as pool:
+    with ThreadPoolExecutor(max_workers=_ocr_workers(len(targets), ctx.config)) as pool:
         outcomes = pool.map(lambda index: _route_image_free(ordered[index], ctx, router), targets)
         return dict(zip(targets, outcomes, strict=True))
 

@@ -66,8 +66,50 @@
 # 안 주면 baseline 이라 지금까지와 같은 실행이다
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --embedding 프로필이름 --label 실험이름
 
+# **GPU 로 돌리려면 프로필 이름으로 준다** — 이 러너는 .env 를 일부러 안 본다 (아래 「GPU 로 돌리기」)
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --embedding kure-v1-gpu --rerank local-gpu --k 50 --report-k 10 --label 실험이름
+
 # 포맷 비교·모델 비교는 이 한 줄로 안 된다 — 아래 "…를 돌리려면" 절을 그대로 따른다
 ```
+
+## GPU 로 돌리기
+
+**`.env` 에 `EMBEDDING_DEVICE=cuda` 를 넣어도 이 러너는 CPU 로 돈다.** 버그가 아니라
+재현성 장치다 — `evaluation/config.py` 의 프로필이 장치를 못 박고 `.env` 를 이긴다
+(*"baseline 은 재현될 때만 기준선"*). 그래서 **GPU 는 프로필로 고른다.**
+
+```powershell
+# 저장소 루트에서. 과금 0 (둘 다 로컬 모델)
+$env:PYTHONIOENCODING = "utf-8"
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid `
+  --embedding kure-v1-gpu --rerank local-gpu --k 50 --report-k 10 --label 실험이름
+```
+
+| 축 | CPU 프로필 | GPU 프로필 |
+|---|---|---|
+| 임베딩 | `kure-v1` | **`kure-v1-gpu`** |
+| 리랭킹 | `local` | **`local-gpu`** |
+
+**갈아끼지 않고 더한 것이 규칙이다** — 이름이 곧 실험의 정체라, 갈아끼면 이미 나온 수치가
+어느 장치로 재졌는지를 파일이 못 말한다.
+
+**컬렉션은 안 갈린다.** `collection_name_for()` 가 모델·차원에서 파생하므로 `kure-v1` 과
+`kure-v1-gpu` 가 같은 컬렉션을 연다 — **재색인이 없다.** 캐시 salt 도 같다
+(`cache_salt_for()` 에 device 가 없다). 근거는 실측이다: 실제 청크 414개에서 CPU/GPU 벡터가
+`1−cos` 최대 **1.354e-09** 이고, E2E 로 지표 49개·질의 60건이 **전건 동일**이었다
+(`verify_log/2026-08-26-스레드-발열-GPU.md`).
+
+**그래서 장치를 바꿔 견주는 실행은 캐시를 갈라야 한다.** 안 가르면 GPU 실행이 CPU 가 만든
+벡터를 그대로 읽어 **모델이 한 번도 안 돈다** — 실제로 그렇게 돌린 첫 실행이
+`usage.calls == 0` 이었다. `usage.calls` 가 0인 비교는 근거가 아니다.
+
+```powershell
+$env:EMBEDDING_CACHE_DIR = "<임시경로>"
+$env:RERANK_CACHE_DIR    = "<임시경로>"
+```
+
+**얼마나 빨라지나** — 임베딩 색인이 CPU-초 1,856.7 → 15.8(**117배**), 리랭킹이 질의당
+63.9초 → 2.988초(**21.4배**)다.
 
 `--format` 은 확장자가 아니라 **포맷 라벨**이다(`documents.py`). 그 그룹에 그 판이 없으면
 **조용히 넘어가지 않고 멈춘다** — 넘어가면 그 그룹 질의가 문서 없이 채점되어 점수가 가짜로
@@ -307,7 +349,7 @@ CLAUDE.md 의 *"시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배"
 이고 기본은 `baseline` 이라 **아무것도 안 주면 지금까지와 같은 실행**이다.
 
 ```powershell
-# 지금 있는 프로필: baseline (text-embedding-3-small) · kure-v1 (nlpai-lab/KURE-v1, 로컬)
+# 지금 있는 프로필: baseline (text-embedding-3-small) · kure-v1 (KURE-v1, 로컬 CPU) · kure-v1-gpu (같은 모델, cuda)
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --embedding kure-v1 --label kure-v1
 ```
 
@@ -710,6 +752,20 @@ from rag_pipeline.ingestion.indexing import collection_name_for   # 이름이 �
 수치 전문은 [verify_log/2026-08-25-캐시임계값-분리가능성.md](../verify_log/2026-08-25-캐시임계값-분리가능성.md),
 판정과 차선은 `plan_log/시맨틱-캐시.md` 4회차다.
 
+**모델을 바꿔도 안 갈렸다** (2026-08-26, 유료 실행 $0.0001 미만). `--embedding baseline`
+(`text-embedding-3-small`)으로 다시 재니 **거기서도 겹쳤고 더 심하다**:
+
+| | KURE-v1 | baseline(OpenAI) |
+|---|---:|---:|
+| 양성 최소 / p50 | 0.4917 / 0.7321 | **0.1639 / 0.3873** |
+| 음성 최대 | 0.8212 | 0.7871 |
+| **잠긴 양성** | 65/80 | **75/80** |
+
+**이 코퍼스에서는 KURE 가 두 분포를 더 잘 가르는데도 안 갈렸다.** 그래서 *"모델을 갈아타
+다시 재는 길"* 은 사실상 닫혔다 — 다만 **모델 둘로 *어떤 모델로도* 를 말하지는 않는다.**
+그리고 이 실행에서 **눈금 경고가 처음 발화했다**: OpenAI 노름이 0.999562~1.000417 이라
+단위 길이가 아니다(어긋남 4e-4 로 판정에는 무관하다).
+
 **다시 재야 하는 때**는 임베딩 모델이 바뀔 때다 — 임계값은 모델에 딸린 값이다. 그때
 **캐시를 끈 실행과 대조하는 것을 잊지 말 것**: `cache_salt_for()` 가 `device` 를 안 실어
 GPU/CPU 벡터가 같은 캐시 칸을 쓴다(탐침 docstring 에 절차가 있다).
@@ -737,7 +793,7 @@ GPU/CPU 벡터가 같은 캐시 칸을 쓴다(탐침 docstring 에 절차가 있
 ### 2. 축은 프로필 이름이다
 
 `--rerank <프로필>` 이고 값은 `evaluation/config.py` 의 `EVAL_RERANKERS` 에 있다 —
-`off`(기본) · `openai` · `local`. **없는 이름을 주면 멈춘다** — 조용히 꺼짐으로 떨어지면
+`off`(기본) · `openai` · `local`(CPU) · `local-gpu`(cuda). **없는 이름을 주면 멈춘다** — 조용히 꺼짐으로 떨어지면
 리랭커를 켠 줄 알고 대조군을 두 번 재게 되고, 두 실행이 같은 수치를 내는 것이
 *"리랭커가 효과 없다"* 로 읽힌다(`--embedding` 과 같은 가드다).
 
@@ -868,9 +924,16 @@ $env:PYTHONIOENCODING = "utf-8"
   "이 질문에 이 정답이 맞는가"이지 "이 질문이 실제 사용자의 말투인가"가 아니다. 정답 span 은
   여전히 원문 그대로라 BM25 에 유리하게 기울 수 있다 — 비교 1번에서 BM25 이득이 유난히 크면
   이것부터 의심한다
-- **부정 예시가 없다.** 60건 전부 정답이 문서에 실재한다. 그래서 Phase 4(Evaluator)와
-  Phase 10(Hallucination)은 **이 세트로 못 잰다** — "항상 충분"이라고만 답하는 Evaluator 가
-  100점을 받는다
+- **부정 예시는 `qa_set.jsonl` 이 아니라 `qa_set_human.jsonl` 에 있다**(2026-08-26).
+  기본 세트 60건은 여전히 전부 정답이 실재하므로 **이 세트로는 Phase 4(Evaluator)와
+  Phase 10(Hallucination)을 못 잰다** — "항상 충분"이라고만 답하는 Evaluator 가 100점을
+  받는다. 사람 세트가 긍정 20 + 부정 23 으로 그 자리를 채운다(부정은 **23/23 사람 검수 완료**). 부정은 `answerable: false` 이고
+  `gold_spans`·`gold_page` 가 비어 있으며, **검색 채점에서는 빠진다**(`run_eval` 의
+  `split_scorable`, 리포트의 `skipped_unanswerable`). 이유는 `qa_set.py` 모듈 docstring
+- **부정 라벨은 문서 축이지 검색 축이 아니다.** *"이 코퍼스에 답이 없다"* 여야 하고
+  *"검색이 못 찾았다"* 면 안 된다 — 뒤엣것을 섞으면 검색 실패가 부정으로 들어가고 그
+  질의에서 Evaluator 는 **우연히** 옳게 맞힌다. `evaluation/negatives.py` 가 검수 재료를
+  모으되 **검색기를 한 방향으로만** 쓴다(찾아내면 부정이 아니다 / 못 찾은 것은 근거가 아니다)
 - **문서가 넷뿐이고 전부 공공기관 가이드·지침류다.** 실제 질의 분포와 맞는지 모른다
 - **포맷 비교의 표본이 3쌍이다.** AI 가이드를 뺀 결과이고, 그만큼 "어느 포맷이 유리한가"의
   결론이 문서 셋에 걸린다

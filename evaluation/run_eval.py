@@ -75,7 +75,12 @@ from evaluation.config import (
 )
 from evaluation.corpus import build_corpus
 from evaluation.documents import DOCUMENT_GROUPS, FIXTURES_DIR
-from evaluation.qa_set import load_qa_set, validate_items, validate_spans_across_formats
+from evaluation.qa_set import (
+    QAItem,
+    load_qa_set,
+    validate_items,
+    validate_spans_across_formats,
+)
 from evaluation.scoring import QueryScore, score_query
 
 # 실행 결과를 남기는 곳. `.gitignore` 에 `.cache/` 가 이미 있다
@@ -97,6 +102,12 @@ def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
 
     problems = validate_items(qa.items)
 
+    # 세트의 구성을 먼저 보여준다. 부정 예시는 아래 span 검증을 통째로 건너뛰므로
+    # (gold_spans 가 비어 있어 반복문이 안 돈다) 그것이 몇 건인지가 안 보이면
+    # "왜 검사가 이것밖에 안 나왔나" 를 알 수 없다
+    negatives = sum(1 for item in qa.items if not item.answerable)
+    print(f"  세트 {len(qa.items)}건 — 정답 있음 {len(qa.items) - negatives} · 부정 예시 {negatives}")
+
     groups = sorted({item.source_doc for item in qa.items})
     corpus = build_corpus(groups, refresh=refresh)
     if not corpus:
@@ -104,6 +115,15 @@ def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
         return problems
 
     return problems + validate_spans_across_formats(qa.items, corpus)
+
+
+# 채점할 것과 부정 예시를 가른다. **부정은 검색 채점에서 빠진다** (`qa_set.py` 모듈 docstring)
+# — 정답이 없어 `hit@k` 가 정의상 만점이고 `recall` 은 분모가 0이라, 넣으면 검색기를 못 가른다.
+# **건너뛴 수를 함께 돌려주는 것이 요점이다.** 안 세면 세트가 48건인데 지표는 20건 기준인
+# 것이 리포트 어디에도 안 보인다
+def split_scorable(items: list[QAItem]) -> tuple[list[QAItem], int]:
+    scorable = [item for item in items if item.answerable]
+    return scorable, len(items) - len(scorable)
 
 
 # 점수 목록을 한 줄 요약으로. 평균만 내지 않고 못 맞힌 수를 함께 낸다 —
@@ -156,7 +176,11 @@ def run_dense(
     )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
-    items = [item for item in qa.items if item.source_doc in wanted]
+    items, skipped_unanswerable = split_scorable(
+        [item for item in qa.items if item.source_doc in wanted]
+    )
+    if not items:
+        raise SystemExit(f"채점할 질의가 없습니다 (부정 예시 {skipped_unanswerable}건뿐): {qa.path}")
     indexed: list[dict[str, Any]] = []
     for group in wanted:
         name = DOCUMENT_GROUPS.get(group, {}).get(fmt)
@@ -225,6 +249,8 @@ def run_dense(
         "label": label,
         "format": fmt,
         "groups": wanted,
+        # 검색 채점에서 뺀 부정 예시 수. 위 필터의 근거는 그 자리 주석에 있다
+        "skipped_unanswerable": skipped_unanswerable,
         "k": k,
         "report_k": report_k,
         # **`per_query` 는 `--k` 채점이다** (모듈 docstring 참고)
@@ -378,6 +404,10 @@ def print_report(report: dict[str, Any], report_k: int) -> None:
         print(f"  {row['chunks']:4d}청크  {flags}{warn}  {row['file']}")
 
     print(f"\n요약 (@{report_k}):")
+    # **채점에서 뺀 부정 예시를 지표 바로 위에 찍는다.** 아래 `queries` 가 세트 전체가
+    # 아니라는 것을 여기서 말해 주지 않으면 아무도 안 알아챈다
+    if report.get("skipped_unanswerable"):
+        print(f"  {'부정(채점 제외)':16s} {report['skipped_unanswerable']}")
     for key, value in report["summary"].items():
         print(f"  {key:16s} {value:.4f}" if isinstance(value, float) else f"  {key:16s} {value}")
 

@@ -19,6 +19,18 @@ qdrant 로컬 파일 모드가 저장 디렉터리에 배타 잠금을 건다. `
 point 마다 벡터를 요구해 *아무도 검색하지 않는 답변에 임베딩 비용*이 붙고, 쓰기가 둘로
 갈려 "질문만 저장된" 반쪽 상태가 생긴다 — 그 상태에서 히트하면 빈 답을 돌려준다.
 
+## 조회 갈래가 둘이고, 저장은 하나다
+
+`answer_cache_mode` 가 `lookup()` 만 가른다 — `semantic` 은 벡터 검색, `exact` 는
+`cache_point_id_for()` 로 만든 id 조회다. **`put()` 은 두 갈래가 똑같고 진짜 벡터를 저장한다.**
+
+더미 벡터를 넣으면 나중에 `semantic` 으로 돌렸을 때 **조용히 오염된 캐시를 검색하게 된다** —
+컬렉션 이름이 모델 교체는 막아주지만 이건 못 막는다. 그 대신 `exact` 로 쌓은 항목이 모드를
+바꿔도 그대로 쓰인다(재색인이 필요 없다).
+
+무효화(`_sources_still_valid`)와 `clear()` 도 갈래를 안 탄다. 낡은 근거를 거르는 일은
+"같은 질문"을 어떻게 판정했는지와 무관하기 때문이다.
+
 ## 실패는 예외가 아니라 미스다
 
 로더의 *빈 결과 + 경고* 규약이 성립하는 조건은 **내려갈 층이 있는가**이고 여기는 있다
@@ -136,10 +148,12 @@ class QdrantAnswerCache:
         indexing: IndexingConfig,
         embedding: EmbeddingConfig,
         config: AnswerCacheConfig,
-        threshold: float,
+        mode: str = "semantic",
+        threshold: float | None = None,
     ) -> None:
         self._store = store
         self._config = config
+        self._mode = mode
         self._threshold = threshold
         self._collection = collection_name_for(
             indexing, embedding, prefix=config.answer_cache_collection_name
@@ -158,17 +172,46 @@ class QdrantAnswerCache:
     def collection(self) -> str:
         return self._collection
 
-    # 같은 질문으로 볼 최소 유사도. 없으면 캐시 자체가 안 만들어진다(__init__.py)
+    # 어느 갈래로 "같은 질문"을 판정하나. `semantic` 이면 벡터, `exact` 면 정규화한 문자열이다
     @property
-    def threshold(self) -> float:
+    def mode(self) -> str:
+        return self._mode
+
+    # 같은 질문으로 볼 최소 유사도. **`exact` 갈래에서는 None 이고 안 쓰인다** —
+    # 저쪽은 자[尺]가 필요 없는 판정이라 값을 요구하면 근거 없는 수를 만들게 된다
+    @property
+    def threshold(self) -> float | None:
         return self._threshold
 
-    # 비슷한 질문의 답을 찾는다. 없으면 None — **예외를 안 던진다**(모듈 docstring 참고)
+    # 같은 질문의 답을 찾는다. 없으면 None — **예외를 안 던진다**(모듈 docstring 참고).
+    # "같은"의 뜻이 mode 로 갈리고, 무효화는 두 갈래가 공유한다
     def lookup(self, query: str, *, embedder: Embedder) -> Answer | None:
         text = query.strip()
         if not text:
             return None
 
+        found = self._exact(text) if self._mode == "exact" else self._semantic(text, embedder)
+        if found is None:
+            return None
+        point, score = found
+
+        payload = getattr(point, "payload", None) or {}
+        if not self._sources_still_valid(payload, point_id=str(point.id)):
+            return None
+
+        return self._to_answer(payload, query=text, score=score)
+
+    # 정규화한 문자열이 같은 항목 하나. **임베딩을 안 부르는 것이 이 갈래의 요점이다** —
+    # 그래서 미스 경로의 임베딩이 2회가 아니라 1회다(모듈 docstring 의 감수 사항이 여기서 준다).
+    #
+    # 점수가 1.0 인 것은 임의값이 아니다 — 같은 정규화 문자열이면 같은 벡터이고, 이 컬렉션의
+    # 벡터는 단위 길이라 자기 자신과의 내적이 1.0 이다(plan_log/시맨틱-캐시.md 4회차 실측)
+    def _exact(self, text: str) -> tuple[Any, float] | None:
+        point = self._by_id(cache_point_id_for(text))
+        return None if point is None else (point, 1.0)
+
+    # 벡터가 제일 가까운 항목 하나. 임계값 아래면 미스다
+    def _semantic(self, text: str, embedder: Embedder) -> tuple[Any, float] | None:
         try:
             vector = embedder.embed_query(text)
         except Exception as exc:  # noqa: BLE001 - 캐시 실패는 미스로 내린다. 질의는 계속 돈다
@@ -180,14 +223,10 @@ class QdrantAnswerCache:
             return None
 
         score = float(getattr(point, "score", 0.0) or 0.0)
-        if score < self._threshold:
+        # 이 갈래에서만 임계값이 산다. `exact` 로 왔으면 여기 안 온다(__init__.py 의 진리표)
+        if self._threshold is None or score < self._threshold:
             return None
-
-        payload = getattr(point, "payload", None) or {}
-        if not self._sources_still_valid(payload, point_id=str(point.id)):
-            return None
-
-        return self._to_answer(payload, query=text, score=score)
+        return point, score
 
     # 답 하나를 캐시에 넣는다. **근거가 없는 답은 저장하지 않는다** —
     # 무효화가 걸 축이 없어서, 문서를 새로 넣은 뒤에도 "찾지 못했습니다"를 되돌려준다
@@ -265,6 +304,28 @@ class QdrantAnswerCache:
 
         points = list(getattr(response, "points", []) or [])
         return points[0] if points else None
+
+    # id 로 항목 하나. **`_nearest()` 와 같은 실패 규약이다** — 컬렉션이 없는 것은 오류가
+    # 아니라 "아직 캐시가 없다"이고, 그 밖의 실패는 경고 뒤 미스로 내린다.
+    #
+    # `retrieve()` 는 `query_points()` 와 달리 점수를 안 준다. 줄 것이 없기 때문이고,
+    # 그래서 점수를 부르는 쪽(`_exact`)이 1.0 으로 정한다 — 여기서 가짜 필드를 만들지 않는다
+    def _by_id(self, point_id: str) -> Any:
+        try:
+            client = self._client
+            if not client.collection_exists(self._collection):
+                return None
+            records = client.retrieve(
+                collection_name=self._collection,
+                ids=[point_id],
+                with_payload=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - 캐시 실패는 미스로 내린다
+            self._warn(f"캐시를 조회하지 못해 건너뜁니다: {type(exc).__name__}")
+            return None
+
+        found = list(records or [])
+        return found[0] if found else None
 
     # 저장할 때의 근거 청크가 아직 그대로인지 본다. 아니면 그 캐시 항목을 지우고 미스로 내린다
     def _sources_still_valid(self, payload: dict[str, Any], *, point_id: str) -> bool:

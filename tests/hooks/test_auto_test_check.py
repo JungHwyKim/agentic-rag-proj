@@ -37,6 +37,10 @@ STAGES_DIR = PROJECT_ROOT / "rag_pipeline" / "ingestion"
         ("backend/app/api/routes/documents.py", "tests/api"),
         (".claude/hooks/auto_test_check.py", "tests/hooks"),
         ("rag_pipeline/ingestion/pipeline.py", "tests/ingestion/test_pipeline.py"),
+        # **최상위 모듈은 커버리지 테스트가 안 잡는다** — 저쪽은 ingestion/ 아래 디렉터리만
+        # 훑는다. 그래서 이 둘은 여기서 직접 못 박아야 조용히 빠지는 것을 막는다
+        ("rag_pipeline/query.py", "tests/test_query.py"),
+        ("rag_pipeline/runtime.py", "tests/test_runtime.py"),
     ],
 )
 def test_source_maps_to_area(source: str, expected: str):

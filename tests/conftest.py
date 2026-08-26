@@ -111,11 +111,18 @@ def offline_config(tmp_path: Path) -> IngestConfig:
     )
     # 답변 캐시도 같은 이유로 덮어쓴다. **기본값이 이미 꺼짐(threshold=None)인데도 덮는
     # 이유**는 AnswerCacheConfig() 가 .env 를 직접 읽어서다 — 개발자가 .env 에 임계값을
-    # 넣어 두면 그 값이 픽스처에 실려 테스트가 사람마다 다르게 돈다
+    # 넣어 두면 그 값이 픽스처에 실려 테스트가 사람마다 다르게 돈다.
+    #
+    # **끄는 축이 둘이라 둘 다 박는다.** `answer_cache_mode="exact"` 는 임계값을 아예 안 봐서
+    # (rag_pipeline/answer_cache/__init__.py 의 진리표), threshold 만 박아 두면 개발자 .env 의
+    # 모드 한 줄이 기본 pytest 에서 캐시를 켜버린다. **필드를 더한 회차가 이 핀을 함께 넓히지
+    # 않으면 핀이 아무 에러 없이 불완전해지는 것**이 요점이고, 그것은 2026-08-25 에
+    # EVAL_EMBEDDINGS["baseline"] 이 embedding_provider 로 겪은 일과 같은 종류다
+    # (evaluation/config.py 의 baseline 주석 · plan_log/시맨틱-캐시.md 6회차)
     object.__setattr__(
         config,
         "_answer_cache",
-        AnswerCacheConfig(answer_cache_threshold=None),
+        AnswerCacheConfig(answer_cache_mode="semantic", answer_cache_threshold=None),
     )
     # 리랭커도 덮어쓴다. **여기는 임베딩과 같은 함정이 두 개 겹쳐 있어 셋을 다 박는다.**
     #

@@ -71,6 +71,14 @@ class _FakeClient:
     def query_points(self, **_: Any) -> _Response:
         return _Response([self._point] if self._point is not None else [])
 
+    # exact 갈래가 쓰는 id 조회. **id 가 맞을 때만 돌려주는 것이 이 가짜의 요점이다** —
+    # query_points 처럼 무조건 주면 "다른 문자열은 미스"라는 계약을 못 잰다.
+    # 실제 클라이언트와 마찬가지로 점수 필드가 없는 레코드를 흉내 내지 않고 같은 객체를 준다
+    def retrieve(self, collection_name: str, ids: list[Any], **_: Any) -> list[_Point]:
+        if self._point is None or str(self._point.id) not in {str(i) for i in ids}:
+            return []
+        return [self._point]
+
     def upsert(self, collection_name: str, points: list[Any]) -> None:
         self.upserted.extend(points)
 
@@ -114,13 +122,16 @@ def _stored(text: str = "제12조 …") -> StoredChunk:
     )
 
 
-# 캐시 하나를 세운다. threshold 기본 0.9
-def _cache(store: Any, threshold: float = 0.9) -> QdrantAnswerCache:
+# 캐시 하나를 세운다. threshold 기본 0.9 · 갈래 기본 semantic
+def _cache(
+    store: Any, threshold: float | None = 0.9, mode: str = "semantic"
+) -> QdrantAnswerCache:
     return QdrantAnswerCache(
         store,
         indexing=IndexingConfig(),
         embedding=EmbeddingConfig(),
         config=AnswerCacheConfig(),
+        mode=mode,
         threshold=threshold,
     )
 
@@ -504,3 +515,126 @@ def test_clear_failure_does_not_raise():
 
     assert cache.clear() is False
     assert cache.warnings
+
+
+# --- exact 갈래 --------------------------------------------------------------
+#
+# 임계값이 아니라 **정규화한 문자열**로 판정하는 갈래다. 여기서 재는 것은 넷이다 —
+# 임베딩을 안 부른다 / 표기 차이를 흡수한다 / 다른 문자열은 아무리 비슷해도 미스다 /
+# 무효화는 그대로 문다. 근거는 plan_log/시맨틱-캐시.md 6회차.
+
+
+# **이 갈래의 존재 이유가 이것이다** — 조회에 임베딩이 안 든다. 수가 아니라 계약이라
+# 호출 횟수를 직접 센다
+def test_exact_mode_looks_up_without_embedding() -> None:
+    query = "유예기간이 언제까지인가요?"
+    point = _Point(_payload_of(_answer(query)), score=0.0, point_id=cache_point_id_for(query))
+    store = _FakeStore(_FakeClient(point=point), chunks=[_stored()])
+    embedder = _FakeEmbedder()
+
+    hit = _cache(store, threshold=None, mode="exact").lookup(query, embedder=embedder)
+
+    assert hit is not None
+    assert embedder.calls == []
+
+
+# 눈에 같은 질문은 같은 자리다. `cache_point_id_for()` 가 NFC + 공백 정규화라 표기 차이를
+# 흡수한다 — 사용자가 같은 질문을 두 번 칠 때 띄어쓰기까지 같으리라 기대할 수 없다
+def test_exact_mode_absorbs_spacing_and_nfc() -> None:
+    query = "유예기간이 언제까지인가요?"
+    point = _Point(_payload_of(_answer(query)), score=0.0, point_id=cache_point_id_for(query))
+    store = _FakeStore(_FakeClient(point=point), chunks=[_stored()])
+
+    again = unicodedata.normalize("NFD", "  유예기간이   언제까지인가요?  ")
+    hit = _cache(store, threshold=None, mode="exact").lookup(again, embedder=_FakeEmbedder())
+
+    assert hit is not None
+    assert hit.cached_from is not None
+    assert hit.cached_from.query == query
+
+
+# **완전 일치의 정의이자 시맨틱과 갈리는 지점이다.** 뜻이 같아도 문자열이 다르면 미스다 —
+# 이 갈래가 "틀릴 수가 없는" 근거가 바로 이것이고, 동시에 1회차가 기각했던 사유이기도 하다
+def test_exact_mode_misses_a_paraphrase() -> None:
+    stored_query = "유예기간이 언제까지인가요?"
+    point = _Point(
+        _payload_of(_answer(stored_query)), score=0.99, point_id=cache_point_id_for(stored_query)
+    )
+    store = _FakeStore(_FakeClient(point=point), chunks=[_stored()])
+    embedder = _FakeEmbedder()
+
+    miss = _cache(store, threshold=None, mode="exact").lookup(
+        "유예 기간은 언제까지죠?", embedder=embedder
+    )
+
+    assert miss is None
+    assert embedder.calls == []
+
+
+# 점수는 1.0 이다. 같은 정규화 문자열이면 같은 벡터이고 이 컬렉션의 벡터는 단위 길이라,
+# 화면 배지가 보여주는 유사도가 거짓이 아니다
+def test_exact_mode_reports_similarity_one() -> None:
+    query = "유예기간이 언제까지인가요?"
+    point = _Point(_payload_of(_answer(query)), score=0.0, point_id=cache_point_id_for(query))
+    store = _FakeStore(_FakeClient(point=point), chunks=[_stored()])
+
+    hit = _cache(store, threshold=None, mode="exact").lookup(query, embedder=_FakeEmbedder())
+
+    assert hit is not None
+    assert hit.cached_from is not None
+    assert hit.cached_from.score == pytest.approx(1.0)
+
+
+# **무효화는 갈래를 안 탄다.** 근거 청크가 사라졌으면 문자열이 같아도 미스이고 항목이 지워진다 —
+# 낡은 답을 주는 것이 이 기능의 위험이라, 판정 방식이 바뀌었다고 그 방어가 빠지면 안 된다
+def test_exact_mode_still_drops_stale_entries() -> None:
+    query = "유예기간이 언제까지인가요?"
+    point = _Point(_payload_of(_answer(query)), score=0.0, point_id=cache_point_id_for(query))
+    client = _FakeClient(point=point)
+    store = _FakeStore(client, chunks=[])  # 근거가 저장소에서 사라졌다
+
+    miss = _cache(store, threshold=None, mode="exact").lookup(query, embedder=_FakeEmbedder())
+
+    assert miss is None
+    assert client.deleted
+
+
+# **저장은 두 갈래가 똑같고 진짜 벡터를 넣는다.** 더미를 넣으면 나중에 semantic 으로 돌렸을 때
+# 조용히 오염된 캐시를 검색하게 된다 — 컬렉션 이름이 모델 교체는 막지만 이건 못 막는다
+def test_exact_mode_still_stores_a_real_vector() -> None:
+    client = _FakeClient(exists=True)
+    embedder = _FakeEmbedder()
+
+    assert _cache(_FakeStore(client), threshold=None, mode="exact").put(
+        _answer(), embedder=embedder
+    )
+    assert list(client.upserted[0].vector) == _VECTOR
+    assert embedder.calls == ["유예기간이 언제까지인가요?"]
+
+
+# --- 켜짐 진리표 -------------------------------------------------------------
+
+
+# 기본 조합. **`.env` 를 안 건드리면 지금까지와 글자 그대로 같다**
+def test_semantic_without_threshold_stays_off() -> None:
+    config = IngestConfig()
+    object.__setattr__(config, "_answer_cache", AnswerCacheConfig(answer_cache_threshold=None))
+
+    assert get_answer_cache(_FakeStore(_FakeClient()), config) is None
+
+
+# **`exact` 는 임계값 없이 켜진다** — 이 축에는 정할 값이 없기 때문이다. 임계값을 요구하면
+# 근거 없는 수를 만들어야 하는데, 그것이 1회차가 기본값 자체를 없앤 이유였다
+def test_exact_turns_on_without_a_threshold() -> None:
+    config = IngestConfig()
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_mode="exact", answer_cache_threshold=None),
+    )
+
+    cache = get_answer_cache(_FakeStore(_FakeClient()), config)
+
+    assert cache is not None
+    assert cache.mode == "exact"
+    assert cache.threshold is None

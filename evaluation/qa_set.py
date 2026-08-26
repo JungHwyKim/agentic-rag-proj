@@ -39,6 +39,27 @@ AI 가이드가 요약절과 상세절에 같은 문장을 되풀이해 15건 �
 
 **쪽으로 판정하면 안 된다.** `sih-08` 은 같은 1쪽 안에서 되풀이돼 쪽으로는 안 갈린다.
 
+## 부정 예시는 `answerable: false` 다 — 빈 `gold_spans` 가 아니라
+
+Phase 4(Relevance Evaluator)를 재려면 **답이 문서에 없는 질의**가 있어야 한다. 지금 세트는
+전부 정답이 실재해서 *"항상 충분"* 이라고만 답하는 Evaluator 가 100점을 받는다.
+
+그것을 **빈 `gold_spans` 로 표시하지 않는다.** 빈 값은 지금 *오류의 신호*(오타·누락)이고,
+뜻을 뒤집으면 진짜 누락이 조용히 부정 예시가 된다. `answer_type` 에 `none` 을 더하는 것도
+아니다 — 그 필드는 *"답이 어디서 왔나"*(text/table/image) 축이라 한 필드가 두 축을 겸하게
+된다. 그래서 **필드를 하나 더 둔다.** 기본값이 `True` 라 기존 레코드는 그대로 산다.
+
+부정 레코드에는 `gold_spans` 도 `gold_page` 도 **비어 있어야** 한다. 답이 없으니 span 도
+쪽도 있을 수 없고, 차 있으면 라벨과 내용이 어긋난 것이라 `validate_items()` 가 막는다.
+
+**검수 도장은 그대로 돈다.** `content_hash(query, [])` 가 질의 하나로 지문을 만드는데,
+부정에서 사람이 판단한 것이 *"이 질문의 답이 이 코퍼스에 없다"* 하나라 그게 정확하다.
+
+**채점은 `scoring.py` 가 아니라 Evaluator 쪽 자[尺]가 한다.** `score_query()` 는 빈
+`gold_spans` 에 예외를 던지고 그대로 둔다 — `hit@k = 0 이면 정답` 으로 정의하면 정답이 없어
+**자동 만점**이라 검색기를 못 가르고 `recall` 은 분모가 0이다. 러너가 부정을 건너뛰되
+건너뛴 수를 리포트에 찍는다(`run_eval.py`).
+
 ## 모든 span 은 그룹의 **모든 포맷**에서 찾을 수 있어야 한다
 
 포맷 비교(`plan_log/검색-생성.md` 비교 5번)가 성립하는 조건이다. HWPX 에만 있는 문장을
@@ -87,6 +108,9 @@ class QAItem:
     source_doc: str
     # 답을 담은 원문 조각들. **전부** 찾아야 recall 1.0 이다
     gold_spans: list[str]
+    # 답이 이 코퍼스에 있는가. 거짓이면 **부정 예시**이고 gold_spans·gold_page 가 비어 있어야
+    # 한다 (모듈 docstring 참고). 기본값이 참이라 기존 레코드는 이 키가 없어도 그대로 산다
+    answerable: bool = True
     answer_type: str = "text"
     reviewed_by: str = "pending"
     # 사람 검수 때 남긴 말. 채점에 안 쓴다
@@ -159,14 +183,23 @@ def validate_items(items: list[QAItem]) -> list[str]:
 
         if not item.query.strip():
             problems.append(f"{item.query_id}: query 가 비었다")
-        if not item.gold_spans or any(not s.strip() for s in item.gold_spans):
-            problems.append(f"{item.query_id}: gold_spans 가 비었거나 빈 문자열을 담고 있다")
         if item.source_doc not in DOCUMENT_GROUPS:
             problems.append(f"{item.query_id}: 모르는 source_doc {item.source_doc!r}")
-        if item.answer_type not in ANSWER_TYPES:
-            problems.append(f"{item.query_id}: answer_type 이 {item.answer_type!r}")
         if item.reviewed_by not in REVIEW_STATES:
             problems.append(f"{item.query_id}: reviewed_by 가 {item.reviewed_by!r}")
+
+        # 긍정과 부정은 요구하는 것이 반대다 (모듈 docstring 참고). 부정에서 answer_type 을
+        # 안 보는 것은 답이 없어 매체가 없기 때문이고, 부정은 검색 채점 자체에 안 들어간다
+        if item.answerable:
+            if not item.gold_spans or any(not s.strip() for s in item.gold_spans):
+                problems.append(f"{item.query_id}: gold_spans 가 비었거나 빈 문자열을 담고 있다")
+            if item.answer_type not in ANSWER_TYPES:
+                problems.append(f"{item.query_id}: answer_type 이 {item.answer_type!r}")
+        elif item.gold_spans:
+            problems.append(
+                f"{item.query_id}: answerable 이 거짓인데 gold_spans 가 차 있다 "
+                "— 답이 있으면 부정 예시가 아니다"
+            )
 
         # 검수 도장이 그때 본 문장에 붙어 있는지 (모듈 docstring 참고)
         if item.reviewed_by == "human":
@@ -179,15 +212,23 @@ def validate_items(items: list[QAItem]) -> list[str]:
                 )
 
         # gold_page 의 키는 그 그룹의 포맷 라벨 전부여야 한다. 라벨을 바꾸고 세트를 안 고치는
-        # 것을 여기서 막는다 — 안 막으면 조용히 빈 칸이 되고 검수자가 원문을 못 찾는다
-        expected = set(format_labels(item.source_doc))
-        if expected:
-            got = set(item.gold_page)
-            if got != expected:
+        # 것을 여기서 막는다 — 안 막으면 조용히 빈 칸이 되고 검수자가 원문을 못 찾는다.
+        # **부정은 반대로 비어 있어야 한다** — 답이 없으니 열어 볼 쪽도 없다
+        if not item.answerable:
+            if item.gold_page:
                 problems.append(
-                    f"{item.query_id}: gold_page 라벨이 안 맞는다 "
-                    f"(빠짐 {sorted(expected - got)} / 모름 {sorted(got - expected)})"
+                    f"{item.query_id}: answerable 이 거짓인데 gold_page 가 차 있다 "
+                    "— 답이 없어 가리킬 쪽이 없다"
                 )
+        else:
+            expected = set(format_labels(item.source_doc))
+            if expected:
+                got = set(item.gold_page)
+                if got != expected:
+                    problems.append(
+                        f"{item.query_id}: gold_page 라벨이 안 맞는다 "
+                        f"(빠짐 {sorted(expected - got)} / 모름 {sorted(got - expected)})"
+                    )
         # 너무 짧은 span 은 다른 곳에도 우연히 있어 오답을 hit 으로 만든다
         for span in item.gold_spans:
             if len(span.strip()) < 6:

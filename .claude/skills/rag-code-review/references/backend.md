@@ -87,3 +87,30 @@
 
 둘 다 `PROJECT_ROOT/.env` 를 읽는다. 파싱 설정이 backend 쪽으로 넘어오면 `ingest()` 를
 직접 부르는 경로에서 그 설정이 안 먹는다 — 지적한다.
+
+## 5. 게으른 getter와 기동 워밍업 — 되돌리면 조용히 깨지는 것 여섯
+
+`routes/query.py` 의 `_embedder`·`_bm25`·`_reranker` 와 `warm_up()`, `main.py` 의 lifespan
+스레드에 적용한다. 근거는 `verify_log/2026-08-26-{첫질의-대표값,기동-워밍업}.md` 다.
+
+- **`warmup_on_startup` 의 기본값을 켜짐으로 바꾸지 않는다.** `tests/api` 의 일부가
+  `with TestClient(...)` 로 **lifespan 을 진짜로 돌린다**(`test_query_route.py` ·
+  `test_shadow_routes.py`). 켜진 채 커밋되면 **기본 pytest 가 KURE 가중치 2.27GB 를 적재한다** —
+  임베딩 provider 핀과 같은 종류의 유출인데 여기서는 픽스처가 아니라 **설정 기본값이 유일한
+  방어**다. `offline_config` 는 이 경로를 안 지난다
+- **워밍업을 "객체만 만드는" 것으로 바꾸지 않는다.** `get_embedder()`·`get_reranker()` 자체는
+  0.002초이고 가중치는 **첫 사용**에 올라온다. 생성만 하는 워밍업은 **아무것도 안 하면서 다 한
+  것처럼 보이고**, 그 실패는 *"첫 질의가 여전히 21.8초"* 로만 드러난다
+- **리랭커 워밍업 후보를 하나로 줄이지 않는다.** `local_ce.rerank()` 는 후보가 1개 이하면
+  모델을 안 올리고 그대로 돌려준다. 실경로는 후보가 늘 50이라 이 경계가 **테스트로만 잡힌다**
+- **getter 의 인자를 `Request` 로 되돌리지 않는다.** 워밍업에는 요청이 없어서 `FastAPI` 를
+  받는 것이고, 그래야 배경 스레드와 라우트가 **같은 인스턴스**를 본다. 되돌릴 거면 `ask()` 의
+  호출부 셋을 **같이** 되돌려야 한다 — 시그니처만 바꾸면 `app.state` 가 실제로는
+  `request.state` 를 가리켜 `KeyError: 'ingest_config'` 로 `tests/api` 가 무더기로 깨진다.
+  **타입 힌트가 안 잡아준다**(`from __future__ import annotations` + 둘 다 `.state` 를 갖는다)
+- **`_BUILD_LOCK` 을 지우지 않는다.** 없으면 워밍업이 `state.embedder` 를 세팅하기 전에 들어온
+  질의가 자기 것을 또 만들어 **2.27GB 가 두 벌** 뜬다. 에러가 안 나고 메모리로만 드러난다.
+  `_rerank_ready` 는 표시지 락이 아니다
+- **워밍업에서 저장소를 건드리지 않는다.** `embed_query()` 도 `rerank()` 도 qdrant 를 안 열어서
+  lifespan 이 남겨 둔 게으름(*"색인이 아직 없으면 서버가 아예 안 뜬다"*)이 유지된다. BM25 를
+  데우고 싶어도 넣지 않는다 — 414청크에서 **0.09초**라 얻을 것이 없고 그 게으름만 깨진다

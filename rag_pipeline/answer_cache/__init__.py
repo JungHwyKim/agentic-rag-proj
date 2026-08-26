@@ -11,6 +11,20 @@
 이름이 `cache/` 가 아닌 이유: 임베딩·Vision 이 쓰는 `ResultCache`(내용 해시로 API 응답을
 재사용한다)와 축이 다르다. 저쪽은 *같은 입력*을 아끼고 이쪽은 *비슷한 입력*을 아낀다.
 
+## 무엇을 "같은 질문"으로 보나 — 축이 둘이다
+
+`answer_cache_mode` 가 갈래를 고르고, 아래 임계값은 **시맨틱 갈래에만** 딸린 자[尺]다.
+
+- `semantic`(기본) — 질문 벡터의 유사도. 임계값이 없으면 통째로 꺼진다(아래 절)
+- `exact` — 정규화한 문자열이 같은가. **자[尺]가 없어 임계값도 필요 없다.**
+  `cache_point_id_for()` 가 NFC + 공백 정규화 uuid5 라 같은 질문이 늘 같은 자리이고,
+  조회가 벡터 검색이 아니라 id 조회라 **`lookup()` 에서 임베딩을 아예 안 부른다**
+
+`exact` 가 차선으로 선 경위는 `plan_log/시맨틱-캐시.md` 4~6회차다 — 양성·음성 분포가
+겹쳐 임계값을 *"못 정한다"* 로 닫았고, 1회차가 걸어둔 조건이 그때 발화했다.
+**그래도 기본값은 `semantic` 이라 저장소 커밋본은 여전히 꺼진 채다** — 1회차의 기각 사유
+절반(*비슷한 질문을 못 잡는다*)이 그대로 살아 있어, 켤지는 실사용 질의 로그가 답한다.
+
 ## 왜 임계값이 없으면 캐시가 통째로 꺼지나
 
 **이 기능의 유일한 위험이 임계값이기 때문이다.** 헐거우면 다른 질문에 옛 답을 준다 —
@@ -48,8 +62,11 @@ __all__ = ["QdrantAnswerCache", "cache_point_id_for", "get_answer_cache"]
 # 넓히지 않는 판단은 `list_documents()` 와 같다.
 def get_answer_cache(store: QdrantStore, config: IngestConfig) -> QdrantAnswerCache | None:
     cache_config = config.answer_cache
+    mode = cache_config.answer_cache_mode
     threshold = cache_config.answer_cache_threshold
-    if threshold is None:
+
+    # 꺼지는 조건은 **시맨틱 갈래에만** 있다. `exact` 는 정할 값이 없어 임계값을 안 본다
+    if mode == "semantic" and threshold is None:
         return None
 
     return QdrantAnswerCache(
@@ -57,5 +74,6 @@ def get_answer_cache(store: QdrantStore, config: IngestConfig) -> QdrantAnswerCa
         indexing=config.indexing,
         embedding=config.embedding,
         config=cache_config,
+        mode=mode,
         threshold=threshold,
     )

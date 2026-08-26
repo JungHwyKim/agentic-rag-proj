@@ -50,38 +50,55 @@ startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 �
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, Request
+import threading
+import time
+
+from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend.app.core.config import get_settings
+from backend.app.core.query_log import append_query_log
 from backend.app.core.templates import templates
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.query import answer_question
 from rag_pipeline.retrieval import build_bm25_index, get_reranker
+from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 router = APIRouter(tags=["query"])
 
+# 셋을 만드는 구간을 한 번에 하나만 지나가게 한다.
+#
+# **워밍업이 이 락을 필요하게 만들었다.** 전에는 만드는 쪽이 요청 하나뿐이라 경쟁이 없었는데,
+# 이제 배경 스레드가 같은 getter 를 부른다. 락이 없으면 워밍업이 `state.embedder` 를 세팅하기
+# **전에** 들어온 질의가 자기 것을 또 만들어 **KURE 2.27GB 가 두 벌** 뜬다 — 에러 없이
+# 메모리만 두 배가 되므로 눈에 안 띈다. `_rerank_ready` 는 표시지 락이 아니다
+_BUILD_LOCK = threading.Lock()
 
-# 앱 수명 동안 하나뿐인 embedder 를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고)
-def _embedder(request: Request):  # noqa: ANN202 - Embedder Protocol 은 런타임 타입이 아니다
-    embedder = getattr(request.app.state, "embedder", None)
-    if embedder is None:
-        config = request.app.state.ingest_config
-        embedder = get_embedder(config.embedding)
-        request.app.state.embedder = embedder
-    return embedder
+
+# 앱 수명 동안 하나뿐인 embedder 를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고).
+#
+# **`Request` 가 아니라 `FastAPI` 를 받는 것은 워밍업 때문이다** — lifespan 의 배경 스레드에는
+# 요청이 없다. 요청 밖에서도 부를 수 있어야 두 경로가 **같은 인스턴스**를 공유한다
+def _embedder(app: FastAPI):  # noqa: ANN202 - Embedder Protocol 은 런타임 타입이 아니다
+    with _BUILD_LOCK:
+        embedder = getattr(app.state, "embedder", None)
+        if embedder is None:
+            embedder = get_embedder(app.state.ingest_config.embedding)
+            app.state.embedder = embedder
+        return embedder
 
 
 # 앱 수명 동안 하나뿐인 BM25 인덱스를 얻는다. 없으면 이때 짓는다 (모듈 docstring 참고).
 # **예외를 안 던진다** — build_bm25_index() 가 실패를 빈 인덱스 + 경고로 바꿔 주므로,
 # 색인 전이라도 질의는 dense 로 돈다
-def _bm25(request: Request):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처에 노출하지 않는다
-    index = getattr(request.app.state, "bm25", None)
-    if index is None:
-        index = build_bm25_index(request.app.state.store)
-        request.app.state.bm25 = index
-    return index
+def _bm25(app: FastAPI):  # noqa: ANN202 - Bm25Index 를 라우트 시그니처에 노출하지 않는다
+    with _BUILD_LOCK:
+        index = getattr(app.state, "bm25", None)
+        if index is None:
+            index = build_bm25_index(app.state.store)
+            app.state.bm25 = index
+        return index
 
 
 # 앱 수명 동안 하나뿐인 리랭커를 얻는다. 없으면 이때 만든다 (모듈 docstring 참고).
@@ -90,12 +107,54 @@ def _bm25(request: Request):  # noqa: ANN202 - Bm25Index 를 라우트 시그니
 # 돌려주고 그것이 곧 꺼진 상태다. 그래서 만들었는지를 `state` 에 없는 것으로 판정하면
 # **꺼져 있을 때 질의마다 다시 만들게 된다.** 지금은 만드는 비용이 없지만 로컬 갈래에서는
 # 그 자리가 곧 모델 적재라, 만들었다는 사실 자체를 `_rerank_ready` 로 따로 표시한다
-def _reranker(request: Request):  # noqa: ANN202 - Reranker 를 라우트 시그니처에 노출하지 않는다
-    state = request.app.state
-    if not getattr(state, "_rerank_ready", False):
-        state.reranker = get_reranker(request.app.state.ingest_config.rerank)
-        state._rerank_ready = True
-    return state.reranker
+def _reranker(app: FastAPI):  # noqa: ANN202 - Reranker 를 라우트 시그니처에 노출하지 않는다
+    with _BUILD_LOCK:
+        state = app.state
+        if not getattr(state, "_rerank_ready", False):
+            state.reranker = get_reranker(state.ingest_config.rerank)
+            state._rerank_ready = True
+        return state.reranker
+
+
+# 워밍업이 쓰는 버리는 입력. 캐시에 항목이 각 1건 남는데 무해하다
+_WARMUP_TEXT = "워밍업"
+
+
+# 리랭커를 데울 후보. **둘이어야 한다** — `rerank()` 가 후보 1개 이하면 모델을 안 올리고
+# 받은 것을 그대로 돌려준다(`local_ce.py`). 하나만 주면 워밍업이 조용히 아무것도 안 한다
+def _warmup_candidates() -> list[RetrievedChunk]:
+    return [
+        RetrievedChunk(chunk_id=f"warmup:{i}", document_id="warmup", text=f"{_WARMUP_TEXT} {i}")
+        for i in range(2)
+    ]
+
+
+# 기동 직후 배경 스레드에서 모델 가중치를 미리 올린다. `main.py` 의 lifespan 이 부른다.
+#
+# **객체를 만드는 것으로는 아무것도 안 데워진다** — `get_embedder()`·`get_reranker()` 자체는
+# 0.002초이고 가중치는 **첫 사용**에 올라온다. 그래서 버리는 인코딩·채점을 실제로 돌린다.
+# 회수되는 것은 첫 질의 21.8초 중 약 19초다 (verify_log/2026-08-26-첫질의-대표값.md).
+#
+# **저장소는 안 건드린다.** `embed_query()` 도 `rerank()` 도 qdrant 를 안 열어서, lifespan 이
+# 일부러 남겨 둔 게으름(*"색인이 아직 없으면 서버가 아예 안 뜬다"*)이 그대로 유지된다.
+# BM25 도 일부러 뺐다 — 414청크에서 0.09초라 회수할 것이 없다.
+#
+# **실패해도 안 던진다.** 워밍업이 서버를 죽이면 게으른 적재보다 나빠진다. 못 데우면 그냥
+# 안 데워진 채로 두고 첫 질의가 지금처럼 물면 된다 — 다만 **조용히 넘기지는 않는다**
+def warm_up(app: FastAPI) -> None:
+    errors: list[str] = []
+    try:
+        _embedder(app).embed_query(_WARMUP_TEXT)
+    except Exception as exc:  # noqa: BLE001 - 워밍업 실패는 기능이 아니다. 게으른 적재로 떨어진다
+        errors.append(f"embedder: {exc}")
+    try:
+        reranker = _reranker(app)
+        # None 이 정상값이다 — `RERANK_MODEL` 이 비면 리랭커가 꺼진 것이라 데울 것이 없다
+        if reranker is not None:
+            reranker.rerank(_WARMUP_TEXT, _warmup_candidates())
+    except Exception as exc:  # noqa: BLE001 - 위와 같다
+        errors.append(f"reranker: {exc}")
+    app.state.warmup_errors = errors
 
 
 # 질문 하나를 받아 답변 말풍선 조각을 돌려준다
@@ -108,24 +167,38 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         )
 
     # 검색·생성은 동기·네트워크 바운드라 이벤트 루프 밖으로 뺀다 (업로드가 로더를 넘기는 것과 같다)
+    started = time.perf_counter()
     answer = await run_in_threadpool(
         answer_question,
         text,
         store=request.app.state.store,
-        embedder=_embedder(request),
+        # **임베더도 threadpool 로 넘긴다** — 리랭커와 같은 이유인데 이쪽이 더 크다.
+        # 워밍업이 꺼져 있으면 첫 인코딩이 11.8~14.7초이고(verify_log/2026-08-26-첫질의-대표값.md)
+        # 그동안 이벤트 루프에서 하면 **서버 전체가 그만큼 멈춘다**
+        embedder=await run_in_threadpool(_embedder, request.app),
         config=request.app.state.ingest_config,
-        bm25=await run_in_threadpool(_bm25, request),
+        bm25=await run_in_threadpool(_bm25, request.app),
         # 모델 이름이 없으면 None 이라 RRF 순서로 돈다. 라우트에 스위치를 두지 않는 이유는
         # bm25·cache 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
         # **threadpool 로 넘기는 것은 로컬 갈래 때문이다** — cross-encoder 적재가 초 단위라
         # 이벤트 루프에서 하면 첫 질의 동안 서버 전체가 멈춘다
-        reranker=await run_in_threadpool(_reranker, request),
+        reranker=await run_in_threadpool(_reranker, request.app),
         # 임계값이 없으면 None 이라 캐시 없이 돈다. 라우트에 스위치를 두지 않는 이유는
         # bm25 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
         # **getattr 인 것은 lifespan 을 안 거치고 app 을 세우는 호출부가 있어서**다 —
         # 그때 여기서 죽으면 캐시가 없다는 이유로 질의 전체가 죽는다
         cache=getattr(request.app.state, "answer_cache", None),
     )
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+
+    # **성공한 질의만 남는다** — 위에서 예외가 나면 여기 못 온다. 그것이 분모의 뜻을
+    # "답이 나온 질의" 하나로 고정한다 (`core/query_log.py`). 파일 쓰기라 루프 밖으로 뺀다
+    settings = get_settings()
+    if settings.query_log_enabled:
+        await run_in_threadpool(
+            append_query_log, settings.query_log_path, text, answer, elapsed_ms=elapsed_ms
+        )
+
     return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
 
 

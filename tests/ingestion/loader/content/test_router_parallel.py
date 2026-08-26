@@ -66,7 +66,6 @@ def _ocr_config(**overrides) -> ContentRoutingConfig:
 # 이 재정렬이 병렬화의 전제라, 깨지면 요소 순서가 완료 순서로 흐트러진다
 def test_parallel_output_keeps_order(mocker, png_bytes) -> None:
     count = 12
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
     _fake_ocr(mocker, count)
 
     # 입력을 역순으로 넣어 route_all 의 정렬까지 함께 본다
@@ -85,9 +84,8 @@ def test_parallel_matches_serial(mocker, png_bytes) -> None:
     blobs = [png_bytes(400 + i, 200) for i in range(count)]
 
     def _run(workers: int):
-        mocker.patch.object(router_module, "_MAX_OCR_WORKERS", workers)
         _fake_ocr(mocker, count, delay=0.001)
-        ctx = LoadContext(config=_ocr_config())
+        ctx = LoadContext(config=_ocr_config(ocr_max_workers=workers))
         elements = route_all(
             [_image_region(i, blobs[i]) for i in range(count)], ctx, ContentRouter()
         )
@@ -106,7 +104,6 @@ def test_parallel_matches_serial(mocker, png_bytes) -> None:
 # warn() 은 `not in` 검사와 append 가 갈라져 있어 락이 없으면 중복이 샌다
 def test_warn_is_not_duplicated_under_workers(mocker, png_bytes) -> None:
     count = 24
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
     _fake_ocr(mocker, count, delay=0.001, on_call=lambda ctx, _index: ctx.warn("같은 경고"))
 
     regions = [_image_region(i, png_bytes(400 + i, 200)) for i in range(count)]
@@ -156,7 +153,6 @@ def test_vision_stays_serial_and_respects_cap(mocker, png_bytes) -> None:
             chat=SimpleNamespace(completions=SimpleNamespace(create=_create))
         ),
     )
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
 
     config = _ocr_config(
         image_handler="vision", openai_api_key="test-key", max_vision_calls_per_doc=2
@@ -173,7 +169,6 @@ def test_vision_stays_serial_and_respects_cap(mocker, png_bytes) -> None:
 
 # 텍스트·표는 병렬 구간을 안 타지만 순서는 이미지와 함께 맞물려야 한다
 def test_mixed_regions_interleave_by_order(mocker, png_bytes) -> None:
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
     _fake_ocr(mocker, 4, delay=0.002)
 
     regions = [
@@ -200,7 +195,6 @@ def test_mixed_regions_interleave_by_order(mocker, png_bytes) -> None:
 
 # 열 수 없는 이미지는 병렬 구간에서 걸러지고, 직렬 구간이 다시 열지 않는다
 def test_unopenable_image_is_not_retried(mocker, png_bytes) -> None:
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 4)
     _fake_ocr(mocker, 3, delay=0.001)
     spy = mocker.spy(image_ocr, "open_image")
 
@@ -209,7 +203,7 @@ def test_unopenable_image_is_not_retried(mocker, png_bytes) -> None:
         _image_region(1, b"not-an-image"),
         _image_region(2, png_bytes(402, 200)),
     ]
-    ctx = LoadContext(config=_ocr_config())
+    ctx = LoadContext(config=_ocr_config(ocr_max_workers=4))
 
     elements = route_all(regions, ctx, ContentRouter())
 
@@ -225,7 +219,6 @@ def test_unopenable_image_is_not_retried(mocker, png_bytes) -> None:
 # 경고는 문자열이라 자기 자리를 모른다 — 순서가 append 시각에 실리면 되돌릴 방법이 없다
 def test_warning_order_follows_document_order(mocker, png_bytes) -> None:
     count = 12
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
     _fake_ocr(mocker, count, on_call=lambda ctx, index: ctx.warn(f"경고 {index:02d}"))
 
     regions = [_image_region(i, png_bytes(400 + i, 200)) for i in range(count)]
@@ -238,7 +231,6 @@ def test_warning_order_follows_document_order(mocker, png_bytes) -> None:
 
 # 직렬 핸들러(텍스트)와 병렬 OCR 이 낸 경고도 문서 순서로 섞여야 한다
 def test_serial_and_parallel_warnings_interleave(mocker, png_bytes) -> None:
-    mocker.patch.object(router_module, "_MAX_OCR_WORKERS", 8)
     _fake_ocr(mocker, 6, on_call=lambda ctx, index: ctx.warn(f"이미지 {index}"))
 
     def _text_handle(region, ctx):
@@ -319,3 +311,35 @@ def test_child_shares_config_but_not_state() -> None:
     assert child.warnings == []
     child.warn("자식 것")
     assert parent.warnings == ["부모 것"]
+
+
+# 워커 수는 **셋의 최솟값**이다 — 설정 상한 · 이 머신의 코어 수 · 실제 할 일의 수.
+# 설정을 안 보고 상수로 돌아가면 발열 손잡이가 조용히 사라진다
+def test_ocr_workers_respects_config_cap(mocker) -> None:
+    mocker.patch.object(router_module.os, "cpu_count", return_value=16)
+
+    assert router_module._ocr_workers(100, _ocr_config(ocr_max_workers=2)) == 2
+    assert router_module._ocr_workers(100, _ocr_config(ocr_max_workers=8)) == 8
+    # 할 일이 상한보다 적으면 그만큼만
+    assert router_module._ocr_workers(3, _ocr_config(ocr_max_workers=8)) == 3
+
+
+# 코어 수가 상한보다 적으면 코어 수가 이긴다. 상한만 보면 1코어 머신에서 8개를 띄운다
+def test_ocr_workers_never_exceeds_cpu_count(mocker) -> None:
+    mocker.patch.object(router_module.os, "cpu_count", return_value=2)
+
+    assert router_module._ocr_workers(100, _ocr_config(ocr_max_workers=8)) == 2
+
+
+# 0 이나 음수를 넣어도 최소 1이다. 0을 넘기면 ThreadPoolExecutor 가 거기서 터진다
+def test_ocr_workers_floor_is_one(mocker) -> None:
+    mocker.patch.object(router_module.os, "cpu_count", return_value=16)
+
+    assert router_module._ocr_workers(100, _ocr_config(ocr_max_workers=0)) == 1
+
+
+# 기본값은 8이다. **이 값이 바뀌면 verify_log/2026-08-24-ocr-병렬화.md 의 51.8초가
+# 다른 설정의 수가 된다** — 기본을 안 낮추기로 한 결정을 여기서 잠근다
+def test_default_cap_is_eight() -> None:
+    assert ContentRoutingConfig(openai_api_key="").ocr_max_workers == 8
+

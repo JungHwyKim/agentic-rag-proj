@@ -72,6 +72,7 @@ from rag_pipeline.config import EmbeddingConfig
 from rag_pipeline.exceptions import EmbeddingError
 from rag_pipeline.ingestion.embedding.base import EmbeddingUsage, cache_salt_for
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
+from rag_pipeline.runtime import apply_torch_threads
 
 
 # sentence-transformers 모델을 만든다.
@@ -79,6 +80,12 @@ from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 # `device` 를 상수가 아니라 인자로 받는 것은 설정이 되었기 때문이고, 그래도 **기본값은
 # 여전히 `cpu`** 다 — 자동 감지를 안 하는 이유는 `config.py` 의 `embedding_device` 에 있다
 def _make_model(model_name: str, device: str) -> Any:
+    # 스레드 상한을 **모델을 올리기 전에** 먹인다. 값이 프로세스 전역이라 여기와
+    # `local_ce._load_model()` 둘 중 먼저 오는 쪽이 적용하고 나머지는 통과한다
+    # (`runtime.py` 의 멱등 문단). `device="cuda"` 면 실질 효과가 없지만 부르는 것을
+    # 갈라 두지 않는다 — 갈래가 늘면 "어느 경로가 스레드를 안 먹었나"를 다시 따져야 한다
+    apply_torch_threads()
+
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
