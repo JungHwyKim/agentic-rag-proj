@@ -15,12 +15,19 @@ import pytest
 
 from evaluation.documents import DOCUMENT_GROUPS, available_files, format_labels
 from evaluation.qa_set import (
+    QA_SET_PATH,
+    QAItem,
     _distinct_runs,
     content_hash,
     load_qa_set,
     validate_items,
     validate_spans_across_formats,
 )
+from evaluation.run_eval import split_scorable
+from evaluation.scoring import score_query
+
+# 사람이 쓴 질의 세트. 부정 예시가 사는 곳이라 기본 세트와 갈라 본다
+HUMAN_SET_PATH = QA_SET_PATH.parent / "qa_set_human.jsonl"
 
 # 세트 규모의 하한. `plan_log/평가-세트.md` 2회차의 50~80 중 아래쪽이고 **임시값이다** —
 # 비교 축이 여섯이라 이보다 적으면 축마다 유의성을 못 낸다는 것이 근거의 전부다
@@ -141,3 +148,122 @@ def test_review_stamp_breaks_when_the_content_changes(qa_items):
         )
     ]
     assert not validate_items(fixed)
+
+
+# ------------------------------------------------------------------ 부정 예시
+#
+# 여기부터는 **가상 데이터**다. 실파일이 없어도 늘 돌아야 하고, 재는 것이 "세트가 썩었나"가
+# 아니라 "규칙이 도는가"라 세트 내용과 묶으면 안 된다.
+#
+# 부정 예시가 필요한 이유는 `evaluation/qa_set.py` 모듈 docstring 에 있다 — 지금 세트는
+# 전부 정답이 실재해서 *"항상 충분"* 이라고만 답하는 Evaluator 가 100점을 받는다.
+
+
+# 부정 레코드 하나. 기본은 계약을 지키는 모양이고 테스트가 한 칸씩 어긴다
+def _negative(**over):
+    base = dict(
+        query_id="hneg-01",
+        query="이 지침의 급식비 단가는 얼마인가요?",
+        source_doc="시행령-개정안-안내서",
+        gold_spans=[],
+        answerable=False,
+    )
+    base.update(over)
+    return QAItem(**base)
+
+
+# `answerable` 이 없는 레코드는 **긍정으로 읽힌다.** 기본값이 그렇기 때문이고,
+# 그래서 기존 60+20건이 이 필드를 안 적고도 그대로 산다
+def test_answerable_defaults_to_true():
+    assert QAItem.from_json({
+        "query_id": "x-01", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+    }).answerable is True
+
+
+# jsonl 에 적힌 `answerable` 이 실제로 실린다
+def test_answerable_is_read_from_json():
+    assert QAItem.from_json({
+        "query_id": "x-02", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": [], "answerable": False,
+    }).answerable is False
+
+
+# 계약을 지킨 부정 레코드는 통과한다. **긍정 쪽 검사가 안 먹는 것**이 이 테스트의 요점이다 —
+# 빈 `gold_spans` 도 빈 `gold_page` 도 부정에서는 정상이다
+def test_well_formed_negative_passes():
+    assert validate_items([_negative()]) == []
+
+
+# 부정인데 정답이 차 있으면 막는다. **라벨과 내용이 어긋난 것**이고, 그대로 두면
+# 채점에서 빠지는 레코드가 정답을 들고 있게 된다
+def test_negative_with_gold_spans_is_rejected():
+    problems = validate_items([_negative(gold_spans=["실제로는 있는 정답"])])
+    assert len(problems) == 1
+    assert "gold_spans 가 차 있다" in problems[0]
+
+
+# 부정인데 쪽이 차 있으면 막는다. 답이 없으면 검수자가 열어 볼 쪽도 없다.
+# **「정해야 할 것 넷」에 없던 다섯째 제약이다** — `gold_page` 라벨 검사가 그룹의 모든
+# 포맷과 정확히 일치하기를 요구해서, 안 풀면 부정이 통째로 못 들어온다
+def test_negative_with_gold_page_is_rejected():
+    problems = validate_items([_negative(gold_page={"hwpx": 3, "pdf": 3, "hwpx-가로": 5})])
+    assert len(problems) == 1
+    assert "gold_page 가 차 있다" in problems[0]
+
+
+# 긍정 쪽 검사는 그대로 산다 (회귀). `answerable` 을 더하면서 이쪽이 느슨해지면
+# 오타·누락이 조용히 통과한다 — 그것이 빈 `gold_spans` 를 부정의 표시로 안 쓴 이유다
+def test_answerable_item_still_requires_gold_spans():
+    problems = validate_items([_negative(answerable=True, gold_spans=[])])
+    assert any("gold_spans 가 비었거나" in p for p in problems)
+
+
+# 검수 도장은 부정에서도 돈다. **질의 하나에 묶인다** — 사람이 판단한 것이
+# *"이 질문의 답이 이 코퍼스에 없다"* 하나라 그것이 정확하다
+def test_review_stamp_binds_to_the_query_alone_for_negatives():
+    query = "이 지침의 급식비 단가는 얼마인가요?"
+    stamped = _negative(reviewed_by="human", reviewed_hash=content_hash(query, []))
+    assert validate_items([stamped]) == []
+
+    # 질의를 고치면 도장이 깨진다
+    moved = _negative(
+        query=query + " 그리고 교통비는요?",
+        reviewed_by="human",
+        reviewed_hash=content_hash(query, []),
+    )
+    assert any("검수 뒤에 질의나 정답이 바뀌었다" in p for p in validate_items([moved]))
+
+
+# **`score_query()` 는 여전히 빈 `gold_spans` 에 예외를 던진다.**
+#
+# 이 자물쇠를 풀면 부정 질의가 `hit@k = 0` 으로 **자동 만점**이 되어 검색기를 못 가르고,
+# `recall` 은 분모가 0 이 된다. 그래서 부정은 채점 규칙을 고쳐서가 아니라
+# **러너가 빼는 것**으로 다룬다 (`split_scorable`)
+def test_score_query_still_refuses_empty_gold_spans():
+    with pytest.raises(ValueError, match="채점할 수 없다"):
+        score_query("hneg-01", ["아무 청크 텍스트"], [], 10)
+
+
+# 러너가 부정을 채점에서 빼고 그 수를 센다. **센 값이 리포트에 실리는 것**이 요점이라,
+# 빼기만 하고 안 세면 세트가 48건인데 지표는 20건 기준인 것이 아무 데도 안 보인다
+def test_split_scorable_removes_negatives_and_counts_them():
+    items = [
+        _negative(query_id="hneg-01"),
+        _negative(query_id="hpos-01", answerable=True, gold_spans=["정답 문장 하나"]),
+        _negative(query_id="hneg-02"),
+    ]
+    scorable, skipped = split_scorable(items)
+    assert [i.query_id for i in scorable] == ["hpos-01"]
+    assert skipped == 2
+
+
+# 사람 세트가 긍정과 부정을 **둘 다** 들고 있고 통째로 성립한다.
+# 위 가상 데이터와 달리 이쪽은 실제로 커밋된 파일을 본다 — 부정을 넣다가 긍정 쪽 레코드를
+# 깨뜨리는 것을 여기서 잡는다 (span 검사는 fixtures 가 있을 때만이라 여기서 안 한다)
+def test_human_set_carries_both_kinds():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    assert validate_items(items) == []
+    positives = [i for i in items if i.answerable]
+    negatives = [i for i in items if not i.answerable]
+    assert positives and negatives, f"긍정 {len(positives)} · 부정 {len(negatives)}"

@@ -232,7 +232,10 @@ plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라�
 
 - **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다. 여기 이름을 옮겨 적지 않는다 — 옮기는 순간 다음 디렉터리가 생길 때 조용히 거짓이 된다(실제로 `answer_cache/` 가 생기며 그렇게 됐다)
 - **품질을 무엇으로 재나** — **검색**은 `evaluation/README.md`(정답 질의 세트와 러너),
-  **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다
+  **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다.
+  **검색 쪽 세트가 둘이고 재는 것이 다르다**(2026-08-26) — `qa_set.jsonl` 60건은 전부 정답이 실재해 **검색 지표**(`hit@k`·`MRR`·`nDCG`)를 재고,
+  `qa_set_human.jsonl` 45건은 부정 예시 25건을 담아 **Evaluator 의 충분/불충분 판정**을 잰다. 부정은 검색 채점에서 빠진다 —
+  정답이 없어 `hit@k` 가 정의상 만점이고 `recall` 은 분모가 0이라 **넣으면 지표가 아니라 상수가 된다**(`run_eval` 의 `skipped_unanswerable` 이 뺀 수를 찍는다)
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
 - **어떻게 여기까지 왔나** — `task_log/INDEX.md`
 - **아직 논의 중인 설계** — `plan_log/INDEX.md`
