@@ -32,6 +32,18 @@ Evaluator 의 실력이 아니라 검색기의 실패를 재게 된다.
 
 `rerank_diff.py` 가 같은 이유로 프로필을 리포트에서 읽는다. 여기도 같게 맞춘다.
 
+## 근거를 자르지 않는다 — 절단은 **한 방향으로만** 틀린다
+
+첫 검수(2026-08-26)에서 상위 3개를 **180자로 잘라** 냈다가 두 건이 뒤집혔다. 이 코퍼스의
+청크는 **1,100자대**라 `hsch-01` 의 답(*보존기간을 7종(영구, 준영구, 30년, …)으로 구분함*)도
+`hsch-08` 의 열람 조항 뒷부분도 절단면 뒤에 있었다. 25건 중 2건(8%)이다.
+
+**이것이 대칭이 아닌 것이 요점이다.** 근거를 짧게 보이면 검수자는 *"답이 없다"* 쪽으로
+기울고, 이 세트에서 그 방향이 곧 **부정을 늘리는 방향**이라 오검출이 조용히 쌓인다.
+반대 방향의 오검출(답이 없는데 있다고 보는 것)은 잘라도 안 생긴다.
+
+그래서 `--chars` 기본값이 청크 전문에 가깝다. **줄이려면 그 비대칭을 알고 줄인다.**
+
 ## 왜 색인을 다시 안 하나
 
 `inspect.py` 와 같다. 기준선·실험 실행이 만든 컬렉션이 `.cache/evaluation/runs/` 에 그대로
@@ -191,7 +203,8 @@ def main() -> int:
     parser.add_argument("--format", dest="fmt", default="hwpx")
     parser.add_argument("--qa-set", dest="qa_set", default=str(QA_SET_PATH))
     parser.add_argument("--top", type=int, default=8)
-    parser.add_argument("--chars", type=int, default=220, help="청크당 보여줄 글자 수")
+    # 기본값이 큰 이유는 모듈 docstring 에 있다 — 자르면 판정이 "답이 없다" 쪽으로 기운다
+    parser.add_argument("--chars", type=int, default=1200, help="청크당 보여줄 글자 수")
     parser.add_argument("--rerank", default=DEFAULT_RERANK_PROFILE)
     parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
     args = parser.parse_args()
