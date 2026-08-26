@@ -32,6 +32,17 @@ startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 �
 **색인 뒤 되돌릴 것이 없다.** 리랭커는 저장소 스냅샷을 안 들고 질의마다 후보를 받아 점수만
 매기므로, 아래 BM25 무효화 계약이 여기에는 해당하지 않는다. 답변 캐시 쪽 분류다.
 
+## 판정(Evaluator)만 질의마다 새로 만든다
+
+embedder·BM25·리랭커는 `app.state` 싱글턴인데 여기만 아니다. **가르는 것은 가중치다** —
+저 셋이 싱글턴인 이유는 KURE 2.27GB 적재 · cross-encoder 적재 · 저장소 전량 훑기이고,
+`OpenAIEvaluator` 에는 그런 것이 **하나도 없다**(`_make_client()` 를 호출 시점에 부르고
+캐시는 디스크다). 이유가 없는데 모양만 따라가면 딸려 오는 것이 있다 — `warnings` 와
+`usage` 가 **인스턴스에 누적**돼서, `EVALUATOR_MODEL` 은 찼는데 `OPENAI_API_KEY` 가 없는
+조합이면 질의마다 경고 한 줄이 서버 수명 내내 쌓인다. 읽는 사람도 없고 에러도 안 난다.
+
+질의마다 만들면 그 누적이 원리적으로 없고, `warnings` 가 **그 질의의 것**이라는 뜻이 산다.
+
 ## BM25 인덱스도 같은 패턴이다
 
 `build_bm25_index()` 는 저장소를 전량 훑는다. startup 에서 지으면 **색인이 아직 없는 상태**
@@ -62,6 +73,7 @@ from backend.app.core.config import get_settings
 from backend.app.core.query_log import append_query_log
 from backend.app.core.singletons import BUILD_LOCK, embedder_for
 from backend.app.core.templates import templates
+from rag_pipeline.generation.evaluate import get_evaluator
 from rag_pipeline.query import answer_question
 from rag_pipeline.retrieval import build_bm25_index, get_reranker
 from rag_pipeline.schemas.retrieval import RetrievedChunk
@@ -186,6 +198,12 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # **getattr 인 것은 lifespan 을 안 거치고 app 을 세우는 호출부가 있어서**다 —
         # 그때 여기서 죽으면 캐시가 없다는 이유로 질의 전체가 죽는다
         cache=getattr(request.app.state, "answer_cache", None),
+        # 모델 이름이 없으면 None 이라 판정 없이 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25·cache·reranker 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **질의마다 새로 만든다** — 저 셋과 달리 가중치가 없어 만드는 값이 사실상 0 이고,
+        # 싱글턴으로 두면 `warnings` 가 서버 수명 내내 누적된다 (모듈 docstring 참고).
+        # `config.evaluator` 는 lazy 프로퍼티라 첫 호출 뒤에는 `.env` 를 다시 안 읽는다
+        evaluator=get_evaluator(request.app.state.ingest_config.evaluator),
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
 

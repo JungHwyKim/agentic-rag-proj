@@ -186,6 +186,24 @@ body {
   font-size: 11.5px;
 }
 .badge-link { font-weight: 700; white-space: nowrap; }
+
+/* 근거 충분성 판정 배지 둘. **새 색을 안 만든다** — 있는 토큰으로 무게만 가른다.
+   라벤더는 안 쓴다: 그건 캐시 배지의 뜻이라 색이 두 뜻을 가지면 배지가 안 갈린다. */
+
+/* 불충분 — **잘못된 것이 아니라 정보다.** 그래서 빨강을 안 쓴다. 답변은 아래에 그대로 있다 */
+.badge-row.verdict-insufficient {
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+/* 판정 실패 — 여기는 실제로 무언가 잘못됐으므로 danger 톤이다. 다만 **테두리는 없다**:
+   `.error` 가 1px solid danger 를 쓰는데 저쪽은 답변이 통째로 실패한 것이고
+   여기는 답변이 살아 있다. 같은 색으로 다른 무게를 말하는 자리다 */
+.badge-row.verdict-failed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
 .rewrite-row {
   align-self: flex-start;
   display: flex;

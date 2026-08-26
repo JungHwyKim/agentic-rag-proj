@@ -37,6 +37,18 @@
 한 줄 쓰기를 직렬화한다. **프로세스가 여럿인 경우는 안 막는다** — 지금 실행 형태가
 `uvicorn --reload` 단일 프로세스다(CLAUDE.md 의 명령어 절). 멀티워커로 가면 여기부터 본다.
 
+## 판정(verdict)은 왜 여기 있나
+
+`cached` 와 같은 급이다 — `Answer` 를 봐야만 알 수 있고, 재려는 것이 *실사용* 분포다.
+`evaluation/qa_set_human.jsonl` 43건은 **고정된 세트**라 실사용에서 *불충분* 이 얼마나
+나오는지를 원리적으로 못 잰다. 그 비율이 곧 재시도(Rewriter)를 되살릴지 정하는 근거다.
+
+**키를 늘 쓴다.** 판정을 안 돌렸으면 `null` 이지 키를 빼지 않는다 — 빼면 *"판정이 꺼져
+있었다"* 와 *"옛 형식이라 칸이 없다"* 가 집계에서 안 갈린다.
+
+`reasoning` 은 **안 싣는다.** 상한도 자동 정리도 없는 파일에 모델 문장이 질의마다 쌓이고,
+사유를 읽는 도구는 `evaluation/verdicts.py --wrong` 이 이미 있다.
+
 **상한도 자동 정리도 없다.** `Settings.originals_dir` 이 같은 판단을 이미 했다 —
 지금 값을 정하면 관측 없는 숫자가 된다. 대신 경로와 on/off 를 밖으로 연다.
 """
@@ -71,6 +83,9 @@ def append_query_log(path: Path, query: str, answer: Answer, *, elapsed_ms: int)
         "cached": answer.cached_from is not None,
         "elapsed_ms": elapsed_ms,
         "sources": len(answer.sources),
+        # 판정을 돌렸으면 세 상태 중 하나, 안 돌렸으면 None (꺼짐 또는 캐시 히트).
+        # **키를 늘 쓴다** (모듈 docstring 참고)
+        "verdict": answer.verdict.verdict if answer.verdict is not None else None,
     }
     line = json.dumps(record, ensure_ascii=False) + "\n"
 

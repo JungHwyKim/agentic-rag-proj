@@ -105,6 +105,7 @@ BaseDocumentLoader.load()  템플릿 메서드 (loader/document/base.py)
 - 화면은 서버 렌더다(Jinja2 + 벤더링한 htmx, Node 툴체인 없음). `routes/pages.py` 가 화면을, `routes/query.py` 가 HTMX 가 부를 **HTML 조각**을 돌려준다 — JSON 을 주고 브라우저에서 다시 조립하면 템플릿이 두 벌이 된다. 빈 `frontend/` 는 이 결정 이후로 쓰이지 않는다
 - 로더는 동기·CPU 바운드라 `run_in_threadpool` 로 넘긴다
 - `backend/app/main.py` 의 `_STATUS_BY_EXCEPTION` 이 `RagPipelineError` 를 HTTP 상태코드로 매핑하고 `user_message`(한국어)를 그대로 응답에 내보낸다. 새 예외를 만들면 이 매핑에 추가해야 500이 안 난다. **화면에서 온 요청(`HX-Request` 헤더)에는 같은 상태코드로 HTML 조각을 준다** — htmx 가 4xx/5xx 를 swap 안 하는 것을 200 으로 낮춰 피하면 그 계약이 화면 경로만 우회하는데, 그것이 SSE 를 기각한 자리와 같다. 뒤집는 것은 `chat.html` 의 `htmx:beforeSwap` 한 줄이다. **업로드가 제일 자주 낼 415·413 은 이 매핑을 안 탄다** — `routes/documents.py` 가 던지는 `HTTPException` 이라 `StarletteHTTPException` 핸들러가 따로 같은 규칙을 태운다. 그쪽을 빼먹으면 나머지가 전부 통과하는 채로 **확장자 오류만 화면에서 조용하다**
+- **질의 라우트가 판정(Evaluator)만 질의마다 새로 만든다** — `embedder`·`bm25`·`reranker` 는 `app.state` 싱글턴인데 여기만 아니고, 가르는 것은 **가중치**다(저 셋은 KURE 2.27GB · cross-encoder 적재 · 저장소 전량 훑기이고 `OpenAIEvaluator` 에는 그런 것이 없다). 모양만 따라 싱글턴으로 두면 `warnings`·`usage` 가 **인스턴스에 누적**돼, `EVALUATOR_MODEL` 은 찼는데 키가 없는 조합에서 질의마다 경고 한 줄이 서버 수명 내내 쌓인다(읽는 사람도 없고 에러도 안 난다). 화면은 **불충분·실패일 때만** 배지를 그리고 *충분* 은 줄 자체를 안 그린다 — `cached_from` 배지와 같은 규칙이다. **모델 사유는 `title` 에만 담는다**(길이가 모델 마음대로라 배지에 펼치면 레이아웃이 무너진다). `query_log` 에는 `verdict` 한 칸이 늘었고 **판정을 안 돌렸어도 키는 있다**(`null`) — 빼면 *꺼져 있었다* 와 *옛 형식이라 칸이 없다* 가 집계에서 안 갈린다. `reasoning` 은 안 싣는다(상한도 정리도 없는 파일이다)
 - 설정도 둘로 나뉜다: `backend/app/core/config.py`(웹) vs `rag_pipeline/config.py`(파싱). 둘 다 `PROJECT_ROOT/.env` 를 읽는다
 
 ## 코드 컨벤션

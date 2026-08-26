@@ -18,6 +18,30 @@
       <span class="badge-link" title="유사도 {{ '%.3f' | format(answer.cached_from.score) }}">유사 질문 &gt;</span>
     </div>
   {% endif %}
+  {# 근거 충분성 판정. **불충분·실패일 때만 그린다** — `cached_from` 배지와 같은 규칙이고
+     이유도 같다. *충분* 까지 그리면 모든 답변에 줄이 하나 늘고, 빈 배지가 남으면 사용자는
+     판정이 켜져 있다고 읽는다. `verdict` 가 통째로 None 인 것은 **판정을 안 돌렸다**는
+     뜻이다 — 꺼져 있거나 답이 캐시에서 왔거나 (schemas/answer.py).
+
+     **모델 문장은 title 에만 담는다.** 길이가 모델 마음대로라 배지에 펼치면 레이아웃이
+     무너지고 답변보다 판정이 먼저 읽힌다 — 긴 원문을 title 에 담는 캐시 배지·소스 태그와
+     같은 규칙이다.
+
+     **문구에 "답변은 그대로다"를 넣는 이유**: *판정이 답변을 바꾸지 않는다* 가 계약인데
+     (query.py · plan_log/검색-생성.md 11회차), 배지만 보면 답변이 눌렸다고 읽힌다.
+
+     클래스를 값에서 파생해도 되는 것은 `verdict` 가 세 상태 Literal 이라 pydantic 이
+     이미 검사했기 때문이다. 위 조건이 *충분* 을 빼므로 실제로 나올 수 있는 것은 둘이다 #}
+  {% if answer.verdict and answer.verdict.verdict != 'sufficient' %}
+    <div class="badge-row verdict-{{ answer.verdict.verdict }}"
+         {% if answer.verdict.reasoning %}title="{{ answer.verdict.reasoning }}"{% endif %}>
+      {% if answer.verdict.verdict == 'insufficient' %}
+        <span class="badge">검색된 근거가 이 질문에 충분하지 않다고 판정했습니다 &mdash; 아래 답변은 그대로 생성된 것입니다</span>
+      {% else %}
+        <span class="badge">근거 충분성을 판정하지 못했습니다 &mdash; 아래 답변은 판정 없이 생성됐습니다</span>
+      {% endif %}
+    </div>
+  {% endif %}
   {# Rewriter 루프(Phase 4~5)가 붙을 자리. 모양만 남긴다 — 지금은 아무것도 판정하지 않는다 #}
   <div class="rewrite-row is-placeholder" title="준비 중인 기능입니다">
     <span class="dots"><i></i><i></i><i></i></span>

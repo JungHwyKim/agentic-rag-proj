@@ -14,9 +14,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from rag_pipeline.config import GenerationConfig, IngestConfig
+from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
-from rag_pipeline.schemas.answer import Answer, CacheOrigin
+from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -57,6 +57,12 @@ def _client(store=None, tmp_path: Path | None = None) -> TestClient:
     app = create_app()
     config = IngestConfig()
     object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
+    # **판정도 못 박는다.** 라우트가 질의마다 `get_evaluator()` 를 부르므로 안 박으면
+    # 개발자 `.env` 의 `EVALUATOR_MODEL` 이 픽스처에 실린다 — `_generation` 핀과 같은 이유이고,
+    # CLAUDE.md 가 임베딩 provider 에서 실제로 밟았다고 적어 둔 그 함정이다
+    object.__setattr__(
+        config, "_evaluator", EvaluatorConfig(evaluator_model=None, openai_api_key=None)
+    )
     app.state.ingest_config = config
     app.state.store = store if store is not None else FakeStore()
     app.state.embedder = object()
@@ -377,6 +383,143 @@ def test_fresh_answer_has_no_cache_badge(mocker):
     body = _client().post("/api/v1/query", data={"query": "질문"}).text
 
     assert "badge-row" not in body
+
+
+# --- 판정 배지 ------------------------------------------------------------------
+
+
+# 배지의 조각 하나를 꺼낸다. 캐시 배지도 같은 `badge-row` 라 **클래스로 갈라야** 한다
+def _verdict_badge(body: str) -> str:
+    marker = 'class="badge-row verdict-'
+    assert marker in body
+    return body[body.index(marker) :].split("</div>", 1)[0]
+
+
+# 불충분이면 배지가 뜨고 **모델 사유는 title 에만** 실린다. 배지에 펼치면 길이가 모델
+# 마음대로라 레이아웃이 무너지고 답변보다 판정이 먼저 읽힌다
+def test_insufficient_verdict_renders_badge_with_reason_in_title(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="질문",
+            text="답변",
+            sources=[_chunk()],
+            verdict=EvaluatorVerdict(
+                verdict="insufficient", reasoning="근거가 기입용 빈 서식이다"
+            ),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    badge = _verdict_badge(body)
+    assert "verdict-insufficient" in badge
+    assert "충분하지 않다고 판정했습니다" in badge
+    # 사유는 title 에만 있다 — 본문 텍스트로 새면 안 된다
+    assert 'title="근거가 기입용 빈 서식이다"' in badge
+    assert badge.count("근거가 기입용 빈 서식이다") == 1
+    # **판정이 답변을 바꾸지 않는다**는 계약이 문구에도 보여야 한다
+    assert "그대로 생성된" in badge
+
+
+# 충분이면 줄 자체가 없다. `cached_from` 배지와 같은 규칙이다 —
+# 빈 배지가 남으면 사용자는 판정이 켜져 있다고 읽는다
+def test_sufficient_verdict_draws_no_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="질문",
+            text="답변",
+            sources=[_chunk()],
+            verdict=EvaluatorVerdict(verdict="sufficient", reasoning="충분하다"),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "verdict-" not in body
+
+
+# 판정을 안 돌렸으면(꺼짐 또는 캐시 히트) 역시 줄이 없다
+def test_no_verdict_draws_no_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[_chunk()]),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "verdict-" not in body
+
+
+# **실패는 불충분과 갈려야 한다.** 같은 클래스·같은 문구면 *판정이 불충분이라고 말한 것* 과
+# *판정을 못 한 것* 이 화면에서 안 갈리는데, 그 둘을 가르려고 제3의 상태를 만들었다
+def test_failed_verdict_is_distinct_from_insufficient(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="질문",
+            text="답변",
+            sources=[],
+            verdict=EvaluatorVerdict(verdict="failed", reasoning="판정을 얻지 못했습니다"),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    badge = _verdict_badge(body)
+    assert "verdict-failed" in badge
+    assert "verdict-insufficient" not in badge
+    assert "판정하지 못했습니다" in badge
+
+
+# 진짜 값인데 자리표시의 흐림·클릭 불가를 물려받으면 안 된다 (캐시 배지와 같은 가드)
+def test_verdict_badge_is_not_a_placeholder(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="질문",
+            text="답변",
+            sources=[],
+            verdict=EvaluatorVerdict(verdict="insufficient", reasoning=""),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "is-placeholder" not in _verdict_badge(body)
+
+
+# **질의마다 새로 만든다.** embedder·BM25·리랭커와 갈리는 지점이고 이유는 가중치다 —
+# Evaluator 에는 올릴 것이 없고, 싱글턴으로 두면 `warnings`·`usage` 가 서버 수명 내내 쌓인다
+def test_evaluator_is_built_per_query(mocker):
+    made = mocker.patch(
+        "backend.app.api.routes.query.get_evaluator", return_value="fake-evaluator"
+    )
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[]),
+    )
+
+    client = _client()
+    client.post("/api/v1/query", data={"query": "질문"})
+    client.post("/api/v1/query", data={"query": "또 질문"})
+
+    assert made.call_count == 2
+    assert asked.call_args.kwargs["evaluator"] == "fake-evaluator"
+
+
+# 모델 이름이 없으면 `get_evaluator()` 가 None 을 돌려주고 **안 넘기는 것과 같다** —
+# bm25·cache·reranker 와 같은 규약이라 라우트에 스위치가 없다
+def test_evaluator_off_passes_none(mocker):
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "질문"})
+
+    assert asked.call_args.kwargs["evaluator"] is None
 
 
 # --- 리랭커 --------------------------------------------------------------------
