@@ -22,6 +22,7 @@ from rag_pipeline.config import (
     AnswerCacheConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
+    EvaluatorConfig,
     GenerationConfig,
     IndexingConfig,
     IngestConfig,
@@ -140,6 +141,23 @@ def offline_config(tmp_path: Path) -> IngestConfig:
             rerank_provider="openai",
             rerank_model=None,
             rerank_cache_enabled=False,
+        ),
+    )
+    # Evaluator 도 같은 이유로 덮어쓴다. **켜는 축이 모델 이름 하나뿐이라 그 한 줄이 스위치다** —
+    # EvaluatorConfig() 가 .env 를 직접 읽으므로, 개발자가 EVALUATOR_MODEL 을 넣어 두면 기본
+    # pytest 가 질의마다 OpenAI 를 부르는 경로로 조용히 간다(리랭커와 달리 로컬 갈래가 없어
+    # 가중치 적재는 없지만, 대신 **과금**이다). 키까지 지우는 것은 그 한 겹 뒤의 겹이고,
+    # 캐시를 끄는 것은 테스트가 서로의 판정 결과를 물려받지 않게 하려는 것이다.
+    #
+    # **핀은 필드를 더한 회차의 몫이다** — answer_cache 가 mode 축이 생기며 threshold 만 박힌
+    # 핀이 반쪽이 됐던 자리와 같다(2026-08-26)
+    object.__setattr__(
+        config,
+        "_evaluator",
+        EvaluatorConfig(
+            openai_api_key=None,
+            evaluator_model=None,
+            evaluator_cache_enabled=False,
         ),
     )
     return config

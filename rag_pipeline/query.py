@@ -50,18 +50,33 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 하나 때문에 `retrieve()`·`hybrid`·`search_dense` 셋의 시그니처를 넓히면, 벡터를 넘기는
 경로와 안 넘기는 경로가 갈려 어느 쪽이 실제로 돌았는지 호출부마다 달라진다.
 
+## `evaluator` 도 같은 모양이다 — 다만 **판정이 답변을 안 바꾼다**
+
+근거가 충분한지 판정하는 구현체 역시 인자이고 `None` 이면 판정 없이 돈다. 자리는 `retrieve()`
+와 `generate_answer()` **사이**다 — `bm25`·`reranker` 처럼 검색 안이 아니라, 검색이 끝난 것을
+보고 판정하기 때문이다.
+
+**지금은 판정을 `Answer.verdict` 에 싣기만 한다.** *불충분* 이어도 생성을 막지 않고 프롬프트도
+안 바꾼다. 재시도할 Rewriter 가 없기도 하고(`plan_log/검색-생성.md` 7회차가 물렸다), 생성을
+바꾸면 *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞이는데 **답변 품질을 재는 자[尺]가
+아직 없다.** 판정을 무엇으로 재는지는 `evaluation/verdicts.py` 다.
+
+**실패는 예외가 아니라 제3의 상태다** — `verdict="failed"` 가 그대로 실려 나가고 사유는
+`evaluator.warnings` 에 쌓인다. 여기서 *불충분* 으로 바꿔 적으면 부정 예시 질의에서 죽은
+Evaluator 가 만점을 받는다(`generation/evaluate.py`).
+
 ## 여기서 안 하는 것
 
-Evaluator·Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 4~5 이고, 붙는 자리는
-`retrieve()` 와 `generate_answer()` 사이다. **리랭커는 여기 있었다가 빠졌다** — 그 자리가
-아니라 `retrieve()` 안이기 때문이다(위 "`reranker` 도 같은 모양이다").
+Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 5 이고 7회차에서 물렸다 — 되살릴
+조건도 거기 있다. **리랭커는 여기 있었다가 빠졌다** — 그 자리가 아니라 `retrieve()` 안이기
+때문이다(위 "`reranker` 도 같은 모양이다").
 """
 
 from __future__ import annotations
 
 from rag_pipeline.answer_cache import QdrantAnswerCache
 from rag_pipeline.config import IngestConfig
-from rag_pipeline.generation import generate_answer
+from rag_pipeline.generation import OpenAIEvaluator, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
 from rag_pipeline.retrieval import Bm25Index, Reranker, retrieve
@@ -81,6 +96,7 @@ def answer_question(
     bm25: Bm25Index | None = None,
     reranker: Reranker | None = None,
     cache: QdrantAnswerCache | None = None,
+    evaluator: OpenAIEvaluator | None = None,
 ) -> Answer:
     cfg = config or IngestConfig()
     limit = top_k if top_k is not None else cfg.generation.generation_top_k
@@ -100,8 +116,12 @@ def answer_question(
         reranker=reranker,
         config=cfg.retrieval,
     )
+    # 판정은 생성 앞이지만 **생성을 막지 않는다** (모듈 docstring 참고).
+    # 실패도 그대로 실린다 — 여기서 판정 하나로 접으면 러너가 실패를 따로 못 센다
+    verdict = evaluator.evaluate(query, chunks) if evaluator is not None else None
+
     text = generate_answer(query, chunks, cfg.generation)
-    answer = Answer(query=query, text=text, sources=chunks)
+    answer = Answer(query=query, text=text, sources=chunks, verdict=verdict)
 
     # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
     if cache is not None:

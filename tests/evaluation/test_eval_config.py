@@ -28,6 +28,7 @@ from rag_pipeline.config import (
     CleanerConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
+    EvaluatorConfig,
     IngestConfig,
     RerankConfig,
     RetrievalConfig,
@@ -46,6 +47,7 @@ _MODELS = {
     "embedding": EmbeddingConfig,
     "retrieval": RetrievalConfig,
     "rerank": RerankConfig,
+    "evaluator": EvaluatorConfig,
 }
 
 
@@ -107,6 +109,7 @@ def test_fixed_values_actually_land_on_the_config() -> None:
         "cleaner": config.cleaner,
         "splitter": config.splitter,
         "embedding": config.embedding,
+        "evaluator": config.evaluator,
     }
     for name, target in blocks.items():
         for key, value in EVAL_SETTINGS[name].items():
@@ -292,3 +295,12 @@ def test_env_cannot_turn_the_default_off_profile_on(monkeypatch) -> None:
     monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
 
     assert eval_config().rerank.rerank_model is None
+
+
+# **판정 모델은 고정 블록이 이겨야 한다.** `.env` 의 EVALUATOR_MODEL 은 비어 있는 것이 기본
+# (=꺼짐)이라, 안 박으면 채점 실행이 조용히 전건 `failed` 를 내고 그 표는 판정력이 아니라
+# 설정 누락을 재게 된다. 리랭커가 기본 `off` 인 것과 축이 다른 자리다
+def test_evaluator_model_is_pinned(monkeypatch) -> None:
+    monkeypatch.setenv("EVALUATOR_MODEL", "")
+    assert eval_config().evaluator.evaluator_model == EVAL_SETTINGS["evaluator"]["evaluator_model"]
+

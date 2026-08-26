@@ -20,13 +20,37 @@
 **HWPX 쪽 수가 문서에 따라 부풀거나 붕괴한다**(CLAUDE.md — AI가이드가 PDF 28쪽 대 HWPX
 97쪽, 변환본은 1쪽). 모델에게 "N쪽을 보라"고 시키면 그 값이 틀린 문서에서 답변이 틀린 쪽을
 인용한다. 쪽은 **화면의 소스 태그가 metadata 에서 직접** 그린다 — 모델을 거치지 않는다.
+
+## 판정 프롬프트는 왜 답을 쓰게 하지 않나
+
+Evaluator 가 묻는 것은 *"이 근거로 답할 수 있는가"* 하나다. 답까지 쓰게 하면 생성과 같은 일을
+두 번 하고 토큰이 두 배가 되며, 무엇보다 판정이 *충분한가* 에서 *답이 좋은가* 로 미끄러진다 —
+**답변 품질을 재는 자[尺]가 아직 없어서** 그 미끄러짐을 잡을 방법이 없다.
+
+같은 이유로 **하위 규칙을 지금 안 넣는다.** *"빈 양식 표는 불충분"* · *"제목 머리만 있으면
+불충분"* 같은 것이 그럴듯해 보이지만, 이 코퍼스에는 **정답 span 이 제목 머리에만 있는 청크가
+실재한다**(`plan_log/검색-생성.md` — `sih-06`·`sih-14`). 규칙을 미리 박으면 그 건들이 판정
+오류로 세어지는데, 그것은 Evaluator 의 잘못이 아니라 세트의 축 문제다. 첫 혼동행렬이
+*무엇 때문에 틀렸나* 를 보여준 뒤에 넣는다.
+
+## 판정 프롬프트를 고치면 캐시가 갈린다
+
+`EVALUATOR_PROMPT_VERSION` 이 캐시 salt 에 들어간다. 고칠 때 함께 올리지 않으면 **옛 응답이
+새 프롬프트의 답인 척** 돌아오는데, 에러가 아니라 수치로만 드러난다(`표-경로.md` 14회차).
 """
 
 from __future__ import annotations
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["NO_EVIDENCE_ANSWER", "SYSTEM_PROMPT", "build_user_prompt"]
+__all__ = [
+    "EVALUATOR_PROMPT_VERSION",
+    "EVALUATOR_SYSTEM_PROMPT",
+    "NO_EVIDENCE_ANSWER",
+    "SYSTEM_PROMPT",
+    "build_evaluator_prompt",
+    "build_user_prompt",
+]
 
 # 근거를 못 찾았을 때 쓸 문장. 모델이 이 문장을 그대로 쓰도록 프롬프트가 지시하고,
 # 검색이 0건이면 모델을 부르지 않고 코드가 이 값을 그대로 돌려준다
@@ -51,3 +75,24 @@ def build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
         blocks.append(f"[{index}] ({source})\n{chunk.text}")
     evidence = "\n\n".join(blocks)
     return f"근거:\n\n{evidence}\n\n---\n\n질문: {query}"
+
+
+# 판정 프롬프트를 고치면 **반드시 올린다** (모듈 docstring 참고)
+EVALUATOR_PROMPT_VERSION = "v1"
+
+EVALUATOR_SYSTEM_PROMPT = """당신은 한국어 공문서 검색 결과를 검사하는 판정자입니다.
+질문에 대한 답을 쓰지 말고, **주어진 근거만으로 그 질문에 답할 수 있는지**만 판정하세요.
+
+규칙:
+1. 질문이 묻는 내용이 근거 안에 실제로 적혀 있으면 "sufficient" 입니다.
+2. 주제가 관련될 뿐 질문에 답할 내용이 없으면 "insufficient" 입니다.
+3. 바깥 지식으로 채워서 판정하지 않습니다. 근거에 있는 것만 봅니다.
+4. 출력은 설명 없이 JSON 객체 하나입니다:
+   {"verdict": "sufficient" 또는 "insufficient", "reasoning": "한국어 한 문장"}"""
+
+
+# 판정용 프롬프트. 근거 블록 모양을 생성 쪽과 같게 두는 것이 의도다 —
+# 판정이 본 것과 생성이 보는 것이 글자까지 같아야 "판정은 맞았는데 답이 틀렸다" 가 성립한다
+def build_evaluator_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+    ask = "이 근거로 위 질문에 답할 수 있습니까?"
+    return f"{build_user_prompt(query, chunks)}\n\n{ask}"

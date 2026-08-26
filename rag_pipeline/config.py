@@ -391,6 +391,39 @@ class AnswerCacheConfig(BaseSettings):
     answer_cache_threshold: float | None = None
 
 
+# 검색된 근거가 질문에 답하기에 충분한지 판정할 때 쓰는 설정. **켜는 축은 모델 이름 하나다** —
+# 비면 get_evaluator() 가 None 을 돌려주고 그것이 곧 꺼진 상태다. RerankConfig 와 같은 모양인
+# 이유도 같다: 켜지는 순간 질의당 LLM 호출이 1회에서 2회가 되므로, 값을 하는지 재기 전에
+# 과금이 먼저 붙는 것을 막는 자리가 똑같다 (plan_log/검색-생성.md 11회차)
+class EvaluatorConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # GenerationConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정 객체가 독립이라 각자
+    # 읽는 것이다 — 판정만 끄고 생성은 살리는 조합이 가능해야 한다
+    openai_api_key: str | None = None
+
+    # 판정에 쓸 모델. **비면 통째로 꺼진다** — RERANK_MODEL 과 글자 그대로 같은 모양이고
+    # 저장소에는 꺼진 채 커밋된다. 켜는 것은 혼동행렬을 재고 나서 .env 에 이름이 들어가는 순간이다
+    evaluator_model: str | None = None
+
+    # 판정은 재현이 값어치라 0 이다. 생성이 0.2 인 것과 갈리는 이유는 출력의 모양이다 —
+    # 저쪽은 표·목록을 질문에 맞게 추리는 여지가 필요하지만 이쪽 출력은 세 상태 중 하나다
+    evaluator_temperature: float = 0.0
+
+    # verdict 한 줄 + 사유 한두 문장. **임시값이다** — 사유가 잘리는지는 첫 혼동행렬의
+    # reasoning 을 사람이 읽고 정한다
+    evaluator_max_tokens: int = 512
+
+    # 같은 (질의, 후보) 짝을 다시 물으면 API 를 안 탄다. 채점 재실행이 무료여야 실패 버킷을
+    # 읽고 프롬프트를 고치는 반복이 성립한다. 프롬프트를 고치면 salt 가 갈려 자동으로 미스가 된다
+    evaluator_cache_enabled: bool = True
+    evaluator_cache_dir: Path = PROJECT_ROOT / ".cache" / "evaluator"
+
+
 # 적재 파이프라인 전체 설정
 class IngestConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -480,6 +513,16 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_answer_cache"):
             object.__setattr__(self, "_answer_cache", AnswerCacheConfig())
         return self._answer_cache  # type: ignore[attr-defined]
+
+    # 판정 단계 설정. 같은 lazy 형태라 테스트에서 _evaluator 로 덮어쓸 수 있다.
+    # **generation·answer_cache 와 같은 이유로 lazy 여야 한다** — EvaluatorConfig() 가 .env 를
+    # 직접 읽으므로, 안 덮으면 개발자 머신의 모델 이름이 픽스처에 실려 **기본 pytest 가 과금
+    # 경로로 간다.** 켜는 축이 이름 하나뿐이라 그 한 줄이 곧 스위치다
+    @property
+    def evaluator(self) -> EvaluatorConfig:
+        if not hasattr(self, "_evaluator"):
+            object.__setattr__(self, "_evaluator", EvaluatorConfig())
+        return self._evaluator  # type: ignore[attr-defined]
 
 
 # 프로세스 전역인 것만 여기 온다. **`EmbeddingConfig`·`RerankConfig` 로 가르지 않는 이유**가

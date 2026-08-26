@@ -10,7 +10,7 @@ import pytest
 from rag_pipeline import query as query_module
 from rag_pipeline.config import GenerationConfig, IngestConfig
 from rag_pipeline.query import answer_question
-from rag_pipeline.schemas.answer import Answer, CacheOrigin
+from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -208,3 +208,103 @@ def test_cache_hit_skips_the_reranker_too(mocker, config):
     )
 
     assert retrieve.call_count == 0
+
+
+# 판정하는 척하는 가짜. 실제 구현은 tests/generation/test_evaluate.py 가 잠근다
+class _FakeEvaluator:
+    def __init__(self, verdict: str = "sufficient", reasoning: str = "") -> None:
+        self._verdict = verdict
+        self._reasoning = reasoning
+        self.calls: list[tuple[str, list[RetrievedChunk]]] = []
+
+    def evaluate(self, query: str, chunks: list[RetrievedChunk]) -> EvaluatorVerdict:
+        self.calls.append((query, chunks))
+        return EvaluatorVerdict(verdict=self._verdict, reasoning=self._reasoning)
+
+
+# **Evaluator 를 안 넘기면 기존 경로가 한 줄도 안 바뀐다.** bm25·reranker·cache 와 같은
+# 스위치라, 이 성질이 깨지면 설정 없이 끄는 방법이 사라진다
+def test_without_evaluator_the_path_is_unchanged(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert answer.verdict is None
+    assert answer.text == "답변"
+
+
+# 넘기면 판정이 실린다. **판정이 본 것은 생성이 보는 것과 같아야 한다**
+def test_verdict_rides_along_on_the_answer(mocker, config):
+    chunks = [_chunk()]
+    mocker.patch.object(query_module, "retrieve", return_value=chunks)
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    evaluator = _FakeEvaluator("sufficient", "조항이 그대로 있습니다")
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, evaluator=evaluator
+    )
+
+    assert answer.verdict is not None
+    assert answer.verdict.verdict == "sufficient"
+    assert evaluator.calls[0] == ("질문", chunks)
+    assert generate.call_args.args[1] == chunks
+
+
+# ***불충분* 이어도 생성은 그대로 돈다.** 재시도할 곳이 없고, 생성을 바꾸면 판정 수치와
+# 답변 변화가 한 실행에 섞인다 (query.py docstring)
+def test_insufficient_does_not_block_generation(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        evaluator=_FakeEvaluator("insufficient"),
+    )
+
+    assert answer.verdict.verdict == "insufficient"
+    assert answer.text == "답변"
+    assert generate.call_count == 1
+
+
+# **실패는 판정 하나로 접히지 않고 그대로 나간다.** 여기서 불충분으로 적으면 러너가
+# 실패를 따로 못 세고, 점수가 실력이 아니라 실패율을 잰다
+def test_failed_verdict_is_carried_as_is(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        evaluator=_FakeEvaluator("failed", "판정을 얻지 못했습니다"),
+    )
+
+    assert answer.verdict.verdict == "failed"
+    assert answer.text == "답변"
+
+
+# **캐시가 히트하면 판정도 안 돈다** — 그래서 캐시에서 온 답은 verdict 가 None 이다.
+# 그 답이 판정을 거쳤다고 말할 수 없기 때문이고, cached_from 이 캐시 여부를 혼자 판정하는
+# 것과 같은 모양이다
+def test_cache_hit_skips_the_evaluator(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    evaluator = _FakeEvaluator()
+
+    answer = answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        evaluator=evaluator,
+        cache=_FakeCache(Answer(query="질문", text="옛 답변", sources=[])),
+    )
+
+    assert answer.text == "옛 답변"
+    assert answer.verdict is None
+    assert evaluator.calls == []

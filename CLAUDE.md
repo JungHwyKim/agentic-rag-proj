@@ -40,7 +40,7 @@ uv pip install -r requirements.txt
 
 - `ingest()` — 파일 하나를 `ParsedDocument` 로 만든다. 하는 일은 단계를 순차로 합성하는 것뿐이다 — 로더 뒤에 붙는 단계들은 `ParsedDocument` 를 받아 `ParsedDocument` 를 돌려주므로 떼었다 붙였다 할 수 있다
 - `index_document()` — 그 위에 청킹→임베딩→색인을 잇는다. 검색 가능한 벡터를 만드는 전 구간은 이쪽이다
-- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`reranker`·`cache` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. 뒤 셋은 안 넘기면 그 갈래 없이 도는 것이 곧 스위치다 — 다만 **`bm25` 만 설정이 없고 `reranker`·`cache` 는 있다** — 고를 축이 실재할 때만 설정이 생긴다. `reranker` 는 구현체가 둘이라 `RERANK_PROVIDER`·`RERANK_MODEL` 이고 `RERANK_MODEL` 이 비면 `get_reranker()` 가 `None` 을 돌려 꺼진다. `cache` 는 **"같은 질문"을 무엇으로 판정하나**가 축이라 `ANSWER_CACHE_MODE`(`semantic`|`exact`)이고, **꺼짐 조건이 갈래마다 다르다** — `semantic` 은 `ANSWER_CACHE_THRESHOLD` 가 비면 꺼지고 `exact` 는 **그 값을 아예 안 봐 모드 한 줄로 켜진다**(완전 일치에는 정할 임계값이 없다). 그래서 `exact` 는 `lookup()` 에서 임베딩을 안 부른다. **반대로 켜는 데는 세 줄이 든다** — `rerank_provider` 기본값이 `openai` 라 모델 이름만 넣으면 HuggingFace 이름을 유료 리랭커에 물고, 로컬 갈래는 `RERANK_DEVICE` 까지 함께다(`cpu` 면 질의당 63.9초 · `cuda` 면 2.988초, 2026-08-26 실측). **저장소 커밋본은 꺼진 채다** — 켜는 것은 GPU 가 있는 머신의 `.env` 결정이다. **붙는 자리도 셋이 다르다** — `cache` 는 `retrieve()` 앞, `bm25` 는 그 안의 한 갈래, `reranker` 는 그 안에서 RRF 뒤·절단 앞이다
+- `answer_question()` — 질문 하나를 받아 검색→생성을 잇고 `Answer` 를 돌려준다. **`store`·`embedder`·`bm25`·`reranker`·`cache`·`evaluator` 를 인자로 받는 유일한 진입점**이고, 앞 둘의 이유는 아래 qdrant 잠금 함정에 있다. 뒤 넷은 안 넘기면 그 갈래 없이 도는 것이 곧 스위치다 — 다만 **`bm25` 만 설정이 없고 `reranker`·`cache` 는 있다** — 고를 축이 실재할 때만 설정이 생긴다. `reranker` 는 구현체가 둘이라 `RERANK_PROVIDER`·`RERANK_MODEL` 이고 `RERANK_MODEL` 이 비면 `get_reranker()` 가 `None` 을 돌려 꺼진다. `cache` 는 **"같은 질문"을 무엇으로 판정하나**가 축이라 `ANSWER_CACHE_MODE`(`semantic`|`exact`)이고, **꺼짐 조건이 갈래마다 다르다** — `semantic` 은 `ANSWER_CACHE_THRESHOLD` 가 비면 꺼지고 `exact` 는 **그 값을 아예 안 봐 모드 한 줄로 켜진다**(완전 일치에는 정할 임계값이 없다). 그래서 `exact` 는 `lookup()` 에서 임베딩을 안 부른다. **반대로 켜는 데는 세 줄이 든다** — `rerank_provider` 기본값이 `openai` 라 모델 이름만 넣으면 HuggingFace 이름을 유료 리랭커에 물고, 로컬 갈래는 `RERANK_DEVICE` 까지 함께다(`cpu` 면 질의당 63.9초 · `cuda` 면 2.988초, 2026-08-26 실측). **저장소 커밋본은 꺼진 채다** — 켜는 것은 GPU 가 있는 머신의 `.env` 결정이다. **붙는 자리도 넷이 다르다** — `cache` 는 `retrieve()` 앞, `bm25` 는 그 안의 한 갈래, `reranker` 는 그 안에서 RRF 뒤·절단 앞, `evaluator` 는 `retrieve()` 와 `generate_answer()` **사이**다. **`evaluator` 만 축이 하나 더 다르다 — 판정이 답변을 안 바꾼다**(2026-08-26). *불충분* 이어도 생성은 그대로 돌고 판정은 `Answer.verdict` 에 실리기만 한다 — 재시도할 Rewriter 가 없기도 하고, 생성을 바꾸면 *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞이는데 답변 품질을 재는 자[尺]가 아직 없다. 설정은 `EVALUATOR_MODEL` 하나가 스위치이고(비면 `get_evaluator()` 가 `None`) **저장소 커밋본은 꺼진 채다**. **실패는 *충분* 도 *불충분* 도 아닌 제3의 상태**(`verdict="failed"`)로 나가고 사유는 `evaluator.warnings` 에 쌓인다 — 판정 하나로 접으면 부정 예시 질의에서 죽은 Evaluator 가 만점을 받아 점수가 실력이 아니라 실패율을 잰다
 
 **둘을 합치지 않는 이유는 아래 "파이프라인 단계" 절에 있다.**
 
@@ -239,7 +239,11 @@ plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라�
 - **품질을 무엇으로 재나** — **검색**은 `evaluation/README.md`(정답 질의 세트와 러너),
   **적재**는 `regression/baseline.json` 과 `tests/ingestion/**/test_*_real.py`. 자[尺]가 서로 다르니 섞지 않는다.
   **검색 쪽 세트가 둘이고 재는 것이 다르다**(2026-08-26) — `qa_set.jsonl` 60건은 전부 정답이 실재해 **검색 지표**(`hit@k`·`MRR`·`nDCG`)를 재고,
-  `qa_set_human.jsonl` 43건은 부정 예시 23건(사람 검수 완료)을 담아 **Evaluator 의 충분/불충분 판정**을 잰다. 부정은 검색 채점에서 빠진다 —
+  `qa_set_human.jsonl` 43건은 부정 예시 23건(사람 검수 완료)을 담아 **Evaluator 의 충분/불충분 판정**을 잰다 —
+  그 자[尺]는 `run_eval` 이 아니라 `evaluation/verdicts.py`(혼동행렬 + 실패 **열**)다. verdict 는 순위를 안 바꿔
+  `run_eval` 지표가 판정이 맞든 틀리든 같은 수를 낸다. **기대 verdict 는 세트가 아니라 그 실행의 순위로 매번 다시 만든다** —
+  긍정 20건도 검색이 근거를 안 물어왔으면 *불충분* 이 옳은 답이라(실측 `hit@10` 14/20), 고정하면 표가 Evaluator 가 아니라 검색기를 잰다.
+  **생성 품질은 여전히 못 잰다**(골든 답변이 없다). 부정은 검색 채점에서 빠진다 —
   정답이 없어 `hit@k` 가 정의상 만점이고 `recall` 은 분모가 0이라 **넣으면 지표가 아니라 상수가 된다**(`run_eval` 의 `skipped_unanswerable` 이 뺀 수를 찍는다)
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
 - **어떻게 여기까지 왔나** — `task_log/INDEX.md`

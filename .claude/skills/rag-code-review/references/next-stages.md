@@ -16,10 +16,11 @@
 - `rag_pipeline/retrieval/bm25.py` · `tokenize.py` · `fusion.py` — BM25 인덱스 · 한국어
   토크나이저 · RRF
 - `rag_pipeline/generation/answer.py:generate_answer()` — 근거 청크로 답변 문장 1회
-- `rag_pipeline/query.py:answer_question()` — 위 둘을 잇는 **세 번째 진입점**
+- `rag_pipeline/generation/evaluate.py:OpenAIEvaluator` — 근거가 충분한지 판정 1회 (기본 꺼짐)
+- `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
-**나머지는 여전히 없다** — 질의 재작성 루프 · Evaluator · agent 레이어.
+**나머지는 여전히 없다** — 질의 재작성 루프 · agent 레이어.
 **리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
 비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라
 결정이다**(켜는 순간 질의당 LLM 호출이 1→2 다). **품질은 아직 안 쟀다** — 2×2 비교표가
@@ -105,16 +106,23 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 - **metadata 필터 검색은 일부러 안 만들었다.** `search()` 에 `filters` 인자가 없는 것은
   누락이 아니다 — 쓸 만한 필터 축이 `document_id` 뿐이고 **`page` 는 못 쓴다**(같은 문서를
   PDF 28쪽 / HWPX 97쪽으로 세는 미해결 함정). metadata 저장·반환은 이미 된다
-- **질의 재작성·Evaluator 는 한 줄도 없다.** 없는 것을 지적하지 않는다.
-  **다만 Evaluator·Rewriter 의 실패 계약은 2026-08-26 에 정해졌다** — 실패는 *충분*도
-  *불충분*도 아닌 **제3의 상태**로 내고, 폴백은 호출부가 정하며 경고는 별도 채널이다.
-  그러니 언젠가 Evaluator 가 들어왔을 때 **실패를 판정 하나로 떨어뜨리는 폴백이 보이면
-  지적한다.** 근거는 부정 예시 세트다 — *불충분* 으로 떨어뜨리면 `qa_set_human.jsonl` 의
-  부정 25건에서 **죽은 Evaluator 가 만점**을 받아, 점수가 실력이 아니라 실패율을 잰다
-  (`task_log/2026-08-26-부정예시-세트화.md`). 리랭커의 *"전부 아니면 전무"* 폴백 +
-  `Reranker.warnings` 와 같은 모양이라 새 잣대가 아니다
-  하이브리드(2026-08-23)와 리랭커(2026-08-25)는 **생겼으므로 이 면제에서 빠진다** —
-  아래 리랭커 계약을 적용한다
+- **질의 재작성은 한 줄도 없다.** 없는 것을 지적하지 않는다 — `plan_log/검색-생성.md`
+  7회차가 표적이 80건 중 1건이라 물렸다
+- **Evaluator 는 2026-08-26 에 생겼다**(`rag_pipeline/generation/evaluate.py`) —
+  `EVALUATOR_MODEL` 이 비면 `get_evaluator()` 가 `None` 을 돌려 **꺼진 채 커밋된다**(켜는
+  순간 질의당 LLM 호출이 1→2 다). 세 가지를 보되 **없는 것을 요구하지는 않는다.**
+  ① **실패는 제3의 상태다** — `verdict="failed"` 를 *충분*·*불충분* 어느 쪽으로도 떨어뜨리는
+  폴백이 보이면 지적한다. *불충분* 으로 떨어뜨리면 `qa_set_human.jsonl` 의 부정 23건에서
+  **죽은 Evaluator 가 만점**을 받아 점수가 실력이 아니라 실패율을 잰다. `bool | None` 로
+  바꾸자는 제안도 같은 지적 대상이다(`None` 이 falsy 라 호출부 한 줄이 실패를 삼킨다).
+  ② **판정이 답변을 바꾸지 않는다** — 생성을 막거나 프롬프트를 바꾸는 코드가 보이면
+  지적한다(재시도할 Rewriter 가 없고, 답변 품질을 재는 자[尺]가 아직 없어 그 변화가 판정
+  수치와 섞인다). ③ **`Protocol` 도 `evaluator_provider` 도 없는 것이 결정이다** — 구현체가
+  하나라 `answer_cache` 와 같은 자리다. 둘째가 실재하기 전에는 요구하지 않는다.
+  판정을 무엇으로 재는지는 `evaluation/verdicts.py`(혼동행렬 + 실패 **열**)이고, 리랭커의
+  *"전부 아니면 전무"* 폴백 + `Reranker.warnings` 와 같은 모양이라 새 잣대가 아니다
+- **"아직 없다"는 면제는 생긴 단계에 안 준다** — 하이브리드(2026-08-23) · 리랭커(2026-08-25) ·
+  Evaluator(2026-08-26)는 전부 이 면제에서 빠진다. 아래 리랭커 계약과 위 Evaluator 셋을 적용한다
 - **리랭커의 실패는 예외가 아니라 폴백이고, 반쯤 채우면 안 된다.** 점수를 하나라도 못 얻으면
   `rerank_score` 를 **아무것도 안 채우고** 받은 순서를 그대로 돌려준다 —
   `ranking_score` 가 `fused_score` 로 떨어져 RRF 순서가 된다. **부분 성공을 만드는 방향으로

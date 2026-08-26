@@ -911,6 +911,40 @@ $env:PYTHONIOENCODING = "utf-8"
 여기서 나온 수치는 *"혼자 서는 질의에서의 리랭커 이득"* 이고, 실사용으로 옮길 때 그 차이가
 얼마인지는 **안 쟀다.**
 
+## 판정(Evaluator)을 재려면
+
+**`run_eval` 이 아니다.** verdict 는 순위를 안 바꾸므로 `hit@k`·`MRR`·`nDCG` 는 판정이 맞든
+틀리든 **같은 수**를 낸다 — 리랭커를 `recall@후보수` 로 재면 차이가 정의상 0 이던 것과 같은
+함정이다. 자[尺]는 `evaluation/verdicts.py` 이고 내는 것은 **혼동행렬 + 실패 열**이다.
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+# 분모를 만드는 실행 — 사람 세트를 리랭커 켜고 (무료)
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --rerank local-gpu `
+    --embedding kure-v1 --qa-set evaluation/qa_set_human.jsonl --k 50 --report-k 10 --label h-ce-gpu
+# 판정 채점 (**과금** — 질의 수 × --top-k 개수만큼 LLM 호출)
+.\.venv\Scripts\python.exe -m evaluation.verdicts --label h-ce-gpu --format pdf `
+    --qa-set evaluation/qa_set_human.jsonl --rerank local-gpu --top-k 5 10 --wrong --json
+```
+
+읽는 법 넷.
+
+- **기대 verdict 는 세트가 아니라 그 실행의 순위에서 나온다.** 부정 23건은 늘 *불충분* 이
+  옳지만 **긍정 20건은 아니다** — 검색이 근거를 안 물어왔으면 *불충분* 이 옳은 답이다.
+  실측(`h-ceiling-kure`, 리랭커 off)으로 `hit@5` 8/20 · `hit@10` **14/20** 이라 `@10` 에서도
+  여섯 건이 근거 없이 온다. 정답표를 세트에 고정하면 그 여섯이 오답으로 세어지고, 그 순간
+  이 표는 Evaluator 가 아니라 **검색기를 잰다**
+- **실패는 칸이 아니라 열이다.** `verdict="failed"` 는 판정이 아니라 판정을 못 한 것이라
+  맞은 것으로도 틀린 것으로도 안 센다. 섞으면 **죽은 Evaluator 가 부정 23건에서 만점**을
+  받아 점수가 실력이 아니라 실패율을 잰다. **표를 읽기 전에 실패 버킷이 0인지 먼저 본다**
+- **`--top-k` 를 둘 이상 준다.** 판정 대상 수가 분모를 통째로 바꾼다 — 5면 기대가
+  *충분 8 / 불충분 12*, 10이면 *충분 14 / 불충분 6* 이다(부정 23은 그대로). 그리고
+  `GENERATION_TOP_K=5` 는 *"대가를 재는 쪽이 없어 못 정한다"* 로 적힌 임시값인데, 이 채점이
+  그 대가를 재는 첫 자다
+- **판정 설정은 `EVAL_SETTINGS["evaluator"]` 가 고정한다.** `.env` 의 `EVALUATOR_MODEL` 이
+  비어 있어도(그것이 저장소 기본이다) 채점은 돈다 — 대신 운영에서 켜려면 `.env` 에 이름을
+  넣어야 하고, 켜는 순간 질의당 LLM 호출이 1→2 가 된다
+
 ## 지금 세트의 감수 사항
 
 - **60건 전부 사람 검수를 통과했다**(2026-08-22). 1차에서 52건이 통과하고 8건이 지적을 받아

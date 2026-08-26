@@ -23,6 +23,20 @@
 같은 선택을 했다 — `RetrievedChunk` 의 경로별 점수를 `float | None` 로 둔 것,
 `StoredChunk` 와 `SearchResult` 를 가른 것. 둘 다 *"0.0 과 없음은 다르다"* 였다.
 
+## 왜 `verdict` 가 `bool` 이 아니라 세 상태인가
+
+**실패가 판정이 아니기 때문이다.** Evaluator 가 죽었을 때(키 없음·응답 손상·호출 실패) 그것을
+*불충분* 으로 떨어뜨리면, 답이 코퍼스에 없는 부정 예시 질의에서 **죽은 Evaluator 가 만점을
+받는다** — 점수가 실력이 아니라 실패율을 재게 된다(`plan_log/검색-생성.md` 10회차).
+
+그래서 `bool | None` 도 아니다. `None` 은 falsy 라 호출부의 `if not verdict.is_sufficient:`
+**한 줄**이 실패를 다시 *불충분* 쪽으로 삼키는데, 그 한 줄은 아무 에러도 안 낸다. 계약을
+지키는 것이 문장이 아니라 **타입**이어야 하는 자리다. 리랭커의 *"전부 아니면 전무"* 폴백과
+같은 모양이고(`retrieval/reranker/base.py`), 거기서 경고가 별도 채널인 것도 같다.
+
+`Answer.verdict` 자체가 `None` 인 것은 **판정을 안 돌렸다**는 뜻이다 — 꺼져 있거나(모델 이름이
+없다) 답이 캐시에서 왔거나. `cached_from` 이 캐시 여부를 혼자 판정하는 것과 같은 모양이다.
+
 ## 왜 `sources` 가 비어 있을 수 있나
 
 **근거를 못 찾은 것은 실패가 아니다.** 관련 청크가 없으면 생성 쪽은 "문서에서 찾지
@@ -34,12 +48,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["Answer", "CacheOrigin"]
+__all__ = ["Answer", "CacheOrigin", "EvaluatorVerdict"]
 
 
 # 이 답변이 캐시에서 왔을 때 그 출처. **셋이 늘 함께 있거나 통째로 없다** (모듈 docstring 참고)
@@ -51,6 +66,15 @@ class CacheOrigin(BaseModel):
     score: float
 
 
+# 검색된 근거가 이 질문에 답하기에 충분한지에 대한 판정. **세 상태다** (모듈 docstring 참고)
+class EvaluatorVerdict(BaseModel):
+    # "failed" 는 **모델이 말할 수 없는 값**이다 — 판정이 아니라 판정을 못 했다는 뜻이라
+    # 파서가 붙인다. 모델이 자기 실패를 선언하게 두면 실패 버킷이 모델의 말버릇을 재게 된다
+    verdict: Literal["sufficient", "insufficient", "failed"]
+    # 왜 그렇게 봤나. 채점표의 틀린 칸을 사람이 읽을 때 쓴다. 실패면 그 사유가 들어간다
+    reasoning: str = ""
+
+
 # 질문 하나에 대한 답변과 그 근거
 class Answer(BaseModel):
     query: str
@@ -59,3 +83,6 @@ class Answer(BaseModel):
     sources: list[RetrievedChunk] = Field(default_factory=list)
     # 캐시에서 왔으면 그 출처, 새로 만들었으면 None. **이것이 캐시 여부의 유일한 판정**이다
     cached_from: CacheOrigin | None = None
+    # Evaluator 를 돌렸으면 그 판정, 안 돌렸으면 None (꺼짐 또는 캐시 히트).
+    # **판정이 답변을 바꾸지 않는다** — 지금은 재시도할 곳이 없어 싣기만 한다
+    verdict: EvaluatorVerdict | None = None

@@ -56,6 +56,7 @@ from rag_pipeline.config import (
     CleanerConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
+    EvaluatorConfig,
     IndexingConfig,
     IngestConfig,
     RerankConfig,
@@ -270,6 +271,16 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
     # **두 곳에 적지 않는다.** 기본 프로필을 그대로 가리켜, `baseline.json` 의 `settings`
     # 와 실제로 실린 설정이 갈릴 수 없게 한다
     "embedding": EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE],
+    # 판정(Evaluator) 설정. **재는 대상 자체라 더더욱 고정한다** — 모델이나 온도가 머신마다
+    # 다르면 같은 명령이 다른 혼동행렬을 내고, 그러면 이 모듈이 존재하는 이유가 무너진다.
+    # `evaluator_model` 을 여기 박는 것이 `.env` 의 빈 값(=꺼짐)을 이긴다 — 채점 도구는
+    # 판정이 **반드시 돌아야** 하는 자리라 리랭커(`off` 가 기본)와 축이 다르다.
+    # 프로필 dict 를 안 만드는 이유는 갈아끼울 두 번째 구현체가 없어서다 — 생기면 더한다
+    "evaluator": {
+        "evaluator_model": "gpt-4.1-mini",
+        "evaluator_temperature": 0.0,
+        "evaluator_max_tokens": 512,
+    },
 }
 
 
@@ -321,6 +332,9 @@ def eval_config(
     # **키는 안 지운다** — 유료 갈래는 실제로 키가 필요하고, 이 파일이 일부러 고정하지 않는
     # 둘(API 키·tesseract 경로) 중 하나다. 꺼진 상태는 키가 아니라 `rerank_model=None` 이 만든다
     object.__setattr__(config, "_rerank", RerankConfig(**rerank_profile(rerank)))
+    # 판정도 같은 이유로 고정한다. **키는 여기서도 안 지운다** — 판정은 유료 갈래뿐이라
+    # 키가 없으면 `verdict="failed"` 가 나오고, 그것은 채점 도구의 실패 열에 그대로 보인다
+    object.__setattr__(config, "_evaluator", EvaluatorConfig(**EVAL_SETTINGS["evaluator"]))
 
     if qdrant_path is not None:
         object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=qdrant_path))
