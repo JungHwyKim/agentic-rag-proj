@@ -230,7 +230,10 @@ def test_prompt_version_is_in_the_salt(mocker, tmp_path):
 
     evaluator = OpenAIEvaluator(_config(tmp_path))
     evaluator.evaluate("q", [_chunk()])
-    mocker.patch.object(evaluate_module, "EVALUATOR_PROMPT_VERSION", "v2")
+    # **실제 상수와 다른 값이어야 한다.** 지금 값을 그대로 박으면 패치가 no-op 이 되어
+    # 두 번째 호출이 캐시에 걸리고 이 테스트가 깨진다. 버전을 올릴 때마다 여기를 고치는
+    # 대신, 상수와 무관한 표식을 써서 **버전 값과 독립**으로 만든다
+    mocker.patch.object(evaluate_module, "EVALUATOR_PROMPT_VERSION", "다른-버전")
     evaluator.evaluate("q", [_chunk()])
 
     assert len(client.calls) == 2
