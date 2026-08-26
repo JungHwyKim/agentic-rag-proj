@@ -58,6 +58,7 @@ from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend.app.api.routes.documents import original_exists
 from backend.app.core.config import get_settings
 from backend.app.core.query_log import append_query_log
 from backend.app.core.templates import templates
@@ -227,6 +228,7 @@ async def document_list(request: Request) -> HTMLResponse:
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
     documents = await run_in_threadpool(_mark_shadow_gaps, request, documents)
+    documents = await run_in_threadpool(_mark_missing_originals, documents)
     originals_mb = await run_in_threadpool(_originals_megabytes)
     return templates.TemplateResponse(
         request,
@@ -263,6 +265,33 @@ def _mark_shadow_gaps(request: Request, documents: list[dict]) -> list[dict]:
         return documents
 
     return [{**row, "shadow_missing": row.get("document_id") not in shadowed} for row in documents]
+
+
+# 원본이 디스크에 없는 문서에 `original_missing` 을 달아 준다.
+#
+# **재색인 버튼을 그릴지 정하는 값이다.** 7회차 이전에 올린 문서는 원본이 없어 재색인이
+# 404 인데, 버튼을 늘 그려두면 **눌러야 그것을 안다** — 6회차에 사용자가 물고 온 것이 정확히
+# 그 종류다. `_mark_shadow_gaps` 와 같은 자리·같은 모양이라 새 패턴이 아니다.
+#
+# 저장 이름 규칙을 여기 옮겨 적지 않고 `documents.original_exists()` 를 부른다. 복사하면
+# 규칙이 두 벌이 되어 한쪽만 고쳐진다.
+#
+# 행마다 `is_file()` 을 부른다. 폴더를 한 번 훑어 이름 집합을 만드는 최적화는 안 했다 —
+# 문서가 10개 안팎이고, 그러면 `_originals_megabytes()` 와 폴더 상태를 나눠 갖게 된다
+def _mark_missing_originals(documents: list[dict]) -> list[dict]:
+    if not documents:
+        return documents
+
+    settings = get_settings()
+    return [
+        {
+            **row,
+            "original_missing": not (
+                row.get("document_id") and original_exists(row["document_id"], settings)
+            ),
+        }
+        for row in documents
+    ]
 
 
 # 원본 보관함이 지금 몇 MB 인지. 사이드바 맨 아래 줄에 함께 실린다.

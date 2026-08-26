@@ -115,6 +115,27 @@ body {
 .doc-item:hover .doc-delete, .doc-delete:focus-visible { opacity: 1; }
 .doc-delete:hover { color: var(--danger); }
 
+/* 재색인 버튼. 삭제와 같은 규칙을 쓰되 위험한 동작이 아니라 hover 색만 다르다 */
+.doc-reindex {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s, color .12s;
+}
+.doc-item:hover .doc-reindex, .doc-reindex:focus-visible { opacity: 1; }
+.doc-reindex:hover { color: var(--accent); }
+.doc-reindex:disabled { opacity: .45; cursor: default; }
+
+/* 원본이 없어 재색인할 수 없는 문서. 오류가 아니라 **다시 올리면 풀리는 상태**라
+   `doc-shadow-missing` 과 같은 대우다 */
+.doc-original-missing { color: var(--muted); cursor: help; }
+
 /* 히스토리는 비활성이다 — 예시처럼 테두리는 두되 전체를 흐리게 해 클릭 불가를 알린다 */
 .history { opacity: .55; }
 .history-item {

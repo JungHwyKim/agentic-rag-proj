@@ -19,6 +19,23 @@
         <span class="doc-meta doc-shadow-missing"
               title="비교용 색인(OpenAI)에 안 들어갔습니다. 이 문서를 다시 올리면 채워집니다.">비교색인 없음</span>
         {% endif %}
+        {# 재색인. **원본이 있을 때만 그린다** — 없으면 404 라, 버튼을 두면 눌러야 그것을
+           안다(6회차가 그 종류였다). 오류 자리는 업로드와 같은 `#upload-error` 이고
+           성공(204)은 htmx 가 swap 을 건너뛰므로 그때는 직접 비운다.
+
+           **`hx-disabled-elt` 는 동기라서 필요하다** — 연타가 두 요청이 되면 같은 문서를
+           두 번 색인한다. `data-reindex` 는 chat.html 의 진행 표시가 듣는 표시다 #}
+        {% if doc.original_missing %}
+        <span class="doc-meta doc-original-missing"
+              title="원본이 저장돼 있지 않아 다시 색인할 수 없습니다. 이 파일을 다시 업로드하면 저장됩니다.">원본 없음</span>
+        {% else %}
+        <button class="doc-reindex" type="button" data-reindex
+                hx-post="/api/v1/documents/{{ doc.document_id | urlencode }}/reindex"
+                hx-target="#upload-error" hx-swap="innerHTML" hx-disabled-elt="this"
+                hx-on::after-request="if (event.detail.successful) document.getElementById('upload-error').innerHTML = ''"
+                hx-confirm="'{{ doc.source_name }}' 을(를) 보관된 원본으로 다시 색인합니다. 시간이 걸릴 수 있습니다."
+                title="다시 색인" aria-label="{{ doc.source_name }} 다시 색인">&#8635;</button>
+        {% endif %}
         {# hx-confirm 은 htmx 2.0.4 내장이라 JS 가 0줄이다. 응답이 204 라 swap 은 안 일어나고
            (htmx 가 204 에 swap 을 건너뛴다) 목록은 HX-Trigger 로 다시 그려진다 #}
         <button class="doc-delete" type="button"

@@ -139,16 +139,29 @@
 {# 업로드/색인 진행 표시. htmx 는 xhr 과 xhr.upload **둘 다**에 progress·loadend 를 걸어
    같은 이벤트가 두 번 흐른다 — 그래서 `sending` 플래그로 앞 구간만 퍼센트로 읽고, 첫
    loadend(=업로드 완료)에서 색인 구간으로 넘어간다. loaded>=total 로만 판정하면 파일이
-   아주 작아 progress 가 한 번도 안 뜨는 경우를 놓친다 #}
+   아주 작아 progress 가 한 번도 안 뜨는 경우를 놓친다.
+
+   **듣는 자리가 폼이 아니라 body 다.** 재색인 버튼은 문서 목록 조각 안에 있어 목록이 다시
+   그려질 때마다 사라진다 — 버튼에 직접 걸면 첫 갱신 뒤로 **조용히 안 듣는다.** 대신
+   `#upload-form` 과 `[data-reindex]` 만 골라 듣고 나머지 htmx 요청(목록 갱신·질의)은 흘린다.
+
+   **재색인에는 업로드 구간이 아예 없다** — 보낼 파일이 없어 loadstart 에서 곧바로 색인
+   구간이다. 진행 표시를 두 벌 만들지 않으려고 같은 상자를 쓴다 #}
 <script id="upload-progress-js">
   (function () {
-    var form = document.getElementById('upload-form');
     var box = document.getElementById('upload-progress');
     var fill = document.getElementById('upload-bar');
     var label = document.getElementById('upload-label');
-    if (!form || !box) return;
+    if (!box) return;
 
-    var timer = null, startedAt = 0, sending = false;
+    var timer = null, startedAt = 0, sending = false, active = null;
+
+    // 이 요청이 진행 표시를 쓸 요청인가. 목록 갱신·질의가 여기서 걸러진다
+    function owner(event) {
+      var elt = event.target;
+      if (!elt || !elt.closest) return null;
+      return elt.closest('#upload-form, [data-reindex]');
+    }
 
     function elapsed() {
       var s = Math.round((Date.now() - startedAt) / 1000);
@@ -157,9 +170,10 @@
 
     function tick() { label.textContent = '색인하는 중… ' + elapsed(); }
 
-    // 서버가 진행 신호를 안 주는 구간. 퍼센트를 지어내는 대신 시간을 센다
+    // 서버가 진행 신호를 안 주는 구간. 퍼센트를 지어내는 대신 시간을 센다.
+    // `timer` 로 막는 것이 xhr/xhr.upload 이중 이벤트 가드다
     function enterIndexing() {
-      if (!sending) return;
+      if (!active || timer) return;
       sending = false;
       fill.className = 'bar-fill is-indeterminate';
       fill.style.width = '100%';
@@ -167,23 +181,29 @@
       timer = setInterval(tick, 1000);
     }
 
-    function stop() {
+    function stop(event) {
+      if (owner(event) !== active) return;
       if (timer) { clearInterval(timer); timer = null; }
       box.hidden = true;
       sending = false;
+      active = null;
     }
 
-    form.addEventListener('htmx:xhr:loadstart', function () {
-      sending = true;
+    document.body.addEventListener('htmx:xhr:loadstart', function (event) {
+      var elt = owner(event);
+      if (!elt) return;
+      active = elt;
       startedAt = Date.now();
       box.hidden = false;
+      if (elt.hasAttribute('data-reindex')) { enterIndexing(); return; }
+      sending = true;
       fill.className = 'bar-fill';
       fill.style.width = '0%';
       label.textContent = '업로드 중… 0%';
     });
 
-    form.addEventListener('htmx:xhr:progress', function (event) {
-      if (!sending) return;
+    document.body.addEventListener('htmx:xhr:progress', function (event) {
+      if (!sending || owner(event) !== active) return;
       var d = event.detail;
       if (!d.lengthComputable || !d.total) return;
       var pct = Math.round((d.loaded / d.total) * 100);
@@ -192,9 +212,12 @@
       if (d.loaded >= d.total) enterIndexing();
     });
 
-    form.addEventListener('htmx:xhr:loadend', enterIndexing);
-    form.addEventListener('htmx:afterRequest', stop);
-    form.addEventListener('htmx:xhr:abort', stop);
+    document.body.addEventListener('htmx:xhr:loadend', function (event) {
+      if (owner(event) !== active) return;
+      enterIndexing();
+    });
+    document.body.addEventListener('htmx:afterRequest', stop);
+    document.body.addEventListener('htmx:xhr:abort', stop);
   })();
 </script>
 

@@ -248,7 +248,9 @@ def test_indexing_phase_shows_time_not_a_fake_percentage():
 
     chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
     script = chat.split('<script id="upload-progress-js">')[1].split("</script>")[0]
-    indexing = script.split("function enterIndexing()")[1].split("function stop()")[0]
+    # 자르는 앵커를 `function stop(` 까지만 잡는다 — 인자까지 묶으면 시그니처가 바뀌는 순간
+    # 잔여 전체가 구간으로 들어와 **이 가드가 엉뚱한 데서 터진다**(실제로 한 번 그랬다)
+    indexing = script.split("function enterIndexing()")[1].split("function stop(")[0]
     tick = script.split("function tick()")[1].split("}")[0]
 
     # 무한 애니메이션으로 넘어가고, **퍼센트를 계산하지 않는다**.
