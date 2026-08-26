@@ -80,6 +80,10 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     ("rag_pipeline/retrieval/", "tests/retrieval"),
     ("rag_pipeline/generation/", "tests/generation"),
     ("rag_pipeline/query.py", "tests/test_query.py"),
+    # 프로세스 전역 런타임 설정. **최상위 모듈이라 커버리지 테스트가 안 잡는다** —
+    # 저쪽은 `rag_pipeline/ingestion/` 아래 디렉터리만 훑어서, 여기를 빠뜨리면
+    # 그 파일만 자동 테스트가 안 도는데 아무 에러도 안 난다(2026-08-26 에 실제로 그랬다)
+    ("rag_pipeline/runtime.py", "tests/test_runtime.py"),
     # 답변 캐시. 적재도 검색도 아니라 최상위에 산다 — retrieve() **앞**에 서기 때문이다
     ("rag_pipeline/answer_cache/", "tests/answer_cache"),
     ("backend/", "tests/api"),

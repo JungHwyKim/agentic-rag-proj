@@ -47,6 +47,7 @@ from rag_pipeline.retrieval.reranker.base import (
     rerank_cache_key,
     rerank_cache_salt_for,
 )
+from rag_pipeline.runtime import apply_torch_threads
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 __all__ = ["LocalCrossEncoderReranker"]
@@ -61,6 +62,11 @@ _SCORING_VERSION = "v1"
 def _load_model(model_name: str | None, device: str) -> Any | None:
     if not model_name:
         return None
+
+    # 스레드 상한을 **모델을 올리기 전에** 먹인다. 임베더 쪽 `_make_model()` 과 같은 자리이고
+    # 값이 프로세스 전역이라 먼저 오는 쪽이 적용한다 (`runtime.py` 의 멱등 문단)
+    apply_torch_threads()
+
     try:
         from sentence_transformers import CrossEncoder
     except ImportError:

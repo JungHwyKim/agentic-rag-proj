@@ -66,8 +66,50 @@
 # 안 주면 baseline 이라 지금까지와 같은 실행이다
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --embedding 프로필이름 --label 실험이름
 
+# **GPU 로 돌리려면 프로필 이름으로 준다** — 이 러너는 .env 를 일부러 안 본다 (아래 「GPU 로 돌리기」)
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid --embedding kure-v1-gpu --rerank local-gpu --k 50 --report-k 10 --label 실험이름
+
 # 포맷 비교·모델 비교는 이 한 줄로 안 된다 — 아래 "…를 돌리려면" 절을 그대로 따른다
 ```
+
+## GPU 로 돌리기
+
+**`.env` 에 `EMBEDDING_DEVICE=cuda` 를 넣어도 이 러너는 CPU 로 돈다.** 버그가 아니라
+재현성 장치다 — `evaluation/config.py` 의 프로필이 장치를 못 박고 `.env` 를 이긴다
+(*"baseline 은 재현될 때만 기준선"*). 그래서 **GPU 는 프로필로 고른다.**
+
+```powershell
+# 저장소 루트에서. 과금 0 (둘 다 로컬 모델)
+$env:PYTHONIOENCODING = "utf-8"
+.\.venv\Scripts\python.exe -m evaluation.run_eval --dense --hybrid `
+  --embedding kure-v1-gpu --rerank local-gpu --k 50 --report-k 10 --label 실험이름
+```
+
+| 축 | CPU 프로필 | GPU 프로필 |
+|---|---|---|
+| 임베딩 | `kure-v1` | **`kure-v1-gpu`** |
+| 리랭킹 | `local` | **`local-gpu`** |
+
+**갈아끼지 않고 더한 것이 규칙이다** — 이름이 곧 실험의 정체라, 갈아끼면 이미 나온 수치가
+어느 장치로 재졌는지를 파일이 못 말한다.
+
+**컬렉션은 안 갈린다.** `collection_name_for()` 가 모델·차원에서 파생하므로 `kure-v1` 과
+`kure-v1-gpu` 가 같은 컬렉션을 연다 — **재색인이 없다.** 캐시 salt 도 같다
+(`cache_salt_for()` 에 device 가 없다). 근거는 실측이다: 실제 청크 414개에서 CPU/GPU 벡터가
+`1−cos` 최대 **1.354e-09** 이고, E2E 로 지표 49개·질의 60건이 **전건 동일**이었다
+(`verify_log/2026-08-26-스레드-발열-GPU.md`).
+
+**그래서 장치를 바꿔 견주는 실행은 캐시를 갈라야 한다.** 안 가르면 GPU 실행이 CPU 가 만든
+벡터를 그대로 읽어 **모델이 한 번도 안 돈다** — 실제로 그렇게 돌린 첫 실행이
+`usage.calls == 0` 이었다. `usage.calls` 가 0인 비교는 근거가 아니다.
+
+```powershell
+$env:EMBEDDING_CACHE_DIR = "<임시경로>"
+$env:RERANK_CACHE_DIR    = "<임시경로>"
+```
+
+**얼마나 빨라지나** — 임베딩 색인이 CPU-초 1,856.7 → 15.8(**117배**), 리랭킹이 질의당
+63.9초 → 2.988초(**21.4배**)다.
 
 `--format` 은 확장자가 아니라 **포맷 라벨**이다(`documents.py`). 그 그룹에 그 판이 없으면
 **조용히 넘어가지 않고 멈춘다** — 넘어가면 그 그룹 질의가 문서 없이 채점되어 점수가 가짜로
@@ -307,7 +349,7 @@ CLAUDE.md 의 *"시행령 안내서가 HWPX 45청크 vs PDF 104청크로 2.3배"
 이고 기본은 `baseline` 이라 **아무것도 안 주면 지금까지와 같은 실행**이다.
 
 ```powershell
-# 지금 있는 프로필: baseline (text-embedding-3-small) · kure-v1 (nlpai-lab/KURE-v1, 로컬)
+# 지금 있는 프로필: baseline (text-embedding-3-small) · kure-v1 (KURE-v1, 로컬 CPU) · kure-v1-gpu (같은 모델, cuda)
 .\.venv\Scripts\python.exe -m evaluation.run_eval --dense --format pdf --embedding kure-v1 --label kure-v1
 ```
 
@@ -751,7 +793,7 @@ GPU/CPU 벡터가 같은 캐시 칸을 쓴다(탐침 docstring 에 절차가 있
 ### 2. 축은 프로필 이름이다
 
 `--rerank <프로필>` 이고 값은 `evaluation/config.py` 의 `EVAL_RERANKERS` 에 있다 —
-`off`(기본) · `openai` · `local`. **없는 이름을 주면 멈춘다** — 조용히 꺼짐으로 떨어지면
+`off`(기본) · `openai` · `local`(CPU) · `local-gpu`(cuda). **없는 이름을 주면 멈춘다** — 조용히 꺼짐으로 떨어지면
 리랭커를 켠 줄 알고 대조군을 두 번 재게 되고, 두 실행이 같은 수치를 내는 것이
 *"리랭커가 효과 없다"* 로 읽힌다(`--embedding` 과 같은 가드다).
 

@@ -74,6 +74,19 @@ class ContentRoutingConfig(BaseSettings):
     ocr_min_chars: int = 10
     ocr_min_confidence: float = 60.0
 
+    # 무료 OCR 을 몇 갈래로 동시에 돌리나. **`route_all()` 의 병렬 구간에만 쓴다** —
+    # 유료(Vision·LlamaParse)는 일부러 직렬이고 그 이유는 `loader/content/router.py` 에 있다.
+    #
+    # **8은 한계값이 아니라 무릎이다.** 실측(2026-08-24, 47쪽 전면 스캔본)으로 워커를 늘릴 때
+    # 직전 대비 -102.1/-62.1/-23.8/**-9.5**초이고, 16이 42.3초로 8(51.8초)보다 18% 빠르지만
+    # 같은 uvicorn 이 질의도 받는다. 근거는 `verify_log/2026-08-24-ocr-병렬화.md`.
+    #
+    # **전에는 일부러 안 열었다** — 그때 근거가 *"합법값이 실제로 갈리는 두 번째 경로가
+    # 생긴 뒤에 연다"* 였다. 2026-08-26 에 그 경로가 생겼다: **발열**이다. Tesseract 는
+    # 서브프로세스라 `TORCH_NUM_THREADS` 가 안 먹고 GPU 로도 못 옮겨서, 적재 쪽 CPU 부하를
+    # 낮출 손잡이가 이것 하나뿐이다. 낮추면 그만큼 느려지는 것이 위 실측의 대가다
+    ocr_max_workers: int = 8
+
     # --- PDF ---
     # 페이지 텍스트가 이 글자 수 미만이면 스캔본으로 보고 페이지 전체를 이미지로 처리.
     # 너무 높이면 제목만 있는 표지·간지 페이지까지 OCR로 보내 비용을 낭비한다.
@@ -178,11 +191,17 @@ class EmbeddingConfig(BaseSettings):
     # GPU 로 가려면 이 값을 명시로 바꾸고 PyPI 밖 `--index-url` 로 cu 빌드 torch 를 깐다
     # (PyPI 휠은 CPU 빌드다).
     #
-    # **캐시 salt·컬렉션 이름에는 안 들어간다.** 같은 모델·같은 차원이고 차이가 float 오차
-    # 수준일 것으로 보기 때문인데, **아직 실측이 아니다**(이 저장소에 CUDA 머신이 없었다).
-    # 넣으면 GPU 로 옮기는 순간 임베딩 캐시가 전량 미스가 되고 컬렉션이 갈려 옛 색인이
-    # 고아가 된다. 처음 GPU 를 쓸 때 CPU 벡터와의 코사인 차이를 재기로 했다
-    # (`plan_log/embedding.md` 미결)
+    # **캐시 salt·컬렉션 이름에는 안 들어간다 — 이제 실측이다.** 2026-08-26 에 CUDA 머신이
+    # 생겨 예약해 뒀던 측정을 했다: 실제 청크 414개를 두 장치로 인코딩해 `1-cos` 최대
+    # **1.354e-09** · 성분 최대 절대차 5.728e-06 · 노름 양쪽 1.0000000 이다(합성 입력
+    # 200개에서는 `1-cos` 가 정확히 0이었다 — 실제 청크에서는 0이 아니지만 float32 오차
+    # 수준인 것은 같다). 그래서 **넣지 않는 것이 확정**이고, `verify_log/2026-08-26-
+    # 스레드-발열-GPU.md` 가 근거다.
+    #
+    # 넣었다면 GPU 로 옮기는 순간 임베딩 캐시가 전량 미스가 되고 컬렉션이 갈려 옛 색인이
+    # 고아가 된다 — **얻는 것 없이** 그 대가만 치르는 셈이었다.
+    # `rerank_device` 는 반대로 salt 에 **들어간다**: 저쪽은 순위가 같다는 것만 확인했지
+    # 점수가 같다는 것은 안 봤고, *같다는 것을 확인한 것*과 *다를 수 없다는 것*은 다르다
     embedding_device: str = "cpu"
 
     # None 이면 모델 기본 차원. text-embedding-3-* 는 이 값으로 차원을 줄일 수 있어
@@ -349,6 +368,21 @@ class AnswerCacheConfig(BaseSettings):
     # 임베딩 모델을 바꿨을 때 옛 모델 벡터가 든 캐시에 새 모델 질의 벡터로 유사도를 재게 된다
     answer_cache_collection_name: str = "qa_cache"
 
+    # 무엇을 "같은 질문"으로 보나. **임계값과 다른 축이라 따로 둔다.**
+    #
+    # `semantic` 은 질문 벡터의 유사도를 재고 `answer_cache_threshold` 가 그 자[尺]다.
+    # `exact` 는 **정규화한 문자열이 같은가**만 본다 — `cache_point_id_for()` 가 NFC + 공백
+    # 정규화 uuid5 라 같은 질문이 늘 같은 자리이고, 그래서 자[尺]가 아예 필요 없다.
+    #
+    # **`threshold=1.0` 으로 흉내 내지 않는 이유**: 임계값은 *같은 벡터인가*를 재는 자인데
+    # 완전 일치가 묻는 것은 *같은 문자열인가*다. 한 자로 둘을 재면 어느 쪽이 발화했는지
+    # 코드가 못 말하고, 부동소수라 보장도 없다(실측 노름 0.999562~1.000417).
+    #
+    # **`exact` 는 임계값 없이도 켜진다** — 이 축에는 정할 값이 없기 때문이다.
+    # 기본값이 `semantic` 이라 `.env` 를 안 건드리면 지금까지와 글자 그대로 같다
+    # (임계값이 비어 있어 캐시가 통째로 꺼진 상태). 근거는 plan_log/시맨틱-캐시.md 6회차
+    answer_cache_mode: Literal["semantic", "exact"] = "semantic"
+
     # 이 값 이상이면 "같은 질문"으로 본다. **기본값이 없는 것이 설계다.**
     # None 이면 get_answer_cache() 가 None 을 돌려줘 캐시가 통째로 꺼진다 — 이 저장소의
     # 임계값은 전부 분포의 틈에서 나왔는데(표 되붙이기 12pt, 표시 면적비 0.08 vs 1.00)
@@ -446,6 +480,35 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_answer_cache"):
             object.__setattr__(self, "_answer_cache", AnswerCacheConfig())
         return self._answer_cache  # type: ignore[attr-defined]
+
+
+# 프로세스 전역인 것만 여기 온다. **`EmbeddingConfig`·`RerankConfig` 로 가르지 않는 이유**가
+# 이 클래스의 존재 이유다 — OpenMP 스레드 풀은 프로세스에 **하나뿐**이라 둘로 가르면
+# `EMBEDDING_THREADS=4` 와 `RERANK_THREADS=8` 을 동시에 만족시킬 수 없다. 나중에 부른 쪽이
+# 이기고, **설정한 값과 다른 수로 도는 상태가 에러 없이** 생긴다 — 설정 클래스가 전부
+# `extra="ignore"` 라 오타가 조용히 안 먹는 것과 같은 종류의 사고다.
+#
+# 임베더와 리랭커가 **같은 풀을 공유한다**는 것이 실측이다(2026-08-26, 16논리/8물리 머신):
+# `at::get_num_threads()` 8 · `omp_get_max_threads()` 8 · `OMP_NUM_THREADS` 미설정
+class RuntimeConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # torch 가 쓸 CPU 스레드 수(intra-op). **None 이면 torch 기본값을 안 건드린다** —
+    # 그 기본값은 물리 코어 수다.
+    #
+    # **기본을 낮추지 않는 것이 결정이다.** `verify_log/` 의 모든 벽시계와
+    # `regression/baseline.json` 이 8스레드에서 잰 값이라, 기본을 바꾸면 과거 수치가
+    # **조용히 비교 불가**가 된다. `embedding_device` 가 자동 감지를 안 하는 것과 같은
+    # 잣대이고, 발열을 줄이려면 사용자가 `.env` 에서 명시로 내린다.
+    #
+    # **GPU 로 갔다고 이 축이 죽지 않는다** — CPU 에 남는 갈래가 셋이다:
+    # ① 재현성 때문에 일부러 `cpu` 를 못 박은 `evaluation/config.py` 의 프로필
+    # ② GPU 없는 머신 ③ VRAM 이 모자라 CPU 로 내릴 때
+    torch_num_threads: int | None = None
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

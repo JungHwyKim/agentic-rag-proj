@@ -121,6 +121,33 @@ EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
         "max_embedding_tokens_per_doc": 200_000,
         "embedding_cache_enabled": True,
     },
+    # 같은 모델을 GPU 에서. **`kure-v1` 을 갈아끼지 않고 더하는 것이 결정이다** —
+    # `EVAL_RERANKERS` 가 `local` 옆에 `local-gpu` 를 더한 선례와 같고, 이유도 같다:
+    # 이름이 곧 실험의 정체라, 갈아끼면 이미 나온 수치가 **어느 장치로 재졌는지를 파일이
+    # 못 말한다.**
+    #
+    # **컬렉션은 갈리지 않는다.** `collection_name_for()` 가 모델·차원에서 파생하므로
+    # 프로필 이름이 달라도 같은 `nlpai-lab/KURE-v1` 컬렉션을 연다 — 재색인이 필요 없다.
+    # 캐시 salt 도 같다(`cache_salt_for()` 에 device 가 없다).
+    #
+    # **그래도 되는 근거가 실측이다** (2026-08-26, 실제 청크 414개):
+    # `1-cos` 최대 **1.354e-09** · 성분 최대 절대차 5.728e-06 로 float32 오차 수준이라
+    # 두 장치의 벡터를 한 컬렉션에 섞어도 검색이 안 흔들린다. 눈에 띄게 달랐다면
+    # 컬렉션을 갈라야 했고, 그때는 이 프로필이 재색인을 뜻했을 것이다.
+    #
+    # **여는 이유는 발열이다** — 같은 414청크가 cpu 236.4초/CPU-초 1856.7 vs
+    # cuda 15.4초/CPU-초 15.8 로 **CPU-초 117배**다. `.env` 의 `EMBEDDING_DEVICE` 로는
+    # 이걸 못 바꾼다: 이 파일의 프로필이 `.env` 를 이기는 것이 재현성 장치라서,
+    # **프로필이 없으면 GPU 를 켜 놓고도 평가가 CPU 8코어를 포화시킨다**
+    "kure-v1-gpu": {
+        "embedding_provider": "local",
+        "embedding_model": "nlpai-lab/KURE-v1",
+        "embedding_dimensions": None,
+        "embedding_device": "cuda",
+        "embedding_batch_size": 100,
+        "max_embedding_tokens_per_doc": 200_000,
+        "embedding_cache_enabled": True,
+    },
 }
 
 # 아무것도 안 주면 이것. 지금까지와 같은 실행이 된다
@@ -136,6 +163,13 @@ DEFAULT_EMBEDDING_PROFILE = "baseline"
 #
 # 새 프로필을 더할 때 **`rerank_device` 를 빠뜨리지 않는다** — `kure-v1` 이 `embedding_device`
 # 를 못 박은 것과 같은 함정이다(GPU 를 켠 머신이 다른 점수를 내면 비교표가 조용히 흔들린다).
+#
+# **`rerank_provider` 도 마찬가지이고 이쪽은 대가가 돈이다** — 기본값이 `openai` 라 안 박으면
+# HuggingFace 리포 이름이 유료 리랭커로 간다. `EVAL_EMBEDDINGS["baseline"]` 이 provider 를
+# 안 박아 *로컬 text-embedding-3-small* 을 뜻하게 됐던 것과 같은 구멍인데(2026-08-25),
+# 저쪽은 없는 모델 이름으로 죽고 이쪽은 **에러 없이 과금된다.**
+# `tests/evaluation/test_eval_config.py` 의 전수 가드 둘이 이 문단을 강제한다 —
+# 모델이 있는 프로필은 provider 를, 로컬 프로필은 device 를 박아야 통과한다.
 EVAL_RERANKERS: dict[str, dict[str, Any]] = {
     # 리랭커 없음. **`rerank_model` 이 비면 `get_reranker()` 가 None 을 돌려준다**
     "off": {
