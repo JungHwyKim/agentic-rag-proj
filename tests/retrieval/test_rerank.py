@@ -20,7 +20,7 @@ import pytest
 
 from rag_pipeline.config import RerankConfig, RetrievalConfig
 from rag_pipeline.retrieval import get_reranker, retrieve
-from rag_pipeline.retrieval.reranker import local_ce, openai_llm
+from rag_pipeline.retrieval.reranker import cohere_api, local_ce, openai_llm
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 from rag_pipeline.schemas.vector import SearchResult
 
@@ -156,14 +156,30 @@ def test_no_model_means_no_reranker():
     assert get_reranker(RerankConfig(rerank_model="")) is None
 
 
-# provider 가 구현체를 가른다. 구현체가 둘이라 이 설정이 죽은 설정이 아니다
+# provider 가 구현체를 가른다. 구현체가 셋이라 이 설정이 죽은 설정이 아니다
 @pytest.mark.parametrize(
     ("provider", "expected"),
-    [("openai", openai_llm.OpenAILLMReranker), ("local", local_ce.LocalCrossEncoderReranker)],
+    [
+        ("openai", openai_llm.OpenAILLMReranker),
+        ("local", local_ce.LocalCrossEncoderReranker),
+        ("cohere", cohere_api.CohereReranker),
+    ],
 )
 def test_provider_picks_the_implementation(provider, expected):
     made = get_reranker(RerankConfig(rerank_provider=provider, rerank_model="m"))
     assert isinstance(made, expected)
+
+
+# **데울 가중치가 있는 갈래는 로컬 하나다.** `backend` 의 `warm_up()` 이 이 값을 보고
+# 부를지 정하므로, 네트워크 갈래가 True 로 뒤집히면 **기동마다 유료 호출**이 나간다
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("local", True), ("openai", False), ("cohere", False)],
+)
+def test_only_the_local_branch_has_weights_to_warm(provider, expected):
+    made = get_reranker(RerankConfig(rerank_provider=provider, rerank_model="m"))
+    assert made is not None
+    assert made.needs_warmup is expected
 
 
 # ------------------------------------------------------------- OpenAI 갈래
@@ -464,3 +480,199 @@ def test_ties_keep_the_fused_order(mocker, tmp_path):
     ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
 
     assert [c.chunk_id for c in ranked] == ["a", "b"]
+
+
+# ------------------------------------------------------------- Cohere 갈래
+
+
+# 실제 SDK 응답 모양을 지킨다 — `results` 의 각 항목이 `index` 와 `relevance_score` 를 갖고
+# **점수 순으로 정렬돼** 온다. 입력 순서로 오는 척 만들면 테스트가 오해를 그대로 검증한다
+# (CLAUDE.md 의 LlamaParse 교훈: 가짜를 틀린 모양으로 만들면 그 오해가 잠긴다)
+class _FakeRerankResult:
+    def __init__(self, index: int, relevance_score: float) -> None:
+        self.index = index
+        self.relevance_score = relevance_score
+
+
+class _FakeRerankResponse:
+    def __init__(self, results) -> None:  # noqa: ANN001
+        self.results = results
+
+
+class _FakeCohereClient:
+    def __init__(self, response=None, raises: Exception | None = None) -> None:  # noqa: ANN001
+        self.response = response
+        self.raises = raises
+        self.calls: list[dict] = []
+
+    def rerank(self, **kwargs):  # noqa: ANN003, ANN201
+        self.calls.append(kwargs)
+        if self.raises is not None:
+            raise self.raises
+        return self.response
+
+
+def _cohere_config(tmp_path) -> RerankConfig:  # noqa: ANN001
+    return RerankConfig(
+        rerank_provider="cohere",
+        rerank_model="rerank-v3.5",
+        cohere_api_key="k",
+        rerank_candidates=50,
+        # `_openai_config` 와 같은 이유로 **못 박는다** — 이 갈래도 device 를 안 쓰지만
+        # 캐시 salt 에는 들어가므로, 안 박으면 개발자 `.env` 의 `RERANK_DEVICE` 가 실린다
+        rerank_device="cpu",
+        # **아래 단언이 이 값을 본다.** 안 박으면 개발자 `.env` 가 픽스처에 실려
+        # 테스트가 머신마다 다른 답을 낸다
+        rerank_max_tokens_per_doc=4096,
+        rerank_cache_dir=tmp_path / "rerank",
+        rerank_cache_enabled=False,
+    )
+
+
+# 점수대로 순서가 뒤집힌다. **응답이 점수 순으로 와도 `index` 로 되돌린다**
+def test_cohere_reranker_reorders(mocker, tmp_path):
+    # b(index 1) 가 더 높고 먼저 온다 — 실제 API 가 이렇게 준다
+    response = _FakeRerankResponse([_FakeRerankResult(1, 0.9), _FakeRerankResult(0, 0.1)])
+    client = _FakeCohereClient(response)
+    mocker.patch.object(cohere_api, "_make_client", return_value=client)
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["b", "a"]
+    assert reranker.usage.api_calls == 1
+    assert reranker.usage.reranked == 2
+    # **토큰이 아니라 search unit 과금이라 이 칸은 0 이다** (cohere_api 모듈 docstring)
+    assert reranker.usage.total_tokens == 0
+    assert reranker.warnings == []
+
+
+# **받은 순서를 그대로 쓰면 점수가 엉뚱한 후보에 붙는다.** 에러가 아니라 순위로만 드러나는
+# 종류라 따로 잠근다 — 위 테스트와 달리 여기서는 점수 차가 커서 뒤바뀜이 확실히 보인다
+def test_cohere_scores_follow_index_not_arrival_order(mocker, tmp_path):
+    # 도착 순서는 [c, a, b] 인데 index 는 [2, 0, 1] 이다
+    response = _FakeRerankResponse(
+        [_FakeRerankResult(2, 9.0), _FakeRerankResult(0, 5.0), _FakeRerankResult(1, 1.0)]
+    )
+    mocker.patch.object(cohere_api, "_make_client", return_value=_FakeCohereClient(response))
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.5), _chunk("c", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["c", "a", "b"]
+    assert [c.rerank_score for c in ranked] == [9.0, 5.0, 1.0]
+
+
+# **항목 수가 부족하면 통째로 버린다.** 반쯤 채우면 판정이 오염된다 (base.py: 전부 아니면 전무)
+def test_cohere_partial_response_is_discarded_whole(mocker, tmp_path):
+    response = _FakeRerankResponse([_FakeRerankResult(0, 9.0)])
+    mocker.patch.object(cohere_api, "_make_client", return_value=_FakeCohereClient(response))
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["a", "b"]
+    assert all(chunk.rerank_score is None for chunk in ranked)
+    assert reranker.usage.api_calls == 0, "실패한 호출로 카운터가 오르면 회계가 거짓이 된다"
+    assert reranker.warnings
+
+
+# 손상된 응답 — 자리 중복 · 범위 밖 index · 점수가 수가 아님 · results 가 없음.
+# 전부 폴백이고 **예외가 아니다**
+@pytest.mark.parametrize(
+    "results",
+    [
+        [_FakeRerankResult(0, 1.0), _FakeRerankResult(0, 2.0)],  # 같은 자리 두 번
+        [_FakeRerankResult(0, 1.0), _FakeRerankResult(5, 2.0)],  # 범위 밖
+        [_FakeRerankResult(0, 1.0), _FakeRerankResult(1, "높음")],  # 수가 아님
+        None,  # results 자체가 없다
+    ],
+)
+def test_cohere_broken_response_falls_back(mocker, tmp_path, results):
+    response = _FakeRerankResponse(results)
+    mocker.patch.object(cohere_api, "_make_client", return_value=_FakeCohereClient(response))
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["a", "b"]
+    assert all(chunk.rerank_score is None for chunk in ranked)
+    assert reranker.warnings
+
+
+# API 가 죽어도 예외가 안 난다 — 내려갈 층(RRF 순서)이 있는 갈래다
+def test_cohere_api_failure_falls_back(mocker, tmp_path):
+    client = _FakeCohereClient(raises=RuntimeError("503"))
+    mocker.patch.object(cohere_api, "_make_client", return_value=client)
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["a", "b"]
+    assert reranker.warnings
+
+
+# 키가 없으면 부르지도 않고 경고만 남긴다. **기본 pytest 가 지나는 길이다**
+def test_cohere_without_key_warns_and_falls_back(mocker, tmp_path):
+    mocker.patch.object(cohere_api, "_make_client", return_value=None)
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert [c.chunk_id for c in ranked] == ["a", "b"]
+    assert any("COHERE_API_KEY" in w for w in reranker.warnings)
+
+
+# **`top_n` 을 안 넘긴다** — 넘기면 잘린 응답이 와서 매 질의가 폴백으로 떨어진다.
+# 그리고 문서 길이 상한은 명시로 넘긴다(SDK 기본값이 내려가면 조용히 잘린다)
+def test_cohere_sends_no_top_n_and_pins_the_doc_limit(mocker, tmp_path):
+    response = _FakeRerankResponse([_FakeRerankResult(0, 1.0), _FakeRerankResult(1, 2.0)])
+    client = _FakeCohereClient(response)
+    mocker.patch.object(cohere_api, "_make_client", return_value=client)
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    sent = client.calls[0]
+    assert "top_n" not in sent, "top_n 을 넘기면 후보 전원의 점수를 못 받아 늘 폴백이다"
+    assert sent["max_tokens_per_doc"] == 4096
+    assert sent["model"] == "rerank-v3.5"
+
+
+# 긴 청크를 안 자른다. 정답 span 이 마크다운 표의 행에 흩어져 있어 앞부분만 보면 헤더만 보인다
+def test_cohere_does_not_truncate_long_chunks(mocker, tmp_path):
+    response = _FakeRerankResponse([_FakeRerankResult(0, 1.0), _FakeRerankResult(1, 2.0)])
+    client = _FakeCohereClient(response)
+    mocker.patch.object(cohere_api, "_make_client", return_value=client)
+
+    long_text = "가" * 1200
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    reranker.rerank("질의", [_chunk("a", 0.9, long_text), _chunk("b", 0.1)])
+
+    assert client.calls[0]["documents"][0] == long_text
+
+
+# 후보가 1개 이하면 부르지 않는다. **아낀다기보다 정렬할 것이 없다**
+def test_cohere_skips_when_there_is_nothing_to_order(mocker, tmp_path):
+    client = _FakeCohereClient(_FakeRerankResponse([]))
+    mocker.patch.object(cohere_api, "_make_client", return_value=client)
+
+    reranker = cohere_api.CohereReranker(_cohere_config(tmp_path))
+    reranker.rerank("질의", [_chunk("a", 0.9)])
+
+    assert client.calls == []
+
+
+# **캐시 salt 에 provider 가 들어가 갈래끼리 안 섞인다.** 안 갈리면 로컬로 잰 점수가
+# Cohere 실행의 답인 척 돌아오고, 그것은 에러가 아니라 수치로만 드러난다
+def test_cohere_cache_does_not_collide_with_other_providers(tmp_path):
+    from rag_pipeline.retrieval.reranker.base import rerank_cache_salt_for
+
+    base = {"rerank_model": "m", "rerank_cache_dir": tmp_path}
+    salts = {
+        provider: rerank_cache_salt_for(
+            RerankConfig(rerank_provider=provider, **base), prompt_version="v1"
+        )
+        for provider in ("openai", "local", "cohere")
+    }
+    assert len(set(salts.values())) == 3

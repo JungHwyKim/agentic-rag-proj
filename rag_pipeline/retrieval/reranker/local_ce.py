@@ -99,6 +99,12 @@ class LocalCrossEncoderReranker:
     def usage(self) -> RerankUsage:
         return self._usage
 
+    # **여기만 True 다.** 첫 질의가 무는 가중치 적재 6.2초를 기동으로 옮기는 것이
+    # 워밍업의 값어치이고(verify_log/2026-08-26-첫질의-대표값.md), 그것이 있는 갈래는 이것뿐이다
+    @property
+    def needs_warmup(self) -> bool:
+        return True
+
     # 캐시 salt. 규칙은 base 가 정한다
     @property
     def _salt(self) -> str:

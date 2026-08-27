@@ -287,11 +287,16 @@ class RerankConfig(BaseSettings):
     # 중복이 아니라 각 설정 객체가 독립이라 각자 읽는 것이다
     openai_api_key: str | None = None
 
-    # 어느 구현체로 다시 정렬하나. **구현체가 둘이라 여는 설정이다** — `embedding_provider`
+    # Cohere 갈래의 키. `openai_api_key` 와 **별개 필드인 것이 요점이다** — 한 칸을 돌려쓰면
+    # provider 를 바꿀 때 남의 키를 물고 401 을 폴백으로 삼킨다(경고만 남고 에러가 안 난다)
+    cohere_api_key: str | None = None
+
+    # 어느 구현체로 다시 정렬하나. **구현체가 셋이라 여는 설정이다** — `embedding_provider`
     # 와 같은 잣대이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
-    # `local` 은 sentence-transformers CrossEncoder 경로다.
+    # `local` 은 sentence-transformers CrossEncoder, `openai` 는 LLM 채점기(listwise),
+    # `cohere` 는 전용 리랭킹 API 다 — **뒤 둘은 같은 '유료'가 아니라 종류가 다르다.**
     # **키가 없어도 도는 갈래라** tests/conftest.py 의 offline_config 가 이 값을 못 박는다
-    rerank_provider: Literal["openai", "local"] = "openai"
+    rerank_provider: Literal["openai", "local", "cohere"] = "openai"
 
     # 무슨 모델로. **기본값이 없는 것이 설계다** — 비어 있으면 `get_reranker()` 가 None 을
     # 돌려줘 리랭커가 통째로 꺼진다(`answer_cache_threshold` 와 같은 모양).
@@ -311,8 +316,17 @@ class RerankConfig(BaseSettings):
     # 버린다(verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
     rerank_candidates: int = 50
 
-    # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다
+    # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다.
+    # **`openai` 갈래만 쓴다** — 아래 `rerank_max_tokens_per_doc` 과 이름이 닮았지만 축이 다르다
     rerank_max_tokens: int = 4096
+
+    # `cohere` 갈래가 문서 하나를 몇 토큰까지 보내나. **SDK 기본값과 같은 값을 명시로 박는다** —
+    # 이 코퍼스의 청크는 최대 약 1,200자·토큰이라(CLAUDE.md 의 *문자 ≈ 토큰*) 안 잘리지만,
+    # SDK 기본값이 내려가면 **조용히 잘리기 시작하고 그것은 에러가 아니라 수치로만 드러난다.**
+    # 자르면 안 되는 이유는 `openai_llm` 이 *청크를 안 자른다* 를 정한 것과 같다 —
+    # 정답 span 이 마크다운 표의 행에 흩어져 있어 앞부분만 보면 헤더만 보인다.
+    # **과금 단위와 헷갈리지 말 것**: 과금은 500 토큰마다 별개 문서로 세므로 이 값과 무관하다
+    rerank_max_tokens_per_doc: int = 4096
 
     # 점수는 재현돼야 한다. 생성(0.2)과 달리 0 인 이유는 **추릴 여지를 남길 데가 없어서**다 —
     # 여기서 모델이 하는 일은 문장을 쓰는 것이 아니라 순서를 매기는 것 하나뿐이다

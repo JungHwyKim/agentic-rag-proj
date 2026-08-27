@@ -159,8 +159,14 @@ def warm_up(app: FastAPI) -> None:
         errors.append(f"embedder: {exc}")
     try:
         reranker = _reranker(app)
-        # None 이 정상값이다 — `RERANK_MODEL` 이 비면 리랭커가 꺼진 것이라 데울 것이 없다
-        if reranker is not None:
+        # None 이 정상값이다 — `RERANK_MODEL` 이 비면 리랭커가 꺼진 것이라 데울 것이 없다.
+        #
+        # **`needs_warmup` 을 보는 것이 요점이다.** 네트워크 갈래(openai·cohere)는 올릴
+        # 가중치가 없어 여기서 얻는 것이 0인데, 워밍업 입력이 `uuid4` 라 **늘 캐시 미스**이므로
+        # 부르면 기동마다 유료 호출이 하나씩 나간다(`--reload` 는 코드 고칠 때마다 재기동한다).
+        # **provider 이름으로 분기하지 않는다** — 구현체가 늘 때마다 여기를 따라 고쳐야 하고
+        # 빠뜨려도 아무 에러가 안 난다. 판단은 구현체가 갖는다 (`reranker/base.py`)
+        if reranker is not None and reranker.needs_warmup:
             reranker.rerank(text, _warmup_candidates(text))
     except Exception as exc:  # noqa: BLE001 - 위와 같다
         errors.append(f"reranker: {exc}")

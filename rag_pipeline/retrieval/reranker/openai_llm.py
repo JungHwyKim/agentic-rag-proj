@@ -136,6 +136,12 @@ class OpenAILLMReranker:
     def usage(self) -> RerankUsage:
         return self._usage
 
+    # 데울 가중치가 없다. **이 갈래는 지금까지 기동마다 유료 호출을 하나씩 내고 있었다** —
+    # 후보 2개짜리 작은 호출이라 눈에 안 띄었을 뿐이다(2026-08-27 에 Cohere 갈래를 만들며 발견)
+    @property
+    def needs_warmup(self) -> bool:
+        return False
+
     # 캐시 salt. 규칙은 base 가 정한다 — 구현체가 다시 짜면 한쪽이 빠뜨려도 에러가 안 난다
     @property
     def _salt(self) -> str:

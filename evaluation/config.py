@@ -229,6 +229,35 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
         "rerank_candidates": 50,
         "rerank_cache_enabled": True,
     },
+    # 전용 리랭킹 API 갈래. **재려는 것은 품질 향상이 아니라 「GPU 를 비워도 동률인가」다** —
+    # `local-gpu` 가 품질로는 최고인데 적재와 GPU 를 다투어, 리랭커를 올려 둔 채 색인하면
+    # 같은 181청크 임베딩이 46.28 → 206.92초가 된다(verify_log/2026-08-27-임베딩-지연-리랭커경합.md).
+    # 그래서 대조군은 `off` 가 아니라 **`local-gpu`** 이고, 볼 칸은 넷이다 —
+    # `nDCG@10`(기준 0.7327) · `hit@1`(0.5833) · **폴백률**(0/60) · 질의당 지연(2.988초).
+    #
+    # **`openai` 갈래와 같은 '유료' 로 묶어 읽으면 안 된다** — 저쪽은 LLM 채점기라 응답이
+    # 후보 수만큼 안 오면 폴백이고 실측 17% 가 그렇게 났다. 이쪽은 점수 API 라 그 실패 모양이
+    # 없을 것으로 **기대**하는데, 그 기대를 재는 것이 이 프로필의 목적이다.
+    #
+    # **과금 단위가 다른 갈래와 다르다** — 토큰이 아니라 search unit 이고, 500 토큰을 넘는
+    # 문서는 쪼개져 각 조각이 별개 문서로 센다. 후보 50 × 약 1,000자면 질의당 **약 2 unit** 이다
+    "cohere": {
+        "rerank_provider": "cohere",
+        "rerank_model": "rerank-v3.5",
+        "rerank_candidates": 50,
+        "rerank_max_tokens_per_doc": 4096,
+        "rerank_cache_enabled": True,
+    },
+    # 같은 갈래의 최신 모델. **`cohere` 를 갈아끼지 않고 더한다** — `local` 옆에 `local-gpu` 를
+    # 둔 것과 같은 잣대이고, 이름이 곧 실험의 정체라 갈아끼면 어느 모델로 잰 수치인지를
+    # 파일이 못 말한다. 둘 다 다국어(100+ 언어)라 한국어에서 무엇이 나은지는 **재봐야 안다**
+    "cohere-v4-fast": {
+        "rerank_provider": "cohere",
+        "rerank_model": "rerank-v4.0-fast",
+        "rerank_candidates": 50,
+        "rerank_max_tokens_per_doc": 4096,
+        "rerank_cache_enabled": True,
+    },
 }
 
 # 아무것도 안 주면 이것. 리랭커 없이 도는 지금까지의 실행이다

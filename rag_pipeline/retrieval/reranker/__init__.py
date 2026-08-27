@@ -34,10 +34,12 @@ from __future__ import annotations
 
 from rag_pipeline.config import RerankConfig
 from rag_pipeline.retrieval.reranker.base import Reranker, RerankUsage
+from rag_pipeline.retrieval.reranker.cohere_api import CohereReranker
 from rag_pipeline.retrieval.reranker.local_ce import LocalCrossEncoderReranker
 from rag_pipeline.retrieval.reranker.openai_llm import OpenAILLMReranker
 
 __all__ = [
+    "CohereReranker",
     "LocalCrossEncoderReranker",
     "OpenAILLMReranker",
     "RerankUsage",
@@ -54,6 +56,11 @@ def get_reranker(config: RerankConfig | None = None) -> Reranker | None:
     cfg = config or RerankConfig()
     if not cfg.rerank_model:
         return None
+    # **명시 분기다 — `else` 를 유료 갈래로 두지 않는다.** 구현체가 둘일 때는 `else` 가
+    # 곧 openai 여도 읽혔지만, 셋이 되면 **오타 난 provider 가 조용히 과금 갈래로 간다**
+    # (`Literal` 이 막아 주는 것은 설정 객체를 만들 때뿐이라, 직접 만든 config 는 안 걸린다)
     if cfg.rerank_provider == "local":
         return LocalCrossEncoderReranker(cfg)
+    if cfg.rerank_provider == "cohere":
+        return CohereReranker(cfg)
     return OpenAILLMReranker(cfg)

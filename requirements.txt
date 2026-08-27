@@ -25,6 +25,14 @@ charset-normalizer        # 한국어 txt/csv 인코딩 자동 감지 (cp949/euc
 llama-cloud>=1.0
 openai                    # Vision: gpt-4.1-mini + 임베딩: text-embedding-3-small
 
+# ---- 리랭커 (선택 갈래) ----
+# Cohere 전용 리랭킹 API. **RERANK_PROVIDER=cohere 일 때만 쓴다** — 저장소 커밋본은 리랭커가
+# 꺼진 채라(RERANK_MODEL 이 빔) 안 깔아도 기본 pytest 는 통과한다. 없으면 `_make_client()` 가
+# ImportError 를 잡아 None 을 돌려주고 RRF 순서로 폴백한다(에러가 아니다).
+# 이 갈래가 있는 이유는 품질이 아니라 **GPU** 다 — local 갈래를 GPU 에 올려 두면 적재가
+# 4.5배 느려진다(verify_log/2026-08-27-임베딩-지연-리랭커경합.md)
+cohere
+
 # ---- 임베딩 ----
 # 토큰 수를 로컬에서 센다(과금 없음). 호출 전 비용 상한 검사와 한국어 문자/토큰 비율 실측에 쓴다.
 # 상한을 호출 수로 두면 배치라 아무것도 못 막아서, 토큰으로 세려면 이게 필요하다

@@ -12,6 +12,11 @@
    없이는 "첫 질의가 여전히 21.8초" 로만 드러난다.
 3. **후보가 둘 이상이어야 한다.** `local_ce.rerank()` 가 후보 1개 이하면 모델을 안 올리고
    받은 것을 그대로 돌려준다. 하나만 먹이면 워밍업이 조용히 리랭커를 안 데운다.
+4. **데울 것이 없는 갈래는 안 불러야 한다.** 네트워크 갈래(`openai`·`cohere`)는 올릴 가중치가
+   없는데 워밍업 입력이 `uuid4` 라 **늘 캐시 미스**다 — 부르면 기동마다 유료 호출이 하나씩
+   나가고 `--reload` 는 코드 고칠 때마다 재기동한다. **이 검사는 `warmup_errors` 도 함께 본다**:
+   `warm_up()` 이 예외를 삼켜 경고로 바꾸므로, 속성이 없어 터진 것과 일부러 건너뛴 것이
+   `calls == []` 만으로는 **구분이 안 된다**(이 갈래를 배선할 때 실제로 그렇게 났다).
 """
 
 from __future__ import annotations
@@ -38,10 +43,14 @@ class FakeEmbedder:
 
 
 # 가짜 리랭커. **후보 수를 기억하는 것이 요점이다** (모듈 docstring 3번)
+#
+# `needs_warmup` 기본값이 True 인 것은 이 가짜가 **로컬 갈래를 대신하기** 때문이다 —
+# 데울 가중치가 있는 갈래만 워밍업의 대상이다 (모듈 docstring 4번)
 class FakeReranker:
-    def __init__(self) -> None:
+    def __init__(self, needs_warmup: bool = True) -> None:
         self.calls: list[int] = []
         self.queries: list[str] = []
+        self.needs_warmup = needs_warmup
 
     def rerank(self, query: str, candidates: list) -> list:  # noqa: ANN401
         self.calls.append(len(candidates))
@@ -142,6 +151,29 @@ def test_warm_up_uses_a_fresh_input_each_time() -> None:
 
     assert len(set(embedder.queries)) == 2, "임베더 입력이 같다 — 두 번째 기동은 캐시에 걸린다"
     assert len(set(reranker.queries)) == 2, "리랭커 입력이 같다 — 두 번째 기동은 캐시에 걸린다"
+
+
+# **데울 가중치가 없는 갈래는 안 부른다 — 이건 과금 가드다** (모듈 docstring 4번).
+#
+# `warmup_errors` 를 함께 보는 것이 요점이다: `warm_up()` 이 예외를 삼켜 경고로 바꾸므로,
+# 속성이 없어 **터진 것**과 일부러 **건너뛴 것**이 `calls == []` 만으로는 안 갈린다
+def test_warm_up_skips_a_reranker_with_nothing_to_warm() -> None:
+    reranker = FakeReranker(needs_warmup=False)
+    app = _app_with(FakeEmbedder(), reranker)
+
+    query_routes.warm_up(app)
+
+    assert reranker.calls == [], "데울 것이 없는 갈래를 불렀다 — 기동마다 유료 호출이 나간다"
+    assert app.state.warmup_errors == [], "건너뛴 것이 아니라 터졌다"
+
+
+# 그래도 임베더는 데운다 — 리랭커가 네트워크 갈래여도 가중치 2.27GB 는 그대로 로컬이다
+def test_warm_up_still_warms_the_embedder_when_the_reranker_is_remote() -> None:
+    embedder = FakeEmbedder()
+
+    query_routes.warm_up(_app_with(embedder, FakeReranker(needs_warmup=False)))
+
+    assert embedder.queries, "리랭커를 건너뛰면서 임베더까지 건너뛰었다"
 
 
 # 리랭커가 꺼져 있으면(`RERANK_MODEL` 이 빔) 그 갈래는 그냥 건너뛴다

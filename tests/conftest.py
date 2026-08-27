@@ -138,6 +138,9 @@ def offline_config(tmp_path: Path) -> IngestConfig:
         "_rerank",
         RerankConfig(
             openai_api_key=None,
+            # 갈래가 셋이 되면서 지울 키도 둘이다. **모델이 비어 이미 꺼져 있지만 같이 지운다** —
+            # 이 블록이 셋을 다 박는 이유(겹을 하나에 안 맡긴다)가 여기에도 그대로 적용된다
+            cohere_api_key=None,
             rerank_provider="openai",
             rerank_model=None,
             rerank_cache_enabled=False,
