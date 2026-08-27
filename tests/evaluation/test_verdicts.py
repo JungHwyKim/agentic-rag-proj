@@ -14,7 +14,13 @@ from pathlib import Path
 import pytest
 
 from evaluation import verdicts as verdicts_module
-from evaluation.verdicts import VerdictRow, confusion, expected_verdict, score_verdicts
+from evaluation.verdicts import (
+    VerdictRow,
+    _balanced,
+    confusion,
+    expected_verdict,
+    score_verdicts,
+)
 from rag_pipeline.schemas.answer import EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
@@ -208,3 +214,55 @@ def test_confusion_shape_is_stable() -> None:
     )
     assert sorted(table) == ["insufficient", "sufficient"]
     assert sorted(table["sufficient"]) == ["failed", "insufficient", "sufficient"]
+
+
+# ---------------------------------------------------------------------------
+# 총점이 자[尺]가 못 되는 자리 — 죽은 판정자 기준선과 균형 정확도
+# ---------------------------------------------------------------------------
+
+
+# 한 줄 만들기. expected 는 이 실행의 순위가 정하므로 손으로 준다
+def _row(expected: str, actual: str, ident: str = "q") -> VerdictRow:
+    return VerdictRow(
+        query_id=ident, query="q", source_doc="d",
+        answerable=expected == "sufficient", rank=1 if expected == "sufficient" else None,
+        expected=expected, actual=actual,
+    )
+
+
+# **죽은 판정자의 점수는 기대 분포가 정한다.** top_k 가 커지면 이 수가 내려가고, 그래서
+# K 가 다른 총점끼리는 비교가 안 된다 (모듈 docstring)
+def test_dead_judge_baseline_is_the_insufficient_class_size() -> None:
+    rows = [_row("sufficient", "sufficient")] * 9 + [_row("insufficient", "insufficient")] * 34
+    dead, _ = _balanced(rows)
+    assert dead == 34
+
+
+# 늘 *불충분* 이라 답하면 균형 정확도가 정확히 0.500 이다 — 총점은 79% 인데도 그렇다.
+# **이 두 수가 갈리는 것이 이 함수의 존재 이유다**
+def test_always_insufficient_scores_half_however_high_the_total() -> None:
+    rows = [_row("sufficient", "insufficient") for _ in range(9)]
+    rows += [_row("insufficient", "insufficient") for _ in range(34)]
+    dead, balanced = _balanced(rows)
+    correct = sum(1 for r in rows if r.correct)
+    assert correct == dead == 34          # 총점으로는 43건 중 34건
+    assert balanced == pytest.approx(0.5)  # 균형으로는 동전 던지기
+
+
+# 다 맞히면 1.0
+def test_perfect_judge_scores_one() -> None:
+    rows = [_row("sufficient", "sufficient"), _row("insufficient", "insufficient")]
+    assert _balanced(rows)[1] == pytest.approx(1.0)
+
+
+# **실패는 재현율 분모에 안 들어간다** — 위 「실패는 칸이 아니라 열이다」와 같은 규약이다.
+# 섞으면 판정을 못 한 것이 *틀린 판정* 으로 세어져 균형 정확도가 실패율을 재기 시작한다
+def test_failures_stay_out_of_the_recall_denominator() -> None:
+    rows = [_row("sufficient", "sufficient"), _row("sufficient", "failed"),
+            _row("insufficient", "insufficient")]
+    assert _balanced(rows)[1] == pytest.approx(1.0)
+
+
+# 한쪽 클래스가 통째로 비면 균형을 못 낸다 — 지어내지 않고 None 을 돌려준다
+def test_balanced_is_none_when_a_class_is_empty() -> None:
+    assert _balanced([_row("insufficient", "insufficient")])[1] is None

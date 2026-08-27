@@ -21,6 +21,22 @@
 *불충분* 이라 답한 건이 오답으로 세어지고, 그 순간 이 표는 Evaluator 가 아니라 **검색기를
 재게 된다.** 반대로 말하면 이 표는 *"검색이 가져온 것을 Evaluator 가 제대로 읽었나"* 만 잰다.
 
+## 총점은 자[尺]가 못 된다 — **죽은 판정자와 균형 정확도를 함께 낸다**
+
+기대 분포가 `top_k` 마다 달라진다. 실측(2026-08-27, 사람 세트 43건 · 리랭커 `local-gpu`)으로
+**K=5 는 충분 9 · 불충분 34** 인데 **K=10 은 17 · 26** 이다. 그래서 *늘 불충분* 이라고만 답하는
+**죽은 판정자가 K=5 에서 34/43 을 공짜로 받는다** — 그 자리에서 실제로 잰 네 판 중 셋이
+그보다 낮았다(28 · 30 · 33 · 36). K=5 총점을 판정력으로 읽으면 **죽은 판정자에게 지는 점수를
+개선으로 읽게 된다.**
+
+그래서 `_print()` 가 셋을 함께 낸다 — 총점 · **죽은 판정자 기준선** · **균형 정확도**(긍정
+재현율과 부정 재현율의 평균, 죽은 판정자는 정의상 0.500). 총점을 지우지 않는 것은 회차 간
+비교에 이미 쓰인 수라서다. **K 가 다르면 총점끼리 비교하지 않는다** — 균형으로 본다.
+
+이것은 아래 「실패는 칸이 아니라 열이다」와 **같은 사고의 다른 층**이다. 저쪽은 실패를 판정에
+섞으면 죽은 Evaluator 가 만점을 받는다는 것이고, 이쪽은 **실패가 0이어도 분포만으로** 같은
+일이 난다는 것이다.
+
 ## 실패는 칸이 아니라 **열**이다
 
 `verdict="failed"` 는 *충분* 도 *불충분* 도 아니라 판정을 못 한 것이다. 혼동행렬 칸에 섞으면
@@ -226,6 +242,19 @@ def confusion(rows: list[VerdictRow]) -> dict[str, dict[str, int]]:
     return table
 
 
+# 죽은 판정자 기준선과 균형 정확도. **총점 혼자로는 판정력을 못 말한다** (모듈 docstring 참고).
+# 재현율의 분모는 **판정이 난 건만**이다 — 실패는 따로 세는 열이라 여기 안 섞는다
+def _balanced(rows: list[VerdictRow]) -> tuple[int, float | None]:
+    judged = [r for r in rows if r.actual != "failed"]
+    dead = sum(1 for r in rows if r.expected == "insufficient")
+    recalls = []
+    for want in _JUDGEMENTS:
+        cls = [r for r in judged if r.expected == want]
+        if cls:
+            recalls.append(sum(1 for r in cls if r.actual == want) / len(cls))
+    return dead, (sum(recalls) / len(recalls) if len(recalls) == len(_JUDGEMENTS) else None)
+
+
 # 사람이 읽는 모양. 맞은 수와 실패 수를 **따로** 낸다 — 합치면 실패율이 정확도로 읽힌다
 def _print(rows: list[VerdictRow], meta: dict[str, Any], *, show_wrong: bool) -> None:
     table = confusion(rows)
@@ -242,6 +271,13 @@ def _print(rows: list[VerdictRow], meta: dict[str, Any], *, show_wrong: bool) ->
             f"{want:<14}{got['sufficient']:>12}{got['insufficient']:>14}{got['failed']:>9}"
         )
     print(f"\n맞은 것 {correct}/{judged} (판정이 난 건만) · 실패 {failed}건")
+
+    # **총점만 보면 안 된다** — 기대 분포가 top_k 마다 달라 죽은 판정자의 점수도 함께 움직인다
+    dead, balanced = _balanced(rows)
+    mark = "" if correct > dead else "  <-- 죽은 판정자보다 낮다"
+    print(f"  늘 *불충분* 이라 답하는 죽은 판정자: {dead}/{len(rows)}{mark}")
+    if balanced is not None:
+        print(f"  균형 정확도 {balanced:.3f} (죽은 판정자 0.500) — K 가 다르면 이쪽으로 견준다")
 
     buckets = Counter(w for r in rows for w in r.warnings)
     if buckets:
