@@ -14,13 +14,17 @@
 - `rag_pipeline/retrieval/dense.py:search_dense()` — 질의 임베딩 → `store.search()`.
   `SearchResult` 를 그대로 낸다(승격은 합류하는 쪽이 한다)
 - `rag_pipeline/retrieval/bm25.py` · `tokenize.py` · `fusion.py` — BM25 인덱스 · 한국어
-  토크나이저 · RRF
+  토크나이저 · RRF. **`fusion.py` 는 갈래 N 개다**(`Branch` · `fuse_branches`) — 재작성의
+  `fuse` 모드가 넷을 쓴다
+- `rag_pipeline/retrieval/rewrite.py:QueryRewriter` — 1차 검색 결과를 보고 질의를 다시
+  쓴다(PRF). 기본 꺼짐
 - `rag_pipeline/generation/answer.py:generate_answer()` — 근거 청크로 답변 문장 1회
 - `rag_pipeline/generation/evaluate.py:OpenAIEvaluator` — 근거가 충분한지 판정 1회 (기본 꺼짐)
 - `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
-**나머지는 여전히 없다** — 질의 재작성 루프 · agent 레이어.
+**나머지는 여전히 없다** — agent 레이어.
+**질의 재작성은 2026-08-27 에 생겼다**(`rag_pipeline/retrieval/rewrite.py`) — 아래 계약 절 참고.
 **리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
 비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라
 결정이다**(켜는 순간 질의당 LLM 호출이 1→2 다). **품질은 아직 안 쟀다** — 2×2 비교표가
@@ -106,8 +110,26 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 - **metadata 필터 검색은 일부러 안 만들었다.** `search()` 에 `filters` 인자가 없는 것은
   누락이 아니다 — 쓸 만한 필터 축이 `document_id` 뿐이고 **`page` 는 못 쓴다**(같은 문서를
   PDF 28쪽 / HWPX 97쪽으로 세는 미해결 함정). metadata 저장·반환은 이미 된다
-- **질의 재작성은 한 줄도 없다.** 없는 것을 지적하지 않는다 — `plan_log/검색-생성.md`
-  7회차가 표적이 80건 중 1건이라 물렸다
+- **질의 재작성은 2026-08-27 에 생겼다**(`rag_pipeline/retrieval/rewrite.py`) —
+  1차 검색 결과를 보고 질의를 다시 쓴다(PRF). `REWRITE_MODEL` 이 비면 `get_rewriter()` 가
+  `None` 을 돌려 **꺼진 채 커밋된다**. 다섯을 보되 **없는 것을 요구하지는 않는다.**
+  ① **실패는 `None` 이고 그러면 1차 pool 이 그대로 쓰인다** — 예외를 던지거나, 응답에서 앞
+  몇 글자를 건져 쓰는 "부분 성공"이 보이면 지적한다(리랭커의 *전부 아니면 전무* 와 같은 자리).
+  ② **`rewrite_cache_salt` 에 `rewrite_mode` 를 넣자는 제안이 지적 대상이다** — `rerank` 쪽이
+  `device` 를 **싣는** 것과 비교해 "빠뜨렸다"로 보이지만, 규칙은 같고(*출력을 가르는 것만
+  salt 에 넣는다*) mode 는 재작성 호출 **뒤**에서 갈린다. 넣으면 `fuse`·`replace` 두 프로필이
+  캐시를 못 나눠 써 **두 번째 프로필이 통째로 다시 과금된다**(`test_mode_does_not_split_the_cache`).
+  ③ **`rewrite_mode` 는 죽은 설정이 아니다** — 합법값 둘이 실재하고, 그 축이 존재하는 이유는
+  **21회차 상한 프로브가 `replace` 를 쟀는데 7회차 로드맵은 `fuse` 였기 때문**이다
+  (`sih-07` 102위 → 2위 는 `replace` 의 수치다). 하나로 줄이자는 제안은 *프로브가 재현되나* 와
+  *로드맵이 옳았나* 중 하나를 영원히 못 묻게 만든다.
+  ④ **리랭커에 넘어가는 질의가 원 질의인 것이 결정이다** — 재작성 질의로 "일관되게" 바꾸자는
+  제안이 지적 대상이다. `rerank_cache_key()` 가 query 를 실어, 재작성 프롬프트를 한 줄 고칠
+  때마다 **리랭킹 캐시가 전량 미스**가 되고 운영이 cohere 라 그것은 곧 유료 호출이다.
+  ⑤ **`Protocol` 도 `rewrite_provider` 도 없는 것이 결정이다** — 구현체가 하나라 `answer_cache`
+  · Evaluator 와 같은 자리다. 이웃한 `reranker/` 가 Protocol 을 가진 것은 구현체가 **셋**이라서다.
+  **품질은 아직 안 쟀다** — 유료 실행 전이라 `fuse` 와 `replace` 중 무엇이 나은지도, 모델이
+  사람만큼 다시 쓰는지도 미측정이다. 수치를 지적하지 않는다
 - **Evaluator 는 2026-08-26 에 생겼다**(`rag_pipeline/generation/evaluate.py`) —
   `EVALUATOR_MODEL` 이 비면 `get_evaluator()` 가 `None` 을 돌려 **꺼진 채 커밋된다**(켜는
   순간 질의당 LLM 호출이 1→2 다). 세 가지를 보되 **없는 것을 요구하지는 않는다.**
@@ -150,7 +172,8 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
   판정을 무엇으로 재는지는 `evaluation/verdicts.py`(혼동행렬 + 실패 **열**)이고, 리랭커의
   *"전부 아니면 전무"* 폴백 + `Reranker.warnings` 와 같은 모양이라 새 잣대가 아니다
 - **"아직 없다"는 면제는 생긴 단계에 안 준다** — 하이브리드(2026-08-23) · 리랭커(2026-08-25) ·
-  Evaluator(2026-08-26)는 전부 이 면제에서 빠진다. 아래 리랭커 계약과 위 Evaluator 셋을 적용한다
+  Evaluator(2026-08-26) · **질의 재작성(2026-08-27)** 은 전부 이 면제에서 빠진다.
+  아래 리랭커 계약과 위 Evaluator 셋·재작성 다섯을 적용한다
 - **리랭커의 실패는 예외가 아니라 폴백이고, 반쯤 채우면 안 된다.** 점수를 하나라도 못 얻으면
   `rerank_score` 를 **아무것도 안 채우고** 받은 순서를 그대로 돌려준다 —
   `ranking_score` 가 `fused_score` 로 떨어져 RRF 순서가 된다. **부분 성공을 만드는 방향으로
@@ -159,6 +182,18 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
 - **리랭커는 `retrieve()` 밖으로 빼면 안 된다.** 절단을 호출부로 옮기면 `top_k` 의 뜻이
   *"최종 개수"* 와 *"후보 수"* 로 갈리고, 세 호출부 중 하나만 빠뜨리면 **조용히** 리랭커 없이
   돈다. 같은 이유로 **dense-only 갈래의 후보 폭도 `reranker` 가 있으면 넓혀야 한다**
+- **`fusion.py` 의 갈래는 N 개이고 `fuse(dense, sparse)` 로 되돌리면 안 된다.** 재작성의
+  `fuse` 모드가 갈래 넷을 쓴다. **두 갈래짜리 지름길을 "편의로" 되살리자는 제안도 지적 대상이다** —
+  한 번 남겼다가 `hybrid.py` 가 `_branches_for()` 로 옮겨 가며 production 소비자가 0 이 되어
+  지웠다(계약 테스트는 `test_rrf.py` 가 자기 helper 로 `fuse_branches` 를 부른다).
+  그리고 **1차 pool 을 다시 RRF 에 넣으면 안 된다** — 순위 압축이 두 번 걸린다. 합칠 것은
+  **원 검색 결과**다
+- **`RetrievedChunk` 의 재작성 갈래 점수 두 칸을 한 칸으로 합치면 안 된다.**
+  `rewrite_dense_score`·`rewrite_bm25_score` 를 `dense_score`·`bm25_score` 로 돌려쓰면
+  *원 질의가 찾은 것* 과 *재작성이 찾은 것* 이 섞여, 재작성이 값을 했는지를 payload 로 못
+  되짚는다. `replace` 모드에서 `dense_score` 가 전량 `None` 인 것은 **사실 그대로**다
+  (원 질의로는 검색을 안 했다) — "채워 주자"는 제안이 지적 대상이고, 이 모듈이 `0.0` 을
+  안 채워 지키려던 구분이 한 겹 위에서 다시 무너지는 자리다
 - **`rerank_provider` 는 죽은 설정이 아니다.** 구현체가 둘이라(OpenAI listwise · 로컬
   cross-encoder) `embedding_provider` 와 같은 자리다. `rerank_device` 기본값 `cpu` 는 성능
   선택이 아니라 **재현성**이다 — 지우면 GPU 머신이 다른 순위를 낸다
@@ -184,5 +219,12 @@ retriever 가 실제로 구현되면 이 파일을 `references/retriever.md` 로
   계속 미뤄 왔다. 리랭커가 붙으며 검색 쪽 분량이 생성 쪽을 넘었으므로 **이제는 가르는 쪽이
   유력하다** — 다만 그 판단은 승격과 함께 한 번에 한다
 
-**다시 볼 조건: 2×2 비교표가 채워져 리랭커를 켤지 정해질 때.** 그때 `retriever.md` ·
-`generation.md` 로 가르는 것을 기본안으로 놓고 본다.
+**그 다시 볼 조건은 2026-08-27 에 충족됐다** — 리랭커를 켤지가 정해졌고(`.env` 가
+`RERANK_PROVIDER=cohere`), 그날 질의 재작성까지 들어왔다. **그래도 이번에도 안 올렸고 이유는
+또 다르다**: 재작성이 방금 생겼는데 **품질을 한 번도 안 쟀고**(유료 실행 전) `fuse` 와
+`replace` 중 무엇을 켤지가 미결이다. 위 두 이유 중 첫째(*곧 낡을 값을 리뷰 기준으로 만든다*)가
+대상만 리랭커에서 재작성으로 옮겨 그대로 산다.
+
+**다시 볼 조건: 재작성 첫 유료 측정이 끝나 `fuse`/`replace` 가 정해질 때.** 그때
+`retriever.md` · `generation.md` 로 가르는 것을 기본안으로 놓고 본다 — 검색 쪽 분량이 생성
+쪽을 이미 크게 넘었다.
