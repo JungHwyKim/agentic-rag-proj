@@ -23,8 +23,11 @@
 - `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**.
   `bm25`·`reranker`·`rewriter`·`cache`·`evaluator` 를 인자로 받아 넘긴다
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
+- `rag_pipeline/agent/` — **2026-08-27 에 생겼다.** 도구(`tools/`) · 상태(`state.py`) ·
+  라우터(`router.py`) · 근거 조립(`context.py`). 스키마는 `schemas/agent.py` 다.
+  **아직 아무도 안 부른다** — 이 조각들을 잇는 재시도 루프가 없다
 
-**나머지는 여전히 없다** — agent 레이어.
+**남은 것은 agent 레이어 전부가 아니라 「잇는 것」이다** — 도구·상태·라우터·조립은 2026-08-27 에 생겼고(위 목록), 없는 것은 **재시도 루프**(Checkpoint A)와 LangGraph 다.
 **질의 재작성은 2026-08-27 에 생겼다**(`rag_pipeline/retrieval/rewrite.py`) — 아래 계약 절 참고.
 **리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
 비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라
@@ -32,6 +35,28 @@
 `plan_log/검색-생성.md` 5회차에 비어 있다. **답변 캐시는 2026-08-24 에 생겼고 2026-08-26 에 갈래가 둘이 됐다**(`rag_pipeline/answer_cache/`) — `ANSWER_CACHE_MODE` 가 `semantic`(벡터 유사도)과 `exact`(정규화한 문자열)를 고른다. **꺼짐 조건이 갈래마다 다르다**: `semantic` 은 `ANSWER_CACHE_THRESHOLD` 가 비면 `get_answer_cache()` 가 `None` 을 돌려 꺼지고, **`exact` 는 그 값을 아예 안 봐 모드 한 줄로 켜진다**(완전 일치에는 정할 임계값이 없다). 저장소 커밋본은 `semantic` + 빈 임계값이라 여전히 꺼진 채이고, **그 빈 기본값이 미완성이 아니라 결정이다**(근거는 `references/indexing.md` 4절 · `plan_log/시맨틱-캐시.md` 4~6회차 — 양성·음성 분포가 겹쳐 임계값을 *"못 정한다"* 로 닫았다). **`exact` 를 "임계값 1.0" 으로 흉내 내자는 지적을 하지 않는다** — 그 안은 기각됐다(임계값은 *같은 벡터인가*를 재는 자[尺]인데 완전 일치가 묻는 것은 *같은 문자열인가*이고, 부동소수라 보장도 없다). 마찬가지로 **`put()`·무효화·`clear()` 가 갈래를 안 타는 것도 결정이다** — `exact` 에서도 진짜 벡터를 저장해야 나중에 `semantic` 으로 돌렸을 때 오염된 캐시를 검색하지 않는다.
 그래서 이 파일은 아직 `retriever.md` 로 승격하지 않았다(승격 규칙은 맨 아래). 있는 것에는
 아래 계약을 적용하고, 없는 것은 여전히 지적하지 않는다.
+
+**에이전트 트랙의 계약 여섯 — 전부 되돌리면 조용히 깨진다.**
+
+- **`BaseTool.run()` 은 템플릿 메서드다.** 구현체는 `_run()` 만 짜고, 어떤 예외든
+  `ToolOutput(success=False)` 로 내려온다. `run()` 을 구현체가 직접 오버라이드하는 코드가
+  보이면 지적한다 — 규약이 구조에서 주석으로 내려앉는다
+- **도구는 `store`·`embedder` 를 스스로 안 연다.** `retrieve()`·`answer_question()` 과
+  같은 이유이고 같은 함정이다(qdrant 배타 잠금 · KURE 2.27GB 재적재)
+- **`record_tool_call()` 이 로그와 검색 결과를 함께 싣는다.** 둘로 가르자는 제안을 하지
+  않는다 — *로그에는 검색이 찍혔는데 청크는 비어 있는* 상태에서 Router 가 같은 검색을
+  무한히 되풀이한다. 그리고 결과는 **덧붙이지 않고 갈아끼운다**(순위가 두 벌 섞인다)
+- **0건에서 `retrieve` 를 되고르지 않는다.** 검색은 결정적이라 같은 질의면 같은 결과이고,
+  되고르면 상태를 안 바꾼 채 `max_retries` 까지 돈다. 두 번째부터의 재검색은 `rewrite` 다.
+  같은 이유로 **첫 검색 여부는 청크가 아니라 도구 로그로 판정한다**
+- **판정 `failed` 는 재시도로 안 삼킨다.** *판정을 못 했다* 를 *불충분* 처럼 다루면 죽은
+  Evaluator 때문에 질의당 LLM 호출이 최대 `max_retries` 번 더 붙는다
+- **근거 블록 모양의 출처는 `generation/prompts.py:build_evidence_block()` 하나다.**
+  `agent/context.py` 가 그것을 부른다. 조립 코드를 그쪽에 복제하면 생성·판정·조립 세 곳이
+  갈리고, 한 곳만 고쳐져도 아무 에러가 안 난다
+
+Router 는 **판단만 하고 도구를 실행하지 않는다.** 실행을 합치자는 제안도 지적 대상이다 —
+합치면 *라우팅이 틀렸나 도구가 틀렸나* 를 못 가른다.
 
 새로 생긴 확실한 계약 넷:
 

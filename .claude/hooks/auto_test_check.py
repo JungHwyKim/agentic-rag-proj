@@ -84,6 +84,9 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     # 저쪽은 `rag_pipeline/ingestion/` 아래 디렉터리만 훑어서, 여기를 빠뜨리면
     # 그 파일만 자동 테스트가 안 도는데 아무 에러도 안 난다(2026-08-26 에 실제로 그랬다)
     ("rag_pipeline/runtime.py", "tests/test_runtime.py"),
+    # 에이전트 트랙(도구·상태·라우터·근거 조립). 검색을 **감싸는** 쪽이라 최상위에 산다 —
+    # retrieval/ 아래 두면 검색이 자기를 감싼 껍데기를 품는 모양이 된다
+    ("rag_pipeline/agent/", "tests/agent"),
     # 답변 캐시. 적재도 검색도 아니라 최상위에 산다 — retrieve() **앞**에 서기 때문이다
     ("rag_pipeline/answer_cache/", "tests/answer_cache"),
     ("backend/", "tests/api"),

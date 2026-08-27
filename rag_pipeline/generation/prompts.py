@@ -80,6 +80,7 @@ __all__ = [
     "NO_EVIDENCE_ANSWER",
     "SYSTEM_PROMPT",
     "build_evaluator_prompt",
+    "build_evidence_block",
     "build_user_prompt",
 ]
 
@@ -98,14 +99,20 @@ SYSTEM_PROMPT = f"""당신은 한국어 공문서를 읽고 질문에 답하는 
 5. 간결하게 답합니다. 근거를 통째로 옮겨 적지 않습니다."""
 
 
-# 검색된 청크를 번호 달린 근거 블록으로 만들어 질문과 함께 싣는다
-def build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+# 번호 달린 근거 블록만 만든다. **이 모양의 유일한 출처다** — 생성·판정에 더해
+# `agent/context.py` 까지 셋이 여기서 가져간다. 하나라도 제 손으로 만들면
+# *판정이 본 것과 생성이 보는 것이 글자까지 같다* 가 조용히 깨진다
+def build_evidence_block(chunks: list[RetrievedChunk]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
         source = chunk.metadata.get("source_name") or chunk.document_id
         blocks.append(f"[{index}] ({source})\n{chunk.text}")
-    evidence = "\n\n".join(blocks)
-    return f"근거:\n\n{evidence}\n\n---\n\n질문: {query}"
+    return "\n\n".join(blocks)
+
+
+# 근거 블록을 질문과 함께 싣는다
+def build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+    return f"근거:\n\n{build_evidence_block(chunks)}\n\n---\n\n질문: {query}"
 
 
 # 판정 프롬프트를 고치면 **반드시 올린다** (모듈 docstring 참고)
