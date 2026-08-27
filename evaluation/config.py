@@ -24,11 +24,23 @@
 - **API 키** — `.env` 에서 온다. 없으면 폴백이 돌고, 그것도 관측 대상이다
 - **`tesseract_cmd`** — 설치 경로가 머신마다 다르다
 
-## 임베딩만 축이 있다 — 이름 붙인 프로필
+## 축이 셋 있다 — 이름 붙인 프로필
 
-고정 중에 **임베딩 블록 하나만** 이름으로 갈아끼울 수 있다(`EVAL_EMBEDDINGS`).
-모델 비교(`plan_log/embedding.md` 의 *모델·차원* 미결)를 재려면 두 번째 모델이 필요한데,
+고정 중에 **세 블록만** 이름으로 갈아끼울 수 있다 — `EVAL_EMBEDDINGS` · `EVAL_RERANKERS` ·
+`EVAL_EVALUATORS`. 셋 다 같은 이유로 열렸다: 비교하려는 대상이 **둘 이상 실재**하는데
 `.env` 를 타게 하면 위 "왜 `.env` 를 안 타나"가 통째로 무너지기 때문이다.
+
+**셋의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
+
+| 축 | 기본 | 왜 |
+|---|---|---|
+| `EVAL_EMBEDDINGS` | `baseline` | 지금까지의 모든 수치가 그것으로 나왔다 |
+| `EVAL_RERANKERS` | `off` | 켜지는 순간 질의당 LLM 호출이 2회가 된다 — 기본값이 곧 과금 여부다 |
+| `EVAL_EVALUATORS` | `mini` | **꺼짐이 기본이 아니다.** 채점 도구는 판정이 반드시 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다 |
+
+**프로필은 갈아끼지 않고 더한다.** 이름이 곧 실험의 정체라, 갈아끼면 이미 나온 수치가 어느
+모델·장치로 재졌는지를 파일이 못 말한다. `local` 옆의 `local-gpu`, `kure-v1` 옆의
+`kure-v1-gpu`, `mini` 옆의 `luna` 가 전부 같은 판단이다.
 
 **`--config-env` 처럼 설정을 통째로 푸는 것과는 다르다**(`plan_log/평가-세트.md` 가 기각한
 그 안이다). 여기서 고를 수 있는 값은 **저장소에 커밋된 닫힌 집합**이라, `baseline.json` 만
@@ -66,12 +78,15 @@ from rag_pipeline.config import (
 
 __all__ = [
     "DEFAULT_EMBEDDING_PROFILE",
+    "DEFAULT_EVALUATOR_PROFILE",
     "DEFAULT_RERANK_PROFILE",
     "EVAL_EMBEDDINGS",
+    "EVAL_EVALUATORS",
     "EVAL_RERANKERS",
     "EVAL_SETTINGS",
     "embedding_profile",
     "eval_config",
+    "evaluator_profile",
     "rerank_profile",
 ]
 
@@ -219,6 +234,47 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
 # 아무것도 안 주면 이것. 리랭커 없이 도는 지금까지의 실행이다
 DEFAULT_RERANK_PROFILE = "off"
 
+
+# 갈아끼울 수 있는 판정 설정들. **앞의 둘과 같은 모양인 것이 의도다** — 이름이 곧 실험의
+# 정체라 결과 JSON 에 함께 실린다.
+#
+# **기본이 꺼짐이 아닌 것이 이 축의 다른 점이다.** 리랭커는 `off` 가 기본인데 여기는 아니다 —
+# 채점 도구(`evaluation/verdicts.py`)는 판정이 **반드시 돌아야** 하는 자리라, 안 돌면 전건
+# 실패인데 표는 멀쩡해 보인다. `.env` 의 빈 `EVALUATOR_MODEL`(=꺼짐)을 이기는 것도 그래서다.
+#
+# **`temperature` 가 이 dict 를 만든 이유다.** 2026-08-27 실측으로 `gpt-5.6-luna` 는
+# `temperature=0.0` 을 400 으로 거부하고 기본값(1)만 받는다. 지금까지의 판정 수치(v1·v2·v3)는
+# 전부 `gpt-4.1-mini` · temperature 0 이라, luna 수치와 **나란히 놓으면 차이에 모델과
+# 샘플링이 함께** 들어간다 — 그래서 이 축으로 재는 것은 *모델 간 절대 비교* 가 아니라
+# **한 모델 안에서의 프롬프트 비교**다(`plan_log/검색-생성.md` 13회차).
+#
+# 새 프로필을 더할 때 **`evaluator_model` 만 바꾸면 안 되는 경우가 있다** — gpt-5 계열이면
+# `evaluator_temperature: None` 을 함께 적는다. 빠뜨리면 43건이 전부 400 으로 죽는다.
+EVAL_EVALUATORS: dict[str, dict[str, Any]] = {
+    # 지금까지의 모든 판정 수치(v1 28/31 · v2 28/32 · v3 30/32)가 이 프로필로 나왔다.
+    # **바꾸면 그 표들이 무효가 된다**
+    "mini": {
+        "evaluator_model": "gpt-4.1-mini",
+        "evaluator_temperature": 0.0,
+        "evaluator_max_tokens": 512,
+    },
+    # 모델 축의 실험군. **`mini` 를 갈아끼지 않고 더하는 것이 규칙이다** — `local` 옆에
+    # `local-gpu` 를, `kure-v1` 옆에 `kure-v1-gpu` 를 더한 선례와 같고 이유도 같다:
+    # 갈아끼면 이미 나온 수치가 어느 모델로 재졌는지를 파일이 못 말한다.
+    #
+    # **`evaluator_temperature: None` 이 이 프로필의 핵심이다** — *보내지 않는다* 는 뜻이고,
+    # 0.0 도 1.0 도 아니다. 그 대가로 **이 프로필은 재현이 안 된다**: 캐시를 지우고 다시
+    # 돌리면 다른 표가 나올 수 있어, 한 번 돌린 수치로 우열을 단정하면 안 된다
+    "luna": {
+        "evaluator_model": "gpt-5.6-luna",
+        "evaluator_temperature": None,
+        "evaluator_max_tokens": 512,
+    },
+}
+
+# 아무것도 안 주면 이것. 지금까지의 모든 혼동행렬이 이 프로필로 나왔다
+DEFAULT_EVALUATOR_PROFILE = "mini"
+
 # 평가가 고정하는 값 전부. **`baseline.json` 의 `_meta` 가 이것을 그대로 싣는다** —
 # 기준선 파일만 보고도 어떤 설정으로 잰 값인지 알 수 있어야 하고, 두 곳에 손으로 적으면
 # 한쪽이 조용히 낡는다. 여기 없는 것(API 키·tesseract 경로)은 일부러 뺀 것이다
@@ -275,12 +331,8 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
     # 다르면 같은 명령이 다른 혼동행렬을 내고, 그러면 이 모듈이 존재하는 이유가 무너진다.
     # `evaluator_model` 을 여기 박는 것이 `.env` 의 빈 값(=꺼짐)을 이긴다 — 채점 도구는
     # 판정이 **반드시 돌아야** 하는 자리라 리랭커(`off` 가 기본)와 축이 다르다.
-    # 프로필 dict 를 안 만드는 이유는 갈아끼울 두 번째 구현체가 없어서다 — 생기면 더한다
-    "evaluator": {
-        "evaluator_model": "gpt-4.1-mini",
-        "evaluator_temperature": 0.0,
-        "evaluator_max_tokens": 512,
-    },
+    # **앞의 둘과 같은 이유로 두 곳에 안 적는다** — 기본 프로필을 그대로 가리킨다
+    "evaluator": EVAL_EVALUATORS[DEFAULT_EVALUATOR_PROFILE],
 }
 
 
@@ -311,14 +363,29 @@ def rerank_profile(name: str) -> dict[str, Any]:
     return EVAL_RERANKERS[name]
 
 
+# 이름으로 판정 프로필을 찾는다. **앞의 둘과 같은 이유로 같은 모양이다** — 없는 이름에
+# 조용히 기본값으로 떨어지면 모델을 바꾼 줄 알고 대조군을 두 번 재게 되고, 두 실행이 같은
+# 수치를 내는 것이 *"모델이 안 움직였다"* 로 읽힌다. 정확히 이 축이 답하려는 질문이라 제일
+# 나쁜 가짜 답이 나오는 자리다
+def evaluator_profile(name: str) -> dict[str, Any]:
+    if name not in EVAL_EVALUATORS:
+        raise SystemExit(
+            f"'{name}' 은 없는 판정 프로필입니다. "
+            f"있는 것: {sorted(EVAL_EVALUATORS)} (evaluation/config.py 의 EVAL_EVALUATORS)"
+        )
+    return EVAL_EVALUATORS[name]
+
+
 # 평가용 IngestConfig. lazy 프로퍼티를 명시 값으로 덮어 `.env` 가 결과를 못 흔들게 한다.
 # `qdrant_path` 는 색인하는 쪽만 넘긴다 — 로컬 파일 모드가 배타 잠금을 걸어 실행마다 갈라야 한다.
-# `embedding` 과 `rerank` 는 갈아끼울 수 있는 두 축이고 나머지는 고정이다 (모듈 docstring 참고)
+# `embedding`·`rerank`·`evaluator` 가 갈아끼울 수 있는 세 축이고 나머지는 고정이다
+# (모듈 docstring 참고)
 def eval_config(
     *,
     qdrant_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    evaluator: str = DEFAULT_EVALUATOR_PROFILE,
 ) -> IngestConfig:
     config = IngestConfig(**EVAL_SETTINGS["ingest"])
 
@@ -334,7 +401,7 @@ def eval_config(
     object.__setattr__(config, "_rerank", RerankConfig(**rerank_profile(rerank)))
     # 판정도 같은 이유로 고정한다. **키는 여기서도 안 지운다** — 판정은 유료 갈래뿐이라
     # 키가 없으면 `verdict="failed"` 가 나오고, 그것은 채점 도구의 실패 열에 그대로 보인다
-    object.__setattr__(config, "_evaluator", EvaluatorConfig(**EVAL_SETTINGS["evaluator"]))
+    object.__setattr__(config, "_evaluator", EvaluatorConfig(**evaluator_profile(evaluator)))
 
     if qdrant_path is not None:
         object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=qdrant_path))

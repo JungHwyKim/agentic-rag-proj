@@ -35,6 +35,20 @@
 에서 만들거나 이 함수를 메서드로 옮기면 외부 API 테스트가 전부 깨진다. `answer.py` ·
 `reranker/openai_llm.py` · `content/image_vision.py` 와 같은 규약이다.
 
+## 호출 인자가 모델을 탄다 — 갈리는 것은 `temperature` 하나다
+
+2026-08-27 실측(7호출)으로 `gpt-5.6-luna` 는 `max_tokens` 를 **400** 으로 거부하고
+(`Use 'max_completion_tokens' instead`) `temperature=0.0` 도 **400** 이다
+(`Only the default (1) value is supported`). 그런데 **`gpt-4.1-mini` 도
+`max_completion_tokens` 를 받으므로** 토큰 상한은 모델별 분기가 필요 없다.
+
+`temperature` 만 다르고, 그것을 **`None` = 안 보낸다** 로 표현한다. `1.0` 을 보내는 것으로
+흉내 내지 않는 이유는 그게 기본값을 명시하는 것뿐이면서 *0.0 이 재현을 위한 값이었다* 는
+사실을 코드에서 지우기 때문이다(`EvaluatorConfig` 주석).
+
+**대가는 재현성이다** — gpt-5 계열은 온도를 못 고정하므로 그 모델로 잰 수치는 다시 돌리면
+달라질 수 있다. 캐시가 받아 주는 것은 재현이 아니라 **같은 응답을 되읽는 것**이다.
+
 ## 캐시 키에 무엇이 들어가나
 
 질의 · 후보 신원(`chunk_id`) · 모델 · 프롬프트 버전이다. **후보를 순서까지 싣는 이유**는
@@ -203,17 +217,23 @@ class OpenAIEvaluator:
             self._warnings.append("OPENAI_API_KEY 가 없어 근거 충분성을 판정하지 못했습니다")
             return None
 
+        # **`max_completion_tokens` 는 분기가 없다** — gpt-5 계열이 `max_tokens` 를 400 으로
+        # 거부하는데 gpt-4.1-mini 는 새 이름도 받는다(2026-08-27 실측 7호출). 갈리는 것은
+        # temperature 하나라, **None 이면 인자 자체를 안 싣는다** (모듈 docstring 참고)
+        kwargs: dict[str, Any] = {
+            "model": config.evaluator_model,
+            "messages": [
+                {"role": "system", "content": EVALUATOR_SYSTEM_PROMPT},
+                {"role": "user", "content": build_evaluator_prompt(query, chunks)},
+            ],
+            "max_completion_tokens": config.evaluator_max_tokens,
+            "response_format": {"type": "json_object"},
+        }
+        if config.evaluator_temperature is not None:
+            kwargs["temperature"] = config.evaluator_temperature
+
         try:
-            response = client.chat.completions.create(
-                model=config.evaluator_model,
-                messages=[
-                    {"role": "system", "content": EVALUATOR_SYSTEM_PROMPT},
-                    {"role": "user", "content": build_evaluator_prompt(query, chunks)},
-                ],
-                temperature=config.evaluator_temperature,
-                max_tokens=config.evaluator_max_tokens,
-                response_format={"type": "json_object"},
-            )
+            response = client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - 실패가 예외가 아니라 제3의 상태다 (docstring)
             self._warnings.append(
                 f"판정 호출에 실패했습니다: {type(exc).__name__}: {exc}"

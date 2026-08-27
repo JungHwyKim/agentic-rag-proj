@@ -411,11 +411,24 @@ class EvaluatorConfig(BaseSettings):
     evaluator_model: str | None = None
 
     # 판정은 재현이 값어치라 0 이다. 생성이 0.2 인 것과 갈리는 이유는 출력의 모양이다 —
-    # 저쪽은 표·목록을 질문에 맞게 추리는 여지가 필요하지만 이쪽 출력은 세 상태 중 하나다
-    evaluator_temperature: float = 0.0
+    # 저쪽은 표·목록을 질문에 맞게 추리는 여지가 필요하지만 이쪽 출력은 세 상태 중 하나다.
+    #
+    # **None 은 "그 인자를 아예 안 보낸다"는 뜻이다.** gpt-5 계열은 0.0 을 400 으로 거부하고
+    # 기본값(1)만 받는다(2026-08-27 luna 실측). 1.0 을 보내는 것으로 흉내 내지 않는 이유는
+    # 그게 기본값을 명시하는 것뿐이면서 **0.0 이 재현을 위한 값이었다는 사실을 코드에서
+    # 지워 버리기** 때문이다. 기본값이 0.0 그대로인 것이 요점이다 — gpt-4.1-mini 경로는
+    # 글자 그대로 안 바뀐다.
+    #
+    # **`.env` 에서 None 을 만들려면 줄을 주석 처리한다.** `EVALUATOR_TEMPERATURE=` 처럼
+    # 빈 값을 두면 `float | None` 이 `''` 를 파싱하다 ValidationError 로 죽는다
+    # (`EMBEDDING_DIMENSIONS` 가 `.env.example` 에서 주석인 것과 같은 이유다)
+    evaluator_temperature: float | None = 0.0
 
     # verdict 한 줄 + 사유 한두 문장. **임시값이다** — 사유가 잘리는지는 첫 혼동행렬의
-    # reasoning 을 사람이 읽고 정한다
+    # reasoning 을 사람이 읽고 정한다.
+    # **API 인자 이름은 `max_completion_tokens` 다** — gpt-5 계열이 `max_tokens` 를 400 으로
+    # 거부한다. 설정 이름을 안 따라 바꾸는 것은 이게 우리 축의 이름이라서다: 바꾸면 `.env` 의
+    # `EVALUATOR_MAX_TOKENS` 가 `extra="ignore"` 를 타고 **에러 없이** 죽는다
     evaluator_max_tokens: int = 512
 
     # 같은 (질의, 후보) 짝을 다시 물으면 API 를 안 탄다. 채점 재실행이 무료여야 실패 버킷을

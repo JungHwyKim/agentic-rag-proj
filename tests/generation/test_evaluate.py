@@ -239,6 +239,64 @@ def test_prompt_version_is_in_the_salt(mocker, tmp_path):
     assert len(client.calls) == 2
 
 
+# --------------------------------------------------------------------------
+# 호출 인자 — 모델을 타는 자리 (generation/evaluate.py 의 "호출 인자가 모델을 탄다")
+# --------------------------------------------------------------------------
+
+
+# **`max_tokens` 로는 안 나간다.** gpt-5 계열이 그 이름을 400 으로 거부해서 바꾼 것이고,
+# gpt-4.1-mini 도 새 이름을 받으므로 **분기가 없다** — 그래서 이 한 줄이 두 모델을 다 잠근다
+def test_token_budget_uses_the_new_parameter_name(mocker, tmp_path):
+    client = FakeClient(FakeResponse(_body("sufficient")))
+    mocker.patch.object(evaluate_module, "_make_client", return_value=client)
+
+    OpenAIEvaluator(_config(tmp_path, evaluator_max_tokens=77)).evaluate("질문", [_chunk()])
+
+    call = client.calls[0]
+    assert call["max_completion_tokens"] == 77
+    assert "max_tokens" not in call
+
+
+# **temperature=None 이면 인자 자체가 안 실린다.** 1.0 을 대신 보내면 안 된다 —
+# luna 는 기본값만 받고, 0.0 이 재현을 위한 값이었다는 사실이 코드에서 지워진다
+def test_none_temperature_is_omitted_entirely(mocker, tmp_path):
+    client = FakeClient(FakeResponse(_body("sufficient")))
+    mocker.patch.object(evaluate_module, "_make_client", return_value=client)
+
+    OpenAIEvaluator(_config(tmp_path, evaluator_temperature=None)).evaluate("질문", [_chunk()])
+
+    assert "temperature" not in client.calls[0]
+
+
+# 그리고 기본값(0.0)은 그대로 실린다. **gpt-4.1-mini 경로가 안 바뀐 것의 잠금이다** —
+# 여기가 흔들리면 v1·v2·v3 로 잰 258건이 다른 조건의 수치가 된다
+def test_default_temperature_is_still_sent(mocker, tmp_path):
+    client = FakeClient(FakeResponse(_body("sufficient")))
+    mocker.patch.object(evaluate_module, "_make_client", return_value=client)
+
+    OpenAIEvaluator(_config(tmp_path)).evaluate("질문", [_chunk()])
+
+    assert client.calls[0]["temperature"] == 0.0
+
+
+# **온도는 캐시 salt 에 안 들어간다.** 넣으면 mini 쪽 258건이 통째로 죽는데, 모델 이름이
+# 이미 salt 에 있어 luna 와 mini 는 그것만으로 갈린다
+def test_temperature_is_not_in_the_salt(mocker, tmp_path):
+    client = FakeClient(FakeResponse(_body("sufficient")), FakeResponse(_body("insufficient")))
+    mocker.patch.object(evaluate_module, "_make_client", return_value=client)
+
+    first = OpenAIEvaluator(_config(tmp_path))
+    first.evaluate("질문", [_chunk()])
+
+    # 같은 캐시 디렉터리 · 같은 모델 · 온도만 다르다 -> 캐시가 맞아야 한다
+    second = OpenAIEvaluator(_config(tmp_path, evaluator_temperature=None))
+    verdict = second.evaluate("질문", [_chunk()])
+
+    assert verdict.verdict == "sufficient"
+    assert second.usage.cache_hits == 1
+    assert len(client.calls) == 1
+
+
 # 카운터는 성공한 뒤에만 오른다 (embedding·리랭커와 같은 규약)
 def test_usage_counts_only_success(mocker, tmp_path):
     mocker.patch.object(evaluate_module, "_make_client", return_value=BoomClient())

@@ -34,6 +34,16 @@
 `GENERATION_TOP_K=5` 는 config 에 *"대가를 재는 쪽이 없어 못 정한다"* 로 적힌 임시값인데,
 이 채점이 그 대가를 재는 첫 자다.
 
+## 판정 프로필은 인자로 받는다 — 임베딩과 반대다 (바로 아래)
+
+`--evaluator` 는 **이 실행에서 무엇을 재는가**이지 컬렉션의 성질이 아니다. 판정은 순위를
+안 바꾸므로 같은 색인 위에서 모델을 갈아 끼워도 검색은 글자 그대로 같고, 그래서 이 축만
+자유롭게 고를 수 있다. 기본이 `mini` 라 **안 주면 지금까지와 같은 실행**이다.
+
+**출력 JSON 이름에 프로필이 들어간다.** 안 넣으면 라벨이 같은 두 모델의 표가 같은 자리를
+다퉈 뒤엣것이 앞엣것을 에러 없이 덮는다 — 그 사고를 손으로 막은 흔적이
+`h-ce-gpu-verdicts-preflip.json` 이다.
+
 ## 임베딩 프로필은 인자로 안 받고 리포트에서 읽는다
 
 컬렉션 이름에 임베딩 모델이 들어가서, 손으로 넘기면 같은 디렉터리의 **다른 컬렉션**을 열어
@@ -50,11 +60,17 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from evaluation.config import DEFAULT_EMBEDDING_PROFILE, DEFAULT_RERANK_PROFILE, eval_config
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_EVALUATOR_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    eval_config,
+)
 from evaluation.inspect import load_report, require_fresh_store
 from evaluation.qa_set import QA_SET_PATH, load_qa_set
 from evaluation.run_eval import RESULTS_DIR
 from evaluation.scoring import hit_rank
+from rag_pipeline.generation.prompts import EVALUATOR_PROMPT_VERSION
 
 __all__ = ["VerdictRow", "confusion", "score_verdicts"]
 
@@ -103,6 +119,7 @@ def score_verdicts(
     top_k: int,
     qa_path: Path | None = None,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    evaluator_name: str = DEFAULT_EVALUATOR_PROFILE,
 ) -> tuple[list[VerdictRow], dict[str, Any]]:
     from rag_pipeline.generation import get_evaluator
     from rag_pipeline.ingestion.embedding import get_embedder
@@ -119,6 +136,7 @@ def score_verdicts(
         qdrant_path=RESULTS_DIR / f"qdrant-{report['label']}-{fmt}",
         embedding=embedding,
         rerank=rerank,
+        evaluator=evaluator_name,
     )
 
     evaluator = get_evaluator(config.evaluator)
@@ -139,7 +157,10 @@ def score_verdicts(
             total, sum(x["chunks"] for x in report["indexed"]), label=report["label"], fmt=fmt
         )
         bm25 = build_bm25_index(store)
-        print(f"컬렉션 {total}건 · 세트 {len(qa.items)}건 · top_k {top_k} · 리랭커 {rerank}")
+        print(
+            f"컬렉션 {total}건 · 세트 {len(qa.items)}건 · top_k {top_k} · "
+            f"리랭커 {rerank} · 판정 {evaluator_name}({config.evaluator.evaluator_model})"
+        )
 
         for item in qa.items:
             chunks = retrieve(
@@ -185,6 +206,11 @@ def score_verdicts(
         "top_k": top_k,
         "embedding_profile": embedding,
         "rerank_profile": rerank,
+        "evaluator_profile": evaluator_name,
+        # **프로필과 함께 프롬프트 판도 싣는다** — 판을 손으로 되돌려 재는 것이 이 축의 방식
+        # 이라(`plan_log/검색-생성.md` 13회차) 프로필 이름만으로는 어느 프롬프트로 잰 표인지
+        # 알 수 없다. 캐시 salt 가 이미 이 값으로 갈리므로 표도 같이 갈려야 앞뒤가 맞는다
+        "prompt_version": EVALUATOR_PROMPT_VERSION,
         "queries": len(rows),
         "bm25_warnings": list(bm25.warnings),
         "rerank_warnings": list(getattr(reranker, "warnings", []) or []),
@@ -249,6 +275,8 @@ def main() -> int:
     # **둘 이상을 받는 것이 기본이다** (모듈 docstring 참고)
     parser.add_argument("--top-k", type=int, nargs="+", default=[5, 10])
     parser.add_argument("--rerank", default=DEFAULT_RERANK_PROFILE)
+    # 기본이 `mini` 라 **안 주면 지금까지와 글자 그대로 같은 실행이다**
+    parser.add_argument("--evaluator", default=DEFAULT_EVALUATOR_PROFILE)
     parser.add_argument("--wrong", action="store_true", help="틀린 것과 실패를 하나씩 보여준다")
     parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
     args = parser.parse_args()
@@ -261,6 +289,7 @@ def main() -> int:
             top_k=top_k,
             qa_path=Path(args.qa_set),
             rerank=args.rerank,
+            evaluator_name=args.evaluator,
         )
         _print(rows, meta, show_wrong=args.wrong)
         payload["runs"].append(
@@ -268,7 +297,12 @@ def main() -> int:
         )
 
     if args.json:
-        out = RESULTS_DIR / f"{args.label}-verdicts.json"
+        # **판정 프로필과 프롬프트 판이 둘 다 파일 이름에 들어간다** — 안 넣으면 라벨이 같은
+        # 실행끼리 같은 자리를 다퉈 뒤엣것이 앞엣것을 **에러 없이** 덮는다. 그래서 지난 세션이
+        # `h-ce-gpu-verdicts-preflip.json` 을 손으로 남겼고, **13회차는 실제로 잃었다**(luna
+        # v1 이 v3 표를 덮었다 — 프로필만 넣고 프롬프트 판을 안 넣은 첫 판이었다).
+        # 손으로 지키는 규약은 잊는 순간 근거가 사라지므로 구조로 옮긴다
+        out = RESULTS_DIR / f"{args.label}-verdicts-{args.evaluator}-{EVALUATOR_PROMPT_VERSION}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\n남김: {out}")

@@ -17,8 +17,10 @@ import pytest
 
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_EVALUATOR_PROFILE,
     DEFAULT_RERANK_PROFILE,
     EVAL_EMBEDDINGS,
+    EVAL_EVALUATORS,
     EVAL_RERANKERS,
     EVAL_SETTINGS,
     embedding_profile,
@@ -303,4 +305,77 @@ def test_env_cannot_turn_the_default_off_profile_on(monkeypatch) -> None:
 def test_evaluator_model_is_pinned(monkeypatch) -> None:
     monkeypatch.setenv("EVALUATOR_MODEL", "")
     assert eval_config().evaluator.evaluator_model == EVAL_SETTINGS["evaluator"]["evaluator_model"]
+
+
+# ---------------------------------------------------------------------------
+# 판정 프로필 축 — 앞의 둘과 **같은 모양이라 같은 가드를 건다**
+# ---------------------------------------------------------------------------
+
+
+# **두 곳에 안 적는다.** 기본 프로필을 그대로 가리켜야 실행 JSON 의 `evaluator_profile` 과
+# 실제로 실린 설정이 갈릴 수 없다. 그리고 기본이 **꺼짐이 아니다** — 채점은 판정이 반드시
+# 돌아야 하는 자리라 리랭커(`off`)와 축이 다르다
+def test_fixed_settings_point_at_the_default_evaluator_profile() -> None:
+    assert EVAL_SETTINGS["evaluator"] is EVAL_EVALUATORS[DEFAULT_EVALUATOR_PROFILE]
+    assert eval_config().evaluator.evaluator_model is not None
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다 —
+# CLAUDE.md 가 *"프로필을 더할 때 기본 프로필만 대조하면 새 프로필의 오타가 그대로 산다"* 고
+# 적어 둔 자리가 정확히 여기다
+@pytest.mark.parametrize("profile", sorted(EVAL_EVALUATORS))
+def test_every_evaluator_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_EVALUATORS[profile]) - set(EvaluatorConfig.model_fields)
+    assert not unknown, f"판정 프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. **`evaluator_temperature=None` 이 여기서
+# 걸린다** — pydantic 이 `float | None` 을 안 받으면 luna 프로필이 통째로 죽는다
+@pytest.mark.parametrize("profile", sorted(EVAL_EVALUATORS))
+def test_named_evaluator_profile_actually_lands(profile: str) -> None:
+    config = eval_config(evaluator=profile)
+    for key, value in EVAL_EVALUATORS[profile].items():
+        assert getattr(config.evaluator, key) == value, f"{profile}.{key}"
+
+
+# **모든 프로필이 온도를 명시해야 한다.** 코드 기본값이 `0.0` 이라 안 적으면 gpt-5 계열
+# 프로필이 조용히 0.0 을 보내고 **43건이 전부 400 으로 죽는다.** 리랭커 프로필이 provider 를
+# 못 박게 한 것과 같은 함정이고, 저쪽처럼 에러 없이 과금되지는 않지만 실패 열이 가득 찬
+# 표를 *"모델이 나쁘다"* 로 읽게 만든다
+@pytest.mark.parametrize("profile", sorted(EVAL_EVALUATORS))
+def test_every_evaluator_profile_pins_its_temperature(profile: str) -> None:
+    assert "evaluator_temperature" in EVAL_EVALUATORS[profile], (
+        f"판정 프로필 '{profile}' 이 evaluator_temperature 를 안 박았습니다 — "
+        "코드 기본값이 0.0 이라 gpt-5 계열이면 전건 400 으로 죽습니다. "
+        "안 보내려면 None 을 명시합니다 (evaluation/config.py 의 luna 주석)"
+    )
+
+
+# 없는 이름이면 조용히 기본값으로 안 돌아간다. 돌아가면 모델을 바꾼 줄 알고 대조군을 두 번
+# 재게 되고, 두 실행이 같은 수치를 내는 것이 "모델이 안 움직였다"로 읽힌다 — 이 축이
+# 답하려는 질문에 정확히 가짜 답이 나온다
+def test_unknown_evaluator_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(evaluator="없는판정")
+    assert "없는판정" in str(err.value)
+    assert DEFAULT_EVALUATOR_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 못 이긴다. 고정의 목적이 이 축으로 새면 안 된다
+def test_env_cannot_move_a_named_evaluator_profile(monkeypatch) -> None:
+    monkeypatch.setenv("EVALUATOR_MODEL", "gpt-4o")
+    monkeypatch.setenv("EVALUATOR_TEMPERATURE", "0.7")
+
+    config = eval_config(evaluator="luna")
+
+    assert config.evaluator.evaluator_model == "gpt-5.6-luna"
+    # **None 이 `.env` 값에 안 덮인다** — 덮이면 luna 가 400 으로 죽는다
+    assert config.evaluator.evaluator_temperature is None
+
+
+# 아무것도 안 주면 지금까지와 같은 실행이어야 한다. 축이 산출을 바꾸면 축이 아니라 변경이다
+def test_evaluator_default_is_the_same_as_naming_it() -> None:
+    assert eval_config().evaluator.model_dump() == (
+        eval_config(evaluator=DEFAULT_EVALUATOR_PROFILE).evaluator.model_dump()
+    )
 
