@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.config import DEFAULT_EMBEDDING_PROFILE, DEFAULT_RERANK_PROFILE
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
+)
 from evaluation.run_eval import BASELINE_PATH, as_baseline, compare_to_baseline
 
 
@@ -25,6 +29,10 @@ def _report(**over: object) -> dict:
         # 관대하게 만들지 않는 것이 의도다** — 조용히 빠지는 것이 이 키가 고치는 결함이라,
         # 리포트를 만드는 쪽이 빠뜨리면 여기서 KeyError 로 시끄럽게 죽어야 한다
         "rerank_profile": DEFAULT_RERANK_PROFILE,
+        # 재작성 축도 같은 대우다. **축을 더한 회차가 이 helper 를 함께 넓히지 않으면
+        # 위 KeyError 가 그것을 잡는다** — 관대하게 만들었다면 새 축이 기준선에서 조용히
+        # 빠졌을 것이고, 그것이 정확히 이 파일이 막는 결함이다
+        "rewrite_profile": DEFAULT_REWRITE_PROFILE,
         "retriever": {"use_bm25": False, "rerank": DEFAULT_RERANK_PROFILE},
         "groups": ["g"],
         "k": 20,

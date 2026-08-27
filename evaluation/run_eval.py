@@ -68,7 +68,9 @@ from typing import Any
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
     DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
     EVAL_RERANKERS,
+    EVAL_REWRITERS,
     EVAL_SETTINGS,
     embedding_profile,
     eval_config,
@@ -157,13 +159,14 @@ def run_dense(
     groups: list[str] | None = None,
     use_bm25: bool = False,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    rewrite: str = DEFAULT_REWRITE_PROFILE,
     qa_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
-    from rag_pipeline.retrieval import build_bm25_index, get_reranker, retrieve
+    from rag_pipeline.retrieval import build_bm25_index, get_reranker, get_rewriter, retrieve
 
     qa = load_qa_set(qa_path)
     if not qa.items:
@@ -172,7 +175,10 @@ def run_dense(
     # **개발자 `.env` 가 아니라 고정 설정이다** (evaluation/config.py).
     # 실행마다 저장 경로를 가르는 것은 배타 잠금 때문이다 (모듈 docstring 참고)
     config = eval_config(
-        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding, rerank=rerank
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}",
+        embedding=embedding,
+        rerank=rerank,
+        rewrite=rewrite,
     )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
@@ -217,6 +223,11 @@ def run_dense(
     # 그 비용을 60번 낸다. `--rerank` 를 안 주면 프로필이 `off` 라 None 이고, 그때 결과는
     # 리랭커 이전과 글자 그대로 같아야 한다 (hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
     reranker = get_reranker(config.rerank)
+    # **재작성기도 루프 밖에서 한 번 만든다.** 올릴 가중치는 없지만 `usage` 가 인스턴스에
+    # 쌓이므로, 안에서 지으면 질의마다 새 카운터가 생겨 리포트의 호출 수가 0 이 된다 —
+    # 그러면 «성공 횟수 == 질의 수» 검사가 통째로 못 돈다. `--rewrite` 를 안 주면 프로필이
+    # `off` 라 None 이고, 그때 결과는 재작성 이전과 글자 그대로 같아야 한다
+    rewriter = get_rewriter(config.rewrite)
     # k 축마다 QueryScore 목록. **검색은 한 번이고 채점만 여러 번이다**
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
@@ -230,6 +241,7 @@ def run_dense(
                 top_k=k,
                 bm25=bm25,
                 reranker=reranker,
+                rewriter=rewriter,
                 config=config.retrieval,
             )
             texts = [hit.text for hit in hits]
@@ -263,10 +275,17 @@ def run_dense(
         # **리랭커 프로필도 같은 이유로 갈아 끼운다** — `EVAL_SETTINGS["rerank"]` 는 기본
         # 프로필(=꺼짐)이라, 그대로 실으면 리랭커를 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
         "rerank_profile": rerank,
+        # **재작성 프로필도 같은 이유로 싣는다** — 라벨만으로는 나중에 fuse 와 replace 를
+        # 못 가른다. 그리고 상한 프로브(102위 → 2위)와 견줄 수 있는 것은 `replace` 뿐이라
+        # 어느 쪽이었는지가 그 비교의 성립 조건이다
+        "rewrite_profile": rewrite,
         "settings": {
             **EVAL_SETTINGS,
             "embedding": embedding_profile(embedding),
             "rerank": EVAL_RERANKERS[rerank],
+            # **`EVAL_SETTINGS["rewrite"]` 를 그대로 실으면 안 된다** — 그것은 기본
+            # 프로필(=꺼짐)이라, 재작성을 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
+            "rewrite": EVAL_REWRITERS[rewrite],
         },
         # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
         # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
@@ -280,6 +299,11 @@ def run_dense(
             # 리포트에서 구분이 안 된다. 비교표의 한 칸이 통째로 거짓이 되는 자리다
             "rerank": rerank,
             "rerank_warnings": list(reranker.warnings) if reranker is not None else [],
+            # **재작성 경고도 같은 이유로 싣는다** — 실패가 예외가 아니라 1차 pool 을 그대로
+            # 쓰는 폴백이라, 안 남기면 *"재작성이 값을 못 했다"* 와 *"재작성이 안 돌았다"* 가
+            # 리포트에서 구분이 안 된다
+            "rewrite": rewrite,
+            "rewrite_warnings": list(rewriter.warnings) if rewriter is not None else [],
         },
         "indexed": indexed,
         # **리랭커 비용을 임베딩과 갈라 싣는다** — 유료 갈래는 토큰이, 로컬 갈래는 채점한
@@ -291,6 +315,12 @@ def run_dense(
             "rerank_tokens": reranker.usage.total_tokens if reranker is not None else 0,
             "rerank_cache_hits": reranker.usage.cache_hits if reranker is not None else 0,
             "reranked": reranker.usage.reranked if reranker is not None else 0,
+            # **재작성 비용도 갈라 싣는다.** 유료 갈래를 켠 실행은 지표를 읽기 **전에**
+            # `rewrite_calls + rewrite_cache_hits == 질의 수` 를 확인한다 — Cohere 1차 실행이
+            # 한도 초과 30건을 품질 저하로 읽히게 했던 자리와 같은 사고의 입구다(CLAUDE.md)
+            "rewrite_calls": rewriter.usage.api_calls if rewriter is not None else 0,
+            "rewrite_tokens": rewriter.usage.total_tokens if rewriter is not None else 0,
+            "rewrite_cache_hits": rewriter.usage.cache_hits if rewriter is not None else 0,
         },
         "summary": summarize(by_axis[report_k], report_k),
         "by_k": {str(axis): summarize(by_axis[axis], axis) for axis in axes},
@@ -336,6 +366,8 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         "format",
         "embedding_profile",
         "rerank_profile",
+        # 같은 이유로 함께 담는다 — 빼면 기준선 파일만 보고 재작성을 켠 실행인지 못 가른다
+        "rewrite_profile",
         "retriever",
         "groups",
         "k",
@@ -454,6 +486,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--rewrite",
+        default=DEFAULT_REWRITE_PROFILE,
+        choices=sorted(EVAL_REWRITERS),
+        help=(
+            "질의 재작성 프로필 이름 (evaluation/config.py 의 EVAL_REWRITERS). "
+            "기본은 off 라 지금까지와 같은 실행이다. **켜면 질의당 LLM 1회가 더 붙는다**"
+        ),
+    )
+    parser.add_argument(
         "--qa-set",
         type=Path,
         help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
@@ -472,6 +513,11 @@ def main() -> int:
     if args.rerank != DEFAULT_RERANK_PROFILE and not args.dense:
         raise SystemExit("--rerank 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
 
+    # **`--rewrite` 도 같은 가드를 탄다** — 켰다고 믿은 사람이 세트 검증의 `통과` 를 성공으로
+    # 읽는 것이 똑같고, 이쪽은 그 오해가 곧 *"재작성이 효과 없다"* 가 된다
+    if args.rewrite != DEFAULT_REWRITE_PROFILE and not args.dense:
+        raise SystemExit("--rewrite 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
+
     if args.check or not args.dense:
         problems = check(refresh=args.refresh, qa_path=args.qa_set)
         for line in problems:
@@ -489,6 +535,7 @@ def main() -> int:
         groups=args.groups,
         use_bm25=args.hybrid,
         rerank=args.rerank,
+        rewrite=args.rewrite,
         qa_path=args.qa_set,
         embedding=args.embedding,
     )

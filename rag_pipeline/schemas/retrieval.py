@@ -25,6 +25,16 @@ BM25 가 붙는 순간 "이 청크가 어느 경로에서 몇 등이었나"를 �
 PyMuPDF 의 `extract()` 만 보면 병합 셀과 빈 칸이 안 갈리던 것과 같은 종류의 손실이다
 (CLAUDE.md "PDF 병합 셀").
 
+## 왜 재작성 갈래에 칸을 따로 두나 — 한 칸을 돌려쓰지 않는다
+
+질의 재작성을 켜면 검색 경로가 넷이 된다(원 질의 dense·BM25 + 재작성 질의 dense·BM25).
+`dense_score` 한 칸을 두 갈래가 돌려쓰면 **"원 질의가 찾은 것"과 "재작성이 찾은 것"이
+섞여**, 재작성이 값을 했는지를 payload 로 되짚을 수 없게 된다 — 이 모듈이 `0.0` 을 안 채워
+지키려던 바로 그 구분이 한 겹 위에서 다시 무너지는 것이다.
+
+`rewrite_mode="replace"` 에서 `dense_score` 가 전량 `None` 인 것은 **사실 그대로**다
+(원 질의로는 검색을 안 했다). 그래서 어느 모드로 돈 결과인지가 payload 에 그대로 보인다.
+
 ## 왜 `fused_score` 를 따로 두나
 
 **dense 점수와 BM25 점수는 단위가 다르다.** dense 는 단위 벡터의 내적이라 대략 [-1, 1] 이고
@@ -58,6 +68,10 @@ class RetrievedChunk(BaseModel):
     dense_score: float | None = None
     # BM25 후보가 아니었으면 None
     bm25_score: float | None = None
+    # 재작성 질의의 dense 갈래에서 온 점수. 그 갈래의 후보가 아니었으면 None
+    rewrite_dense_score: float | None = None
+    # 재작성 질의의 BM25 갈래에서 온 점수
+    rewrite_bm25_score: float | None = None
     # RRF 병합 결과. 경로가 하나뿐이어도 채운다 — 정렬 기준이 늘 같은 자리에 있어야 한다
     fused_score: float = 0.0
     # 리랭커를 안 돌렸으면 None. 있으면 이 값이 정렬 기준이 된다

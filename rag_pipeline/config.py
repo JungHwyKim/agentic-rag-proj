@@ -338,6 +338,57 @@ class RerankConfig(BaseSettings):
     rerank_cache_dir: Path = PROJECT_ROOT / ".cache" / "rerank"
 
 
+# 1차 검색 결과를 보고 질의를 다시 쓰는 설정(PRF). RerankConfig·EvaluatorConfig 와 같은
+# 모양인 이유도 같다: 켜지는 순간 질의당 LLM 호출이 하나 늘어, 값을 하는지 재기 전에 과금이
+# 먼저 붙는 것을 막는 자리가 똑같다 (plan_log/검색-생성.md 22회차)
+class RewriteConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 다른 설정 객체와 같은 .env 키를 읽는다. 중복이 아니라 각자 독립이라 각자 읽는 것이다
+    openai_api_key: str | None = None
+
+    # 무슨 모델로. **비어 있으면 `get_rewriter()` 가 None 을 돌려줘 통째로 꺼진다** —
+    # `rerank_model`·`evaluator_model` 과 글자 그대로 같은 모양이고, 저장소에는 꺼진 채 커밋된다
+    rewrite_model: str | None = None
+
+    # 재작성 질의의 검색 결과를 원 질의와 어떻게 합치나. **합법값 둘이 실재해 죽은 설정이
+    # 아니다** — `rerank_provider` 와 같은 잣대다.
+    #
+    # `fuse` 는 원 질의 갈래를 남기고 재작성 갈래를 RRF 에 더한다(7회차 로드맵).
+    # `replace` 는 재작성 질의로만 검색한다 — **21회차 프로브가 잰 것이 이쪽이다**
+    # (verify_log/2026-08-27-라벨-전수검수-재작성프로브.md 7절: *"프로브는 질의 문자열만
+    # 바꾼 것"*). 즉 `sih-07` 102위 → 2위 는 `replace` 의 수치이고 `fuse` 의 것이 아니다.
+    # 둘을 다 만든 이유가 그것이다 — 어느 쪽이 나은지를 추측이 아니라 측정으로 답한다
+    rewrite_mode: Literal["fuse", "replace"] = "fuse"
+
+    # 1차 검색 결과 몇 개를 재작성기에 보여주나. **10 은 21회차가 실제로 잰 폭이다** —
+    # 그 회차가 "1차 상위 10 에 필요한 낱말이 있나"를 6건에서 확인했고, 겨냥하는 최악의
+    # 질의(`sih-07`, 정답 102위)조차 상위 10 에 어휘가 다 있었다. 정답 청크를 못 건져도
+    # **어휘는 이미 건져 놨다**는 것이 PRF 를 고른 근거라, 이 값이 그 근거의 폭이다
+    rewrite_context_k: int = 10
+
+    # 재작성은 재현돼야 한다. **`float | None` 이고 `None` 은 *보내지 않는다* 는 뜻이다** —
+    # gpt-5 계열이 `temperature=0.0` 을 400 으로 거부하기 때문이고, `1.0` 을 대신 보내지
+    # 않는 이유는 그것이 *0.0 이 재현을 위한 값이었다* 는 사실을 지우기 때문이다
+    # (EvaluatorConfig.evaluator_temperature 와 같은 자리 · CLAUDE.md).
+    # **`.env` 로 그 상태를 만들려면 줄을 주석 처리한다** — 빈 값은 파싱하다 죽는다
+    rewrite_temperature: float | None = 0.0
+
+    # 응답 길이 상한. 출력이 질문 문장 하나(`{"query": "..."}`)라 후보 수에 안 실린다 —
+    # 후보당 한 줄을 받는 `rerank_max_tokens`(4096)와 축이 다르다
+    rewrite_max_tokens: int = 256
+
+    # 같은 (질의, 1차 후보) 를 두 번 다시 쓰지 않는다. 콘텐츠·임베딩·리랭킹 캐시와 수명이
+    # 달라 디렉터리를 가른다. **여기가 두 모드를 견주는 것을 공짜로 만드는 자리다** —
+    # 재작성 호출은 mode 보다 앞에서 일어나므로 fuse·replace 가 같은 항목을 읽는다
+    rewrite_cache_enabled: bool = True
+    rewrite_cache_dir: Path = PROJECT_ROOT / ".cache" / "rewrite"
+
+
 # 검색된 청크로 답변을 만들 때 쓰는 설정. 질의당 LLM 1회가 비용의 전부다
 class GenerationConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -521,6 +572,16 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_rerank"):
             object.__setattr__(self, "_rerank", RerankConfig())
         return self._rerank  # type: ignore[attr-defined]
+
+    # 질의 재작성 설정. 같은 lazy 형태라 테스트·평가에서 _rewrite 로 덮어쓸 수 있다.
+    # **evaluator 와 같은 이유로 lazy 여야 한다** — RewriteConfig() 가 .env 를 직접 읽으므로,
+    # 안 덮으면 개발자 머신의 REWRITE_MODEL 이 픽스처에 실려 **기본 pytest 가 과금 경로로
+    # 간다.** 로컬 갈래가 없어 가중치 적재는 없지만 대신 돈이다
+    @property
+    def rewrite(self) -> RewriteConfig:
+        if not hasattr(self, "_rewrite"):
+            object.__setattr__(self, "_rewrite", RewriteConfig())
+        return self._rewrite  # type: ignore[attr-defined]
 
     # 생성 단계 설정. 같은 lazy 형태라 테스트에서 _generation 으로 덮어쓸 수 있다.
     # **그 덮어쓰기가 offline_config 의 실키 차단이다** — GenerationConfig() 가 .env 를 직접

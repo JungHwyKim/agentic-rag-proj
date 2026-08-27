@@ -27,6 +27,7 @@ from rag_pipeline.config import (
     IndexingConfig,
     IngestConfig,
     RerankConfig,
+    RewriteConfig,
 )
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
@@ -161,6 +162,25 @@ def offline_config(tmp_path: Path) -> IngestConfig:
             openai_api_key=None,
             evaluator_model=None,
             evaluator_cache_enabled=False,
+        ),
+    )
+    # 질의 재작성도 같은 이유로 덮어쓴다. **Evaluator 와 글자 그대로 같은 자리다** —
+    # 켜는 축이 모델 이름 하나뿐이라 그 한 줄이 스위치이고, RewriteConfig() 가 .env 를 직접
+    # 읽으므로 개발자가 REWRITE_MODEL 을 넣어 두면 기본 pytest 가 질의마다 OpenAI 를 부르는
+    # 경로로 조용히 간다. 로컬 갈래가 없어 가중치 적재는 없지만 대신 **과금**이다.
+    # 키까지 지우는 것은 그 한 겹 뒤의 겹이고, 캐시를 끄는 것은 테스트가 서로의 재작성
+    # 결과를 물려받지 않게 하려는 것이다.
+    #
+    # **rewrite_mode 는 안 박는다** — 모델이 비어 이미 꺼져 있어 그 값이 도달할 코드가 없고,
+    # 박으면 "합법값 둘"이라는 그 축의 뜻이 픽스처에서 한쪽으로 굳는다. 모드를 실제로
+    # 가르는 테스트는 자기 config 를 손으로 만든다
+    object.__setattr__(
+        config,
+        "_rewrite",
+        RewriteConfig(
+            openai_api_key=None,
+            rewrite_model=None,
+            rewrite_cache_enabled=False,
         ),
     )
     return config

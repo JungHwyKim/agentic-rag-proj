@@ -24,19 +24,24 @@
 - **API 키** — `.env` 에서 온다. 없으면 폴백이 돌고, 그것도 관측 대상이다
 - **`tesseract_cmd`** — 설치 경로가 머신마다 다르다
 
-## 축이 셋 있다 — 이름 붙인 프로필
+## 축이 넷 있다 — 이름 붙인 프로필
 
-고정 중에 **세 블록만** 이름으로 갈아끼울 수 있다 — `EVAL_EMBEDDINGS` · `EVAL_RERANKERS` ·
-`EVAL_EVALUATORS`. 셋 다 같은 이유로 열렸다: 비교하려는 대상이 **둘 이상 실재**하는데
-`.env` 를 타게 하면 위 "왜 `.env` 를 안 타나"가 통째로 무너지기 때문이다.
+고정 중에 **네 블록만** 이름으로 갈아끼울 수 있다 — `EVAL_EMBEDDINGS` · `EVAL_RERANKERS` ·
+`EVAL_REWRITERS` · `EVAL_EVALUATORS`. 넷 다 같은 이유로 열렸다: 비교하려는 대상이
+**둘 이상 실재**하는데 `.env` 를 타게 하면 위 "왜 `.env` 를 안 타나"가 통째로 무너지기 때문이다.
 
-**셋의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
+**넷의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
 
 | 축 | 기본 | 왜 |
 |---|---|---|
 | `EVAL_EMBEDDINGS` | `baseline` | 지금까지의 모든 수치가 그것으로 나왔다 |
 | `EVAL_RERANKERS` | `off` | 켜지는 순간 질의당 LLM 호출이 2회가 된다 — 기본값이 곧 과금 여부다 |
+| `EVAL_REWRITERS` | `off` | 같은 이유다. 리랭커와 **함께 켜면 질의당 3회**가 된다 |
 | `EVAL_EVALUATORS` | `mini` | **꺼짐이 기본이 아니다.** 채점 도구는 판정이 반드시 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다 |
+
+**재작성 축만 가르는 것이 모델이 아니라 「합류 방식」이다**(`fuse` vs `replace`). 그렇게
+만든 것은 21회차 상한 프로브가 `replace` 를 쟀는데 7회차 로드맵이 `fuse` 였기 때문이다 —
+하나만 만들면 *프로브 수치가 재현되나* 와 *로드맵이 옳았나* 중 하나를 영원히 못 묻는다.
 
 **프로필은 갈아끼지 않고 더한다.** 이름이 곧 실험의 정체라, 갈아끼면 이미 나온 수치가 어느
 모델·장치로 재졌는지를 파일이 못 말한다. `local` 옆의 `local-gpu`, `kure-v1` 옆의
@@ -73,6 +78,7 @@ from rag_pipeline.config import (
     IngestConfig,
     RerankConfig,
     RetrievalConfig,
+    RewriteConfig,
     SplitterConfig,
 )
 
@@ -80,14 +86,17 @@ __all__ = [
     "DEFAULT_EMBEDDING_PROFILE",
     "DEFAULT_EVALUATOR_PROFILE",
     "DEFAULT_RERANK_PROFILE",
+    "DEFAULT_REWRITE_PROFILE",
     "EVAL_EMBEDDINGS",
     "EVAL_EVALUATORS",
     "EVAL_RERANKERS",
+    "EVAL_REWRITERS",
     "EVAL_SETTINGS",
     "embedding_profile",
     "eval_config",
     "evaluator_profile",
     "rerank_profile",
+    "rewrite_profile",
 ]
 
 
@@ -264,6 +273,48 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
 DEFAULT_RERANK_PROFILE = "off"
 
 
+# 갈아끼울 수 있는 질의 재작성 설정들. **`EVAL_RERANKERS` 와 같은 모양·같은 기본값 규칙이다** —
+# 켜지는 순간 질의당 LLM 호출이 하나 늘어, `--rewrite` 를 명시하지 않은 실행은 지금까지와
+# 글자 그대로 같아야 한다.
+#
+# **이 축이 존재하는 이유가 다른 둘과 조금 다르다.** 저쪽 둘은 *어느 모델·어느 장치가 나은가*
+# 인데, 여기는 **같은 모델로 합류 방식만 가른다.** 그렇게 만든 것은 21회차 상한 프로브가
+# `replace` 를 쟀는데 7회차 로드맵이 `fuse` 였기 때문이다 — 둘 중 하나만 만들면 *프로브 수치가
+# 재현되나* 와 *로드맵이 옳았나* 중 하나를 영원히 못 묻는다.
+#
+# **두 프로필이 재작성 캐시를 나눠 쓴다** — 재작성 호출은 `(질의, 1차 pool)` 만 보고 mode 는
+# 그 뒤에서 갈리므로 `rewrite_cache_salt` 에 mode 가 없다(`retrieval/rewrite.py`).
+# 즉 **먼저 돌린 쪽이 값을 치르고 나머지 하나는 사실상 무료다.**
+EVAL_REWRITERS: dict[str, dict[str, Any]] = {
+    # 재작성 없음. **`rewrite_model` 이 비면 `get_rewriter()` 가 None 을 돌려준다**
+    "off": {
+        "rewrite_model": None,
+    },
+    # 원 질의 갈래를 남기고 재작성 갈래를 더한다(7회차 로드맵). 갈래가 넷이다
+    "fuse": {
+        "rewrite_model": "gpt-4.1-mini",
+        "rewrite_mode": "fuse",
+        "rewrite_context_k": 10,
+        "rewrite_temperature": 0.0,
+        "rewrite_max_tokens": 256,
+        "rewrite_cache_enabled": True,
+    },
+    # 재작성 질의로만 검색한다. **21회차 프로브가 잰 것이 이 모양이라, `sih-07` 102위 → 2위 와
+    # 견줄 수 있는 유일한 프로필이다** — `fuse` 는 견줄 대상이 없다
+    "replace": {
+        "rewrite_model": "gpt-4.1-mini",
+        "rewrite_mode": "replace",
+        "rewrite_context_k": 10,
+        "rewrite_temperature": 0.0,
+        "rewrite_max_tokens": 256,
+        "rewrite_cache_enabled": True,
+    },
+}
+
+# 아무것도 안 주면 이것. 재작성 없이 도는 지금까지의 실행이다
+DEFAULT_REWRITE_PROFILE = "off"
+
+
 # 갈아끼울 수 있는 판정 설정들. **앞의 둘과 같은 모양인 것이 의도다** — 이름이 곧 실험의
 # 정체라 결과 JSON 에 함께 실린다.
 #
@@ -353,6 +404,8 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
     # **임베딩과 같은 이유로 두 곳에 안 적는다** — 기본 프로필(=꺼짐)을 그대로 가리켜,
     # `--rerank` 를 안 준 실행이 자기가 안 쓴 모델을 기록하는 일이 없게 한다
     "rerank": EVAL_RERANKERS[DEFAULT_RERANK_PROFILE],
+    # 질의 재작성도 같은 규칙이다 — 기본 프로필(=꺼짐)을 그대로 가리킨다
+    "rewrite": EVAL_REWRITERS[DEFAULT_REWRITE_PROFILE],
     # **두 곳에 적지 않는다.** 기본 프로필을 그대로 가리켜, `baseline.json` 의 `settings`
     # 와 실제로 실린 설정이 갈릴 수 없게 한다
     "embedding": EVAL_EMBEDDINGS[DEFAULT_EMBEDDING_PROFILE],
@@ -392,6 +445,18 @@ def rerank_profile(name: str) -> dict[str, Any]:
     return EVAL_RERANKERS[name]
 
 
+# 이름으로 질의 재작성 프로필을 찾는다. **`rerank_profile()` 과 같은 이유로 같은 모양이다** —
+# 없는 이름에 조용히 기본값(=꺼짐)으로 떨어지면 재작성을 켠 줄 알고 대조군을 두 번 재게 되고,
+# 두 실행이 같은 수치를 내는 것이 *"재작성이 효과 없다"* 로 읽힌다
+def rewrite_profile(name: str) -> dict[str, Any]:
+    if name not in EVAL_REWRITERS:
+        raise SystemExit(
+            f"'{name}' 은 없는 재작성 프로필입니다. "
+            f"있는 것: {sorted(EVAL_REWRITERS)} (evaluation/config.py 의 EVAL_REWRITERS)"
+        )
+    return EVAL_REWRITERS[name]
+
+
 # 이름으로 판정 프로필을 찾는다. **앞의 둘과 같은 이유로 같은 모양이다** — 없는 이름에
 # 조용히 기본값으로 떨어지면 모델을 바꾼 줄 알고 대조군을 두 번 재게 되고, 두 실행이 같은
 # 수치를 내는 것이 *"모델이 안 움직였다"* 로 읽힌다. 정확히 이 축이 답하려는 질문이라 제일
@@ -414,6 +479,7 @@ def eval_config(
     qdrant_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    rewrite: str = DEFAULT_REWRITE_PROFILE,
     evaluator: str = DEFAULT_EVALUATOR_PROFILE,
 ) -> IngestConfig:
     config = IngestConfig(**EVAL_SETTINGS["ingest"])
@@ -428,6 +494,9 @@ def eval_config(
     # **키는 안 지운다** — 유료 갈래는 실제로 키가 필요하고, 이 파일이 일부러 고정하지 않는
     # 둘(API 키·tesseract 경로) 중 하나다. 꺼진 상태는 키가 아니라 `rerank_model=None` 이 만든다
     object.__setattr__(config, "_rerank", RerankConfig(**rerank_profile(rerank)))
+    # 재작성도 같은 이유로 키를 안 지운다 — 유료 갈래뿐이라 키가 없으면 폴백이 돌고,
+    # 그것은 리포트의 `rewrite_warnings` 에 그대로 보인다
+    object.__setattr__(config, "_rewrite", RewriteConfig(**rewrite_profile(rewrite)))
     # 판정도 같은 이유로 고정한다. **키는 여기서도 안 지운다** — 판정은 유료 갈래뿐이라
     # 키가 없으면 `verdict="failed"` 가 나오고, 그것은 채점 도구의 실패 열에 그대로 보인다
     object.__setattr__(config, "_evaluator", EvaluatorConfig(**evaluator_profile(evaluator)))

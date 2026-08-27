@@ -19,9 +19,11 @@ from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
     DEFAULT_EVALUATOR_PROFILE,
     DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
     EVAL_EMBEDDINGS,
     EVAL_EVALUATORS,
     EVAL_RERANKERS,
+    EVAL_REWRITERS,
     EVAL_SETTINGS,
     embedding_profile,
     eval_config,
@@ -34,9 +36,10 @@ from rag_pipeline.config import (
     IngestConfig,
     RerankConfig,
     RetrievalConfig,
+    RewriteConfig,
     SplitterConfig,
 )
-from rag_pipeline.retrieval import get_reranker
+from rag_pipeline.retrieval import get_reranker, get_rewriter
 
 EVALUATION_DIR = Path(__file__).resolve().parents[2] / "evaluation"
 
@@ -49,6 +52,7 @@ _MODELS = {
     "embedding": EmbeddingConfig,
     "retrieval": RetrievalConfig,
     "rerank": RerankConfig,
+    "rewrite": RewriteConfig,
     "evaluator": EvaluatorConfig,
 }
 
@@ -297,6 +301,88 @@ def test_env_cannot_turn_the_default_off_profile_on(monkeypatch) -> None:
     monkeypatch.setenv("RERANK_MODEL", "gpt-4o")
 
     assert eval_config().rerank.rerank_model is None
+
+
+# 질의 재작성 프로필 축 — 리랭커와 **같은 모양이라 같은 가드를 건다**
+# ---------------------------------------------------------------------------
+
+
+# 기본이 꺼짐이어야 한다. **`--rewrite` 를 안 준 실행은 지금까지와 글자 그대로 같아야 한다** —
+# 켜지는 순간 질의당 LLM 호출이 하나 늘고, 리랭커와 함께 켜면 셋이 된다
+def test_rewrite_default_profile_is_off() -> None:
+    assert EVAL_SETTINGS["rewrite"] is EVAL_REWRITERS[DEFAULT_REWRITE_PROFILE]
+    assert eval_config().rewrite.rewrite_model is None
+    assert get_rewriter(eval_config().rewrite) is None
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다
+@pytest.mark.parametrize("profile", sorted(EVAL_REWRITERS))
+def test_every_rewrite_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_REWRITERS[profile]) - set(RewriteConfig.model_fields)
+    assert not unknown, f"재작성 프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_REWRITERS))
+def test_named_rewrite_profile_actually_lands(profile: str) -> None:
+    config = eval_config(rewrite=profile)
+    for key, value in EVAL_REWRITERS[profile].items():
+        assert getattr(config.rewrite, key) == value, f"{profile}.{key}"
+
+
+# **모델을 가진 프로필은 합류 방식을 못 박아야 한다.** 이 축이 존재하는 이유 자체가 그것을
+# 가르는 것이라, 안 박으면 코드 기본값(`fuse`)으로 조용히 떨어져 **`replace` 를 재려던 실행이
+# `fuse` 를 두 번 재고 「합류 방식은 차이가 없다」로 읽힌다.** 리랭커 쪽 `rerank_provider`
+# 가드와 같은 모양이고, `off` 를 skip 하는 이유도 같다 — 모델이 없으면 재작성기를 아예
+# 안 만들어 mode 가 도달할 코드가 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_REWRITERS))
+def test_rewrite_profiles_with_a_model_pin_their_mode(profile: str) -> None:
+    block = EVAL_REWRITERS[profile]
+    if block.get("rewrite_model") is None:
+        pytest.skip("모델이 없으면 재작성기를 안 만든다 — mode 가 뜻이 없다")
+    assert "rewrite_mode" in block, (
+        f"재작성 프로필 '{profile}' 이 rewrite_mode 를 안 박았습니다 — "
+        "코드 기본값이 'fuse' 라 replace 를 재려던 실행이 fuse 를 두 번 잽니다"
+    )
+
+
+# 두 모드가 **둘 다 실재해야** 이 축이 뜻을 갖는다. 하나만 남기면 *프로브 수치가 재현되나*
+# 와 *로드맵이 옳았나* 중 하나를 영원히 못 묻는다 (plan_log/검색-생성.md 22회차)
+def test_both_merge_modes_exist() -> None:
+    modes = {
+        block["rewrite_mode"]
+        for block in EVAL_REWRITERS.values()
+        if block.get("rewrite_model") is not None
+    }
+    assert modes == {"fuse", "replace"}
+
+
+# 없는 이름이면 조용히 꺼짐으로 안 돌아간다. 돌아가면 재작성을 켠 줄 알고 대조군을 두 번
+# 재게 되고, 두 실행이 같은 수치를 내는 것이 "재작성이 효과 없다"로 읽힌다
+def test_unknown_rewrite_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(rewrite="없는재작성기")
+    assert "없는재작성기" in str(err.value)
+    assert DEFAULT_REWRITE_PROFILE in str(err.value)
+
+
+# 프로필을 골라도 `.env` 는 못 이긴다. 고정의 목적이 이 축으로 새면 안 된다
+def test_env_cannot_move_a_named_rewrite_profile(monkeypatch) -> None:
+    monkeypatch.setenv("REWRITE_MODE", "replace")
+    monkeypatch.setenv("REWRITE_CONTEXT_K", "3")
+
+    config = eval_config(rewrite="fuse")
+
+    assert config.rewrite.rewrite_mode == "fuse"
+    assert config.rewrite.rewrite_context_k == 10
+
+
+# **`.env` 가 꺼진 기본값을 켤 수도 없어야 한다.** 개발자가 `.env` 에 모델 이름을 넣어 두면
+# `--rewrite` 를 안 준 평가 실행이 조용히 과금된다
+def test_env_cannot_turn_the_default_off_rewrite_profile_on(monkeypatch) -> None:
+    monkeypatch.setenv("REWRITE_MODEL", "gpt-4o")
+
+    assert eval_config().rewrite.rewrite_model is None
 
 
 # **판정 모델은 고정 블록이 이겨야 한다.** `.env` 의 EVALUATOR_MODEL 은 비어 있는 것이 기본

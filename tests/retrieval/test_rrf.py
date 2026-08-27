@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from rag_pipeline.retrieval.fusion import fuse
+from rag_pipeline.retrieval.fusion import Branch, fuse_branches
 from rag_pipeline.schemas.vector import SearchResult, StoredChunk
 
 
@@ -29,6 +29,26 @@ def _sparse(chunk_id: str, score: float) -> tuple[StoredChunk, float]:
             metadata={"source_name": "안내서.pdf"},
         ),
         score,
+    )
+
+
+# 예전 `fuse(dense, sparse)` 자리. **갈래가 N 개가 되면서 진입점 이름이 바뀌었을 뿐,
+# 이 파일이 지키는 계약은 그대로다** — 점수가 아니라 순위만 쓴다는 것이다.
+# production 소비자가 0 이 된 두 갈래짜리 지름길은 안 남겼다(rag_pipeline/retrieval/fusion.py)
+def fuse(
+    dense: list[SearchResult],
+    sparse: list[tuple[StoredChunk, float]],
+    *,
+    rrf_k: int,
+    top_k: int,
+):
+    return fuse_branches(
+        [
+            Branch([(result, result.score) for result in dense], slot="dense_score"),
+            Branch(sparse, slot="bm25_score"),
+        ],
+        rrf_k=rrf_k,
+        top_k=top_k,
     )
 
 
