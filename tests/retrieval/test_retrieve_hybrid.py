@@ -10,7 +10,7 @@ import pytest
 
 from rag_pipeline.config import RetrievalConfig
 from rag_pipeline.exceptions import IndexingError
-from rag_pipeline.retrieval import build_bm25_index, retrieve
+from rag_pipeline.retrieval import build_bm25_index, retrieve, uses_bm25
 from rag_pipeline.retrieval.bm25 import Bm25Index
 from rag_pipeline.schemas.vector import SearchResult, StoredChunk
 
@@ -220,3 +220,32 @@ def test_index_built_once_and_reused():
 def test_untokenizable_chunks_excluded():
     store = FakeStore(stored=[_stored("a", "위약금 조항"), _stored("b", "!!! ???")])
     assert len(build_bm25_index(store)) == 1
+
+
+# ---------------------------------------------------------------- BM25 사용 판정
+
+
+# **`uses_bm25()` 가 `retrieve()` 의 판정과 같아야 한다.** 답변 캐시의 파이프라인 지문이
+# 이 함수를 보고 «BM25 갈래가 돌았나» 를 적는데, 판정이 두 벌이면 한쪽만 고쳐졌을 때
+# 지문이 조용히 어긋나 낡은 답이 히트한다 (rag_pipeline/answer_cache/fingerprint.py)
+@pytest.mark.parametrize("empty", [True, False])
+def test_uses_bm25_matches_the_widening_decision(empty: bool):
+    store = FakeStore(results=[_result("a", 0.8)], stored=[_stored("a", "위약금 조항")])
+    bm25 = Bm25Index([]) if empty else build_bm25_index(store)
+
+    retrieve(
+        "위약금",
+        store=store,
+        embedder=FakeEmbedder(),
+        top_k=5,
+        bm25=bm25,
+        config=RetrievalConfig(candidate_k=37),
+    )
+
+    widened = store.top_ks == [37]
+    assert uses_bm25(bm25) is widened
+
+
+# 인덱스를 안 넘기는 것이 곧 끄는 스위치다 — 그 자리에서도 판정이 같아야 한다
+def test_uses_bm25_is_false_without_an_index():
+    assert uses_bm25(None) is False

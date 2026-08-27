@@ -115,6 +115,15 @@ def _finish(
     return reranker.rerank(query, pool)[:top_k]
 
 
+# BM25 갈래가 실제로 도는가. **이 판정이 한 벌이어야 한다** (모듈 docstring 참고).
+#
+# `retrieve()` 의 풀 넓히기, `_branches_for()` 의 갈래 추가, 그리고 답변 캐시의 파이프라인
+# 지문이 전부 이것을 본다. 세 자리가 각자 `bm25 is not None and len(bm25) > 0` 을 적으면
+# 한쪽만 고쳐졌을 때 **지문이 조용히 어긋나** 낡은 답이 히트한다 — 에러가 안 나는 종류다
+def uses_bm25(bm25: Bm25Index | None) -> bool:
+    return bm25 is not None and len(bm25) > 0
+
+
 # 한 질의로 dense (+ BM25) 를 돌려 갈래 목록을 만든다. **BM25 실패는 dense 만 남기는
 # 폴백이고 예외가 아니다** (모듈 docstring 참고).
 #
@@ -136,7 +145,7 @@ def _branches_for(
         Branch([(result, result.score) for result in dense_results], slot=dense_slot)
     ]
 
-    if bm25 is None or len(bm25) == 0:
+    if not uses_bm25(bm25):
         return branches
 
     try:
@@ -170,7 +179,7 @@ def retrieve(
     # 버릴 뿐인데 저장소는 이미 훑는다. **리랭커만 켰을 때도 넓혀야 한다** (모듈 docstring).
     # **재작성도 같다** — 안 넓히면 PRF 가 top_k 개만 보고 재작성 갈래도 좁은 폭으로 돌아,
     # 이 단계가 노린 11~50위의 여지를 통째로 버린다
-    use_bm25 = bm25 is not None and len(bm25) > 0
+    use_bm25 = uses_bm25(bm25)
     widen = use_bm25 or reranker is not None or rewriter is not None
     limit = max(cfg.candidate_k, top_k) if widen else top_k
 

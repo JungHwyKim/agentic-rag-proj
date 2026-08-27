@@ -94,12 +94,12 @@ Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 5 이고 7회�
 
 from __future__ import annotations
 
-from rag_pipeline.answer_cache import QdrantAnswerCache
+from rag_pipeline.answer_cache import QdrantAnswerCache, pipeline_fingerprint
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.generation import OpenAIEvaluator, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
-from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve
+from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve, uses_bm25
 from rag_pipeline.schemas.answer import Answer, RewriteTrace
 
 __all__ = ["answer_question"]
@@ -122,9 +122,21 @@ def answer_question(
     cfg = config or IngestConfig()
     limit = top_k if top_k is not None else cfg.generation.generation_top_k
 
+    # 이 답을 무엇이 만드나. **여기가 유일하게 셋을 다 아는 자리다** — 설정, 실제로 넘어온
+    # bm25·reranker·rewriter, 그리고 유효 top_k. 설정만 보면 틀린다: 모델 이름이 차 있어도
+    # 부르는 쪽이 객체를 안 넘기면 그 단계는 안 돈다(`evaluation/run_eval.py` 가 그렇게 부른다).
+    # 저장과 조회에 **같은 값**을 넘겨야 하므로 한 번만 만든다 (answer_cache/fingerprint.py)
+    fingerprint = pipeline_fingerprint(
+        cfg,
+        use_bm25=uses_bm25(bm25),
+        reranker_on=reranker is not None,
+        rewriter_on=rewriter is not None,
+        top_k=limit,
+    )
+
     # 캐시가 먼저다. 히트하면 검색도 생성도 안 돈다 (모듈 docstring 참고)
     if cache is not None:
-        cached = cache.lookup(query, embedder=embedder)
+        cached = cache.lookup(query, embedder=embedder, fingerprint=fingerprint)
         if cached is not None:
             return cached
 
@@ -158,5 +170,5 @@ def answer_question(
 
     # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
     if cache is not None:
-        cache.put(answer, embedder=embedder)
+        cache.put(answer, embedder=embedder, fingerprint=fingerprint)
     return answer

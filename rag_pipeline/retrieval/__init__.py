@@ -25,6 +25,7 @@
 - 왜 코퍼스가 아니라 1차 검색 결과를 보나 / 왜 질문 문장 하나인가 / 캐시 salt 에 `rewrite_mode`
   가 없는 이유 / 왜 여기는 Protocol 을 **안** 만드나 — `rewrite.py` docstring
 - 재작성이 어디에 끼나 / 리랭커에 원 질의를 넘기는 이유 / `fuse` 와 `replace` — `hybrid.py` docstring
+- BM25 가 실제로 도는지를 왜 한 벌(`uses_bm25()`)로 두나 — `hybrid.py` 의 그 함수 주석
 - 갈래가 왜 둘이 아니라 N 개인가 / RRF-of-RRF 를 안 만드는 이유 — `fusion.py` docstring
 - BM25 실패가 예외가 아니라 dense 폴백인 이유 / `k1`·`b` 를 설정으로 안 여는 이유 — `bm25.py` docstring
 - 한글은 bigram, 영문·숫자는 낱말인 이유 — `tokenize.py` docstring
@@ -41,7 +42,7 @@
 from __future__ import annotations
 
 from rag_pipeline.retrieval.bm25 import Bm25Index, build_bm25_index
-from rag_pipeline.retrieval.hybrid import retrieve
+from rag_pipeline.retrieval.hybrid import retrieve, uses_bm25
 from rag_pipeline.retrieval.reranker import Reranker, get_reranker
 from rag_pipeline.retrieval.rewrite import QueryRewriter, get_rewriter
 
@@ -53,4 +54,5 @@ __all__ = [
     "get_reranker",
     "get_rewriter",
     "retrieve",
+    "uses_bm25",
 ]

@@ -39,6 +39,19 @@
 혼입은 막아주지만, `text-embedding-3-small` 에서 잰 0.9x 가 다른 모델에서 같은 뜻이라는
 보장은 어디에도 없다. 모델을 바꾸면 다시 잰다.
 
+## 캐시가 낡는 축은 넷이고, 넷을 각각 다른 것이 막는다
+
+| 무엇이 바뀌면 낡나 | 무엇이 막나 |
+|---|---|
+| 임베딩 모델·차원 | 컬렉션 이름 (`collection_name_for(..., prefix=)`) |
+| 문서 삭제·수정 | `_sources_still_valid()` — 근거 point 생존 + 텍스트 해시 |
+| 새 문서 색인 | `clear()` — 색인 라우트가 부른다 |
+| 검색·생성 설정 | `pipeline_fingerprint()` — payload 의 `pipeline` 과 대조 |
+
+**넷이 서로를 대체하지 못한다.** 근거 대조는 *새 문서가 들어온 경우* 를 못 잡고(사라진 것이
+없다), `clear()` 는 *설정만 바뀐 경우* 를 못 잡으며(문서는 그대로다), 지문은 *문서가 바뀐
+경우* 를 못 잡는다(설정은 그대로다). 하나를 빼면 그 축이 통째로 열린다.
+
 ## `Protocol` 을 안 만드는 이유
 
 구현체가 하나다. `VectorStore` 가 두 번째 구현체를 기다리는 것과 같은 잣대이고,
@@ -47,11 +60,17 @@
 
 from __future__ import annotations
 
+from rag_pipeline.answer_cache.fingerprint import pipeline_fingerprint
 from rag_pipeline.answer_cache.qdrant_cache import QdrantAnswerCache, cache_point_id_for
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.ingestion.indexing.qdrant_store import QdrantStore
 
-__all__ = ["QdrantAnswerCache", "cache_point_id_for", "get_answer_cache"]
+__all__ = [
+    "QdrantAnswerCache",
+    "cache_point_id_for",
+    "get_answer_cache",
+    "pipeline_fingerprint",
+]
 
 
 # 설정에 맞는 답변 캐시를 만든다. **임계값이 없으면 None** — 그것이 곧 꺼진 상태다.

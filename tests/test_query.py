@@ -105,11 +105,16 @@ class _FakeCache:
     def __init__(self, hit: Answer | None = None) -> None:
         self._hit = hit
         self.put_calls: list[Answer] = []
+        # 조회와 저장에 넘어온 지문. **둘이 같아야 한다** — 다르면 방금 저장한 답이
+        # 다음 질의에서 자기 지문과 안 맞아 영원히 미스가 나는데 에러가 안 난다
+        self.fingerprints: list[str] = []
 
-    def lookup(self, query: str, *, embedder: object) -> Answer | None:
+    def lookup(self, query: str, *, embedder: object, fingerprint: str) -> Answer | None:
+        self.fingerprints.append(fingerprint)
         return self._hit
 
-    def put(self, answer: Answer, *, embedder: object) -> bool:
+    def put(self, answer: Answer, *, embedder: object, fingerprint: str) -> bool:
+        self.fingerprints.append(fingerprint)
         self.put_calls.append(answer)
         return True
 
@@ -429,3 +434,57 @@ def test_cache_hit_skips_the_evaluator(mocker, config):
     assert answer.text == "옛 답변"
     assert answer.verdict is None
     assert evaluator.calls == []
+
+
+# ---------------------------------------------------------------- 파이프라인 지문
+
+
+# **조회와 저장이 같은 지문을 써야 한다.** 다르면 방금 저장한 답이 다음 질의에서 자기
+# 지문과 안 맞아 영원히 미스가 나는데 **에러가 안 난다** — 캐시가 켜져 있는데 아무 일도
+# 안 하는 상태다. 그래서 지문을 한 번만 만들어 둘에 넘긴다
+def test_cache_lookup_and_put_share_one_fingerprint(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    cache = _FakeCache(hit=None)
+
+    answer_question("질문", store=object(), embedder=object(), config=config, cache=cache)
+
+    assert len(cache.fingerprints) == 2
+    assert cache.fingerprints[0] == cache.fingerprints[1]
+
+
+# **설정이 아니라 실제로 넘어온 객체가 지문을 정한다.** 모델 이름이 차 있어도 부르는 쪽이
+# 객체를 안 넘기면 그 단계는 안 도는데(`evaluation/run_eval.py` 가 그렇게 부른다),
+# 설정만 보고 지문을 만들면 두 실행이 같은 지문을 달고 서로의 답을 히트한다
+def test_fingerprint_follows_the_objects_not_the_config(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    plain = _FakeCache(hit=None)
+    reranked = _FakeCache(hit=None)
+
+    answer_question("질문", store=object(), embedder=object(), config=config, cache=plain)
+    answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        cache=reranked,
+        reranker=object(),
+    )
+
+    assert plain.fingerprints[0] != reranked.fingerprints[0]
+
+
+# 유효 `top_k` 도 지문에 든다 — 근거를 몇 개 물었는지가 답 본문을 가른다
+def test_fingerprint_follows_the_effective_top_k(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    default = _FakeCache(hit=None)
+    explicit = _FakeCache(hit=None)
+
+    answer_question("질문", store=object(), embedder=object(), config=config, cache=default)
+    answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=explicit, top_k=11
+    )
+
+    assert default.fingerprints[0] != explicit.fingerprints[0]
