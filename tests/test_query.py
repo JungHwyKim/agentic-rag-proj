@@ -162,6 +162,67 @@ def test_cache_miss_runs_normally_and_stores(mocker, config):
     assert cache.put_calls == [answer]
 
 
+# --- 재작성(Rewriter) ------------------------------------------------------------
+
+
+# **재작성기를 그대로 retrieve() 에 넘긴다.** 리랭커와 같은 모양이고, 여기서 하는 일도
+# 수명을 정해 넘기는 것뿐이다 — 실제로 붙는 자리는 retrieve() **안**(1차 검색 뒤·합류 앞)이다.
+# 이 배선이 끊기면 .env 를 켜도 아무 일이 안 일어나는데 **에러가 안 난다**
+def test_rewriter_is_passed_through_to_retrieve(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+    rewriter = object()
+
+    answer_question(
+        "질문", store=object(), embedder=object(), config=config, rewriter=rewriter
+    )
+
+    assert retrieve.call_args.kwargs["rewriter"] is rewriter
+
+
+# 안 넘기면 None 이 간다. bm25·reranker·cache 와 같은 스위치다
+def test_without_rewriter_none_is_passed(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert retrieve.call_args.kwargs["rewriter"] is None
+
+
+# **여기서 질의를 미리 다시 쓰지 않는다.** retrieve() 에 가는 질의는 원 질의 그대로여야
+# 하고, 재작성은 그 안에서 일어난다 — 여기서 하면 run_eval 이 retrieve() 를 직접 부르므로
+# 평가가 그 경로를 안 밟아 **재작성을 영원히 못 잰다**(7회차 기각 항목)
+def test_query_reaches_retrieve_unchanged(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer_question(
+        "원 질의입니다", store=object(), embedder=object(), config=config, rewriter=object()
+    )
+
+    assert retrieve.call_args.args[0] == "원 질의입니다"
+
+
+# **캐시가 히트하면 재작성도 안 돈다** — retrieve() 를 통째로 건너뛰기 때문이다.
+# 리랭커와 같은 자리인데 이쪽은 대가가 돈이다: 그 건너뜀이 곧 유료 호출 하나를 아끼는 것이다
+def test_cache_hit_skips_the_rewriter_too(mocker, config):
+    retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(query="질문", text="옛 답변", sources=[])
+
+    answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        rewriter=object(),
+        cache=_FakeCache(cached),
+    )
+
+    assert retrieve.call_args is None
+
+
 # --- 리랭커 --------------------------------------------------------------------
 
 

@@ -37,6 +37,20 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 수명을 부르는 쪽이 정하는 이유는 `embedder` 와 같다 — 로컬 갈래는 모델을 올리므로 질의마다
 만들면 그 비용을 매번 낸다. backend 는 첫 질의에 만들어 들고, 평가 러너는 실행마다 만든다.
 
+## `rewriter` 도 같은 모양이고 자리는 `reranker` 와 **같은 함수 안**이다
+
+질의를 다시 쓰는 구현체 역시 인자이고 `None` 이면 재작성 없이 돈다. `retrieve()` 안에서
+1차 검색 **뒤**·합류 **앞**에 서므로, 여기가 하는 일은 **넘겨주는 것뿐**이다.
+
+**여기서 질의를 미리 다시 써서 `retrieve()` 에 넘기면 안 된다.** `evaluation/run_eval.py` 가
+`retrieve()` 를 직접 부르므로, 재작성이 이 함수 안에 있으면 **평가가 그 경로를 안 밟아
+재작성을 영원히 못 잰다**(`plan_log/검색-생성.md` 7회차 기각 항목). `reranker` 를 반환 뒤가
+아니라 `retrieve()` 안에 둔 것과 같은 종류의 판단인데 이유는 다르다 — 저쪽은 **절단 위치**,
+이쪽은 **누가 그 경로를 밟느냐**다.
+
+**답변 캐시가 히트하면 재작성도 안 돈다.** 캐시 검사가 `retrieve()` 앞이라 저절로 그렇게
+되고, 그것이 곧 질의당 LLM 호출 하나를 아끼는 것이다.
+
 ## `cache` 도 같은 모양이다
 
 답변 캐시 역시 인자이고 `None` 이면 캐시 없이 돈다 — `bm25` 와 같은 이유이자 같은 스위치다.
@@ -79,7 +93,7 @@ from rag_pipeline.config import IngestConfig
 from rag_pipeline.generation import OpenAIEvaluator, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
-from rag_pipeline.retrieval import Bm25Index, Reranker, retrieve
+from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve
 from rag_pipeline.schemas.answer import Answer
 
 __all__ = ["answer_question"]
@@ -95,6 +109,7 @@ def answer_question(
     top_k: int | None = None,
     bm25: Bm25Index | None = None,
     reranker: Reranker | None = None,
+    rewriter: QueryRewriter | None = None,
     cache: QdrantAnswerCache | None = None,
     evaluator: OpenAIEvaluator | None = None,
 ) -> Answer:
@@ -114,6 +129,9 @@ def answer_question(
         top_k=limit,
         bm25=bm25,
         reranker=reranker,
+        # 재작성도 `retrieve()` **안**이다 — 여기서 질의를 미리 다시 써서 넘기면 평가 러너가
+        # `retrieve()` 를 직접 부르므로 그 경로를 안 밟는다 (모듈 docstring 참고)
+        rewriter=rewriter,
         config=cfg.retrieval,
     )
     # 판정은 생성 앞이지만 **생성을 막지 않는다** (모듈 docstring 참고).

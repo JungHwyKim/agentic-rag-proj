@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig
+from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig, RewriteConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
 from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
@@ -62,6 +62,14 @@ def _client(store=None, tmp_path: Path | None = None) -> TestClient:
     # CLAUDE.md 가 임베딩 provider 에서 실제로 밟았다고 적어 둔 그 함정이다
     object.__setattr__(
         config, "_evaluator", EvaluatorConfig(evaluator_model=None, openai_api_key=None)
+    )
+    # **재작성기도 같은 이유로 못 박는다.** 라우트가 질의마다 `get_rewriter()` 를 부르므로
+    # 안 박으면 개발자 `.env` 의 `REWRITE_MODEL` 이 픽스처에 실린다 — 그리고 이 저장소는
+    # 2026-08-27 에 그 줄을 실제로 채웠다(`fuse`). 위 `_evaluator` 핀과 글자 그대로 같은
+    # 자리이고, **핀은 배선을 넣은 회차의 몫이다** — 다음 회차로 미루면 그 사이에 도는
+    # 기본 pytest 가 실키를 문다
+    object.__setattr__(
+        config, "_rewrite", RewriteConfig(rewrite_model=None, openai_api_key=None)
     )
     app.state.ingest_config = config
     app.state.store = store if store is not None else FakeStore()
@@ -507,6 +515,60 @@ def test_evaluator_is_built_per_query(mocker):
 
     assert made.call_count == 2
     assert asked.call_args.kwargs["evaluator"] == "fake-evaluator"
+
+
+# **재작성기도 질의마다 새로 만든다** — Evaluator 와 같은 자리이고 근거도 같다(가중치 없음 ·
+# `warnings`·`usage` 누적). 딸린 `ResultCache` 는 경로 + 불리언뿐이라 축이 아니다
+def test_rewriter_is_built_per_query(mocker):
+    made = mocker.patch(
+        "backend.app.api.routes.query.get_rewriter", return_value="fake-rewriter"
+    )
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[]),
+    )
+
+    client = _client()
+    client.post("/api/v1/query", data={"query": "질문"})
+    client.post("/api/v1/query", data={"query": "또 질문"})
+
+    assert made.call_count == 2
+    assert asked.call_args.kwargs["rewriter"] == "fake-rewriter"
+
+
+# **`.env` 의 `REWRITE_MODEL` 이 실제로 라우트까지 닿아야 한다.** 이 배선이 끊기면 설정을
+# 켜도 아무 일이 안 일어나는데 **에러가 안 난다** — 2026-08-27 에 실제로 그 상태였고,
+# 그때 `.env` 두 줄은 읽는 곳이 없는 죽은 줄이었다
+def test_config_rewrite_reaches_the_route(mocker):
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[]),
+    )
+    client = _client()
+    object.__setattr__(
+        client.app.state.ingest_config,
+        "_rewrite",
+        RewriteConfig(rewrite_model="gpt-4.1-mini", rewrite_mode="fuse", openai_api_key="sk-x"),
+    )
+
+    client.post("/api/v1/query", data={"query": "질문"})
+
+    rewriter = asked.call_args.kwargs["rewriter"]
+    assert rewriter is not None
+    assert rewriter.mode == "fuse"
+
+
+# 모델 이름이 없으면 `get_evaluator()` 가 None 을 돌려주고 **안 넘기는 것과 같다** —
+# bm25·cache·reranker 와 같은 규약이라 라우트에 스위치가 없다
+def test_rewriter_off_passes_none(mocker):
+    asked = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "질문"})
+
+    assert asked.call_args.kwargs["rewriter"] is None
 
 
 # 모델 이름이 없으면 `get_evaluator()` 가 None 을 돌려주고 **안 넘기는 것과 같다** —

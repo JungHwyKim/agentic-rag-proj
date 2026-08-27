@@ -32,9 +32,9 @@ startup 에서 만들면 그 시간만큼 서버가 안 뜨고, 모델을 못 �
 **색인 뒤 되돌릴 것이 없다.** 리랭커는 저장소 스냅샷을 안 들고 질의마다 후보를 받아 점수만
 매기므로, 아래 BM25 무효화 계약이 여기에는 해당하지 않는다. 답변 캐시 쪽 분류다.
 
-## 판정(Evaluator)만 질의마다 새로 만든다
+## 판정(Evaluator)과 재작성(Rewriter)은 질의마다 새로 만든다
 
-embedder·BM25·리랭커는 `app.state` 싱글턴인데 여기만 아니다. **가르는 것은 가중치다** —
+embedder·BM25·리랭커는 `app.state` 싱글턴인데 이 둘은 아니다. **가르는 것은 가중치다** —
 저 셋이 싱글턴인 이유는 KURE 2.27GB 적재 · cross-encoder 적재 · 저장소 전량 훑기이고,
 `OpenAIEvaluator` 에는 그런 것이 **하나도 없다**(`_make_client()` 를 호출 시점에 부르고
 캐시는 디스크다). 이유가 없는데 모양만 따라가면 딸려 오는 것이 있다 — `warnings` 와
@@ -42,6 +42,13 @@ embedder·BM25·리랭커는 `app.state` 싱글턴인데 여기만 아니다. **
 조합이면 질의마다 경고 한 줄이 서버 수명 내내 쌓인다. 읽는 사람도 없고 에러도 안 난다.
 
 질의마다 만들면 그 누적이 원리적으로 없고, `warnings` 가 **그 질의의 것**이라는 뜻이 산다.
+
+**`QueryRewriter` 가 2026-08-27 에 같은 자리로 왔다.** 근거가 글자 그대로 같다 — 올릴
+가중치가 없고(클라이언트는 호출 시점에 만든다) `warnings`·`usage` 가 인스턴스에 누적된다.
+
+**한때 축이 하나 더 있어 보였다** — 재작성기는 `ResultCache` 를 들고 있어 *싱글턴이어야
+싸지 않나* 로 읽혔다. 아니다: 그 객체는 **경로 + 불리언뿐**이고 상태를 안 들고 디스크를
+본다. 그래서 질의마다 만든 인스턴스가 **같은 캐시 파일을 읽는다** — 축이 아니라 착시였다.
 
 ## BM25 인덱스도 같은 패턴이다
 
@@ -75,7 +82,7 @@ from backend.app.core.singletons import BUILD_LOCK, embedder_for
 from backend.app.core.templates import templates
 from rag_pipeline.generation.evaluate import get_evaluator
 from rag_pipeline.query import answer_question
-from rag_pipeline.retrieval import build_bm25_index, get_reranker
+from rag_pipeline.retrieval import build_bm25_index, get_reranker, get_rewriter
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 router = APIRouter(tags=["query"])
@@ -210,6 +217,14 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # 싱글턴으로 두면 `warnings` 가 서버 수명 내내 누적된다 (모듈 docstring 참고).
         # `config.evaluator` 는 lazy 프로퍼티라 첫 호출 뒤에는 `.env` 를 다시 안 읽는다
         evaluator=get_evaluator(request.app.state.ingest_config.evaluator),
+        # 모델 이름이 없으면 None 이라 재작성 없이 돈다. 라우트에 스위치를 두지 않는 이유는
+        # bm25·cache·reranker·evaluator 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
+        # **evaluator 와 같이 질의마다 새로 만든다** — 올릴 가중치가 없어 만드는 값이 사실상
+        # 0 이고(클라이언트는 호출 시점에 만든다), 싱글턴으로 두면 `warnings`·`usage` 가 서버
+        # 수명 내내 누적된다. **딸린 `ResultCache` 는 경로 + 불리언뿐이라 축이 아니다** —
+        # 상태를 안 들고 디스크를 보므로 질의마다 만든 인스턴스가 같은 캐시 파일을 읽는다.
+        # **threadpool 로 안 감싸는 것도 evaluator 와 같다** — 적재가 없어 감쌀 것이 없다
+        rewriter=get_rewriter(request.app.state.ingest_config.rewrite),
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
 

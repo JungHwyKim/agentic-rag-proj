@@ -20,7 +20,8 @@
   쓴다(PRF). 기본 꺼짐
 - `rag_pipeline/generation/answer.py:generate_answer()` — 근거 청크로 답변 문장 1회
 - `rag_pipeline/generation/evaluate.py:OpenAIEvaluator` — 근거가 충분한지 판정 1회 (기본 꺼짐)
-- `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**
+- `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**.
+  `bm25`·`reranker`·`rewriter`·`cache`·`evaluator` 를 인자로 받아 넘긴다
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
 
 **나머지는 여전히 없다** — agent 레이어.
@@ -128,8 +129,18 @@ retriever 는 `VectorStore` Protocol(`ingestion/indexing/base.py`)만 알아야 
   때마다 **리랭킹 캐시가 전량 미스**가 되고 운영이 cohere 라 그것은 곧 유료 호출이다.
   ⑤ **`Protocol` 도 `rewrite_provider` 도 없는 것이 결정이다** — 구현체가 하나라 `answer_cache`
   · Evaluator 와 같은 자리다. 이웃한 `reranker/` 가 Protocol 을 가진 것은 구현체가 **셋**이라서다.
-  **품질은 아직 안 쟀다** — 유료 실행 전이라 `fuse` 와 `replace` 중 무엇이 나은지도, 모델이
-  사람만큼 다시 쓰는지도 미측정이다. 수치를 지적하지 않는다
+  **품질은 2026-08-27 에 쟀고 운영 모드는 `fuse` 로 닫혔다** — LLM 60건에서 RRF 를 여덟 칸에서
+  이기고 어디서도 안 진다. **`replace` 를 「프로브가 잰 쪽이니 그게 낫다」로 되돌리자는 제안이
+  지적 대상이다** — 그쪽은 `hit@1`·`hit@20` 에서 RRF 에 지고, RRF 1위였던 26건 중 1위 유지가
+  19/26 이다(`fuse` 25/26). **다만 「모델이 사람만큼 다시 쓴다」는 기각됐다** — 프로브 표적 4건
+  중 둘만 부분 상승했고 `sih-07` 102→2 는 재현되지 않았다. **그 상한 수치를 기대값으로 쓰는
+  지적을 하지 않는다.**
+  ⑥ **화면 배선은 2026-08-27 에 생겼고, `answer_question()` 안에서 질의를 미리 다시 쓰자는
+  제안이 지적 대상이다** — `routes/query.py` 가 질의마다 `get_rewriter()` 를 부르고
+  `answer_question()` 은 **넘겨주기만 한다.** 미리 쓰면 `run_eval` 이 `retrieve()` 를 직접
+  불러 **평가가 그 경로를 안 밟는다.** 그리고 **인스턴스를 싱글턴으로 "고치는" 제안도 같다** —
+  Evaluator 와 같은 자리이고 근거도 같다(가중치 없음 · `warnings`·`usage` 누적).
+  딸린 `ResultCache` 가 축처럼 보이지만 **경로 + 불리언뿐이라 상태를 안 든다**
 - **Evaluator 는 2026-08-26 에 생겼다**(`rag_pipeline/generation/evaluate.py`) —
   `EVALUATOR_MODEL` 이 비면 `get_evaluator()` 가 `None` 을 돌려 **꺼진 채 커밋된다**(켜는
   순간 질의당 LLM 호출이 1→2 다). 세 가지를 보되 **없는 것을 요구하지는 않는다.**
