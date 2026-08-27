@@ -15,16 +15,43 @@ LLM 이 없는 것도 같은 값어치다 — 규칙이 프롬프트에 숨지 �
 
 1. `final_answer` 가 있으면 `end` — 끝난 것을 다시 돌리지 않는다
 2. `final_context` 가 있으면 `generate` — 근거가 조립됐으면 다음은 생성뿐이다
-3. 아직 아무 도구도 안 불렀으면 `retrieve` — 첫 검색이다
+2.5 `stop_reason` 이 정해졌으면 `generate` — **멈추기로 정해진 뒤에 더 찾지 않는다**
+3. **지금 질의로 아직 안 찾아봤으면** `retrieve` — 첫 검색이자 재작성 뒤의 재검색이다
 4. *불충분* 이고 재시도가 남았으면 `rewrite`
 5. 근거가 0건이고 재시도가 남았으면 `rewrite`
 6. 그 밖에는 `generate`
+
+## `stop_reason` 이 정해졌으면 더 안 찾는다
+
+핸들러가 *더 갈 수 없다* 고 판정한 자리가 하나 있다 — 재작성이 승급할 질의를 못 냈을 때다
+(`rewrite_unavailable`). 그 상태는 **판정이 여전히 *불충분* 이고 재시도도 남아 있어**, 이
+규칙이 없으면 Router 가 `rewrite` 를 되고르고 핸들러가 다시 같은 판정을 내리며 제자리를 돈다.
+
+*무엇을 할 수 있나* 는 핸들러가 알고 *다음에 무엇을 하나* 는 Router 가 안다. 그 둘을 잇는
+자리가 이 칸이라, Router 가 `stop_reason` 을 **쓰지는 않고 읽기만** 하는 것이 경계다.
 
 ## 0건에서 `retrieve` 를 다시 고르지 않는 이유
 
 **같은 질의로 다시 검색하면 같은 결과다.** 검색은 결정적이라 0건에서 `retrieve` 를 되고르면
 루프가 상태를 하나도 안 바꾸며 `max_retries` 까지 도는데, 그 동안 무엇도 달라지지 않는다.
 값을 하는 것은 **질의를 바꾸는 쪽**이다. 그래서 두 번째부터의 재검색은 전부 `rewrite` 다.
+
+## 그래서 규칙 3 의 축이 「도구를 불렀나」가 아니라 「이 질의로 찾아봤나」다
+
+바로 위 문단이 그 축을 이미 말하고 있다 — 값을 하는 것은 질의를 바꾸는 쪽이므로, 물어야 할
+것도 *질의가 바뀌었나* 다. `searched_query != current_query` 하나가 셋을 동시에 답한다.
+
+- 초기 상태(`None != 질문`) → 첫 검색
+- 검색 직후(`질문 == 질문`) → 안 되고른다. **0건이어도 그렇다**
+- 재작성 승급 뒤(`질문 != 새 질의`) → 재검색
+
+**`tool_call_log` 로는 셋째를 못 말한다.** 재작성으로 질의를 갈아끼워도 로그는 이미 차 있어
+규칙 3 이 안 걸리고, 그러면 루프가 `rewrite` 만 되풀이하며 검색을 영영 안 한다 —
+Checkpoint A 를 지으며 실제로 드러난 자리다.
+
+**`ToolCallLog.input_summary` 로 대신하면 안 된다.** 120자로 잘린 요약이라 앞부분이 같은 긴
+질의 둘이 **에러 없이** 같아진다. 그래서 `record_tool_call()` 이 클립 전 원본을
+`searched_query` 에 따로 싣는다(`state.py`).
 
 ## `failed` 를 재시도로 안 삼킨다
 
@@ -54,9 +81,12 @@ def decide_next_action(state: AgentState) -> NextAction:
         return "end"
     if state.final_context is not None:
         return "generate"
-    # 도구를 한 번도 안 불렀으면 첫 검색이다. 청크 유무로 판정하면 *검색했는데 0건* 과
-    # *아직 안 했다* 가 안 갈려, 0건에서 같은 검색을 되풀이한다
-    if not state.tool_call_log:
+    # 멈추기로 정해졌으면 남은 것은 생성뿐이다 (모듈 docstring 참고)
+    if state.stop_reason is not None:
+        return "generate"
+    # 지금 질의로 아직 안 찾아봤으면 찾는다 (모듈 docstring 참고). 로그 유무로 보면 재작성
+    # 뒤의 재검색을 못 말하고, 청크 유무로 보면 *검색했는데 0건* 과 *아직 안 했다* 가 안 갈린다
+    if state.searched_query != state.current_query:
         return "retrieve"
 
     if not _has_retries_left(state):

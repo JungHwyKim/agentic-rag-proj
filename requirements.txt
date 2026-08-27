@@ -78,5 +78,17 @@ ruff
 torch
 sentence-transformers
 
+# ---- 에이전트 그래프 (선택 갈래) ----
+# 재시도 루프를 그래프로 한 번 더 도는 경로(`rag_pipeline/agent/graph.py`)에만 쓴다.
+# **없어도 된다** — 기본 경로인 `run_agent_loop()` 은 langgraph 를 아예 안 건드리고,
+# `agent/__init__.py` 가 graph 모듈을 일부러 import 하지 않아 안 깔린 머신에서도
+# `from rag_pipeline.agent import ...` 가 안 죽는다. 그래프 테스트는 importorskip 으로
+# 조용히 skip 된다 — `cohere` 가 밟은 길과 같은 모양이다.
+#
+# **딸려 오는 것 하나**: `langgraph-sdk` 가 `websockets<17` 을 요구해 17.0.1 -> 16.1.1 로
+# 내려간다. 저장소 코드에 WebSocket 사용처가 0건이고 uvicorn[standard] 의 하한은 그보다
+# 낮아 감수했다. torch/pydantic/openai 는 안 움직인다(2026-08-28 `--dry-run` 실측).
+langgraph
+
 # ---- 추후 단계 - 지금은 설치하지 않음 ----
 # (없음)

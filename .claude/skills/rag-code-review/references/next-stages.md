@@ -21,13 +21,22 @@
 - `rag_pipeline/generation/answer.py:generate_answer()` — 근거 청크로 답변 문장 1회
 - `rag_pipeline/generation/evaluate.py:OpenAIEvaluator` — 근거가 충분한지 판정 1회 (기본 꺼짐)
 - `rag_pipeline/query.py:answer_question()` — 위 셋을 잇는 **세 번째 진입점**.
-  `bm25`·`reranker`·`rewriter`·`cache`·`evaluator` 를 인자로 받아 넘긴다
+  `bm25`·`reranker`·`rewriter`·`cache`·`evaluator` 를 인자로 받아 넘긴다.
+  **판정이 답변을 안 바꾼다** — verdict 는 `Answer.verdict` 에 실리기만 한다
 - `backend/app/api/routes/query.py` — `POST /api/v1/query` · `GET /api/v1/documents`
-- `rag_pipeline/agent/` — **2026-08-27 에 생겼다.** 도구(`tools/`) · 상태(`state.py`) ·
-  라우터(`router.py`) · 근거 조립(`context.py`). 스키마는 `schemas/agent.py` 다.
-  **아직 아무도 안 부른다** — 이 조각들을 잇는 재시도 루프가 없다
+- `rag_pipeline/agent/` — 도구(`tools/`) · 상태(`state.py`) · 라우터(`router.py`) ·
+  근거 조립(`context.py`)은 2026-08-27 에, **재시도 루프(`loop.py`)와 그 그래프(`graph.py`)는
+  2026-08-28 에** 생겼다. 스키마는 `schemas/agent.py` 다
+- `rag_pipeline/agent/loop.py:run_agent_loop()` — **네 번째 진입점**이고 `answer_question()`
+  과 **계약이 반대다**: 저쪽은 판정이 답변을 안 바꾸는데 여기서는 판정이 **흐름을 가른다**.
+  그래서 둘을 합치자는 지적을 하지 않는다 — 한 함수가 반대되는 두 계약을 가지면
+  *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞이는데 답변 품질을 재는 자[尺]가 없다.
+  **backend 는 안 부른다**(배선은 미결)
+- `rag_pipeline/agent/graph.py` — 같은 핸들러·같은 `decide_next_action()` 을 LangGraph 로
+  배선만 한다. **여기에 로직을 더하지 않는 것이 「동일 재현」의 근거다**
 
-**남은 것은 agent 레이어 전부가 아니라 「잇는 것」이다** — 도구·상태·라우터·조립은 2026-08-27 에 생겼고(위 목록), 없는 것은 **재시도 루프**(Checkpoint A)와 LangGraph 다.
+**agent 레이어의 뼈대와 그것을 잇는 루프가 다 생겼다.** 남은 것은 배선(화면·평가)과
+Phase 10(출처 인용)이고, **배선은 미완성이 아니라 미결이다**(`plan_log/검색-생성.md` 27회차).
 **질의 재작성은 2026-08-27 에 생겼다**(`rag_pipeline/retrieval/rewrite.py`) — 아래 계약 절 참고.
 **리랭커는 2026-08-25 에 생겼다**(`rag_pipeline/retrieval/reranker/`) — `RERANK_MODEL` 이
 비면 `get_reranker()` 가 `None` 을 돌려 꺼져 있고, **그 빈 기본값도 미완성이 아니라

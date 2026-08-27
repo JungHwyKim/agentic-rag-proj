@@ -29,6 +29,20 @@
 목록이다. 여기서 좁히면 도구를 더할 때마다 이 스키마를 고치게 되고, 그것이 곧
 `BaseTool` 을 만든 이유(호출부가 도구를 몰라도 되게 한다)를 무너뜨린다.
 
+## `searched_query` 와 `stop_reason` 이 왜 상태에 있나
+
+**둘 다 재시도 루프가 없으면 필요 없던 칸이다**(Checkpoint A 에서 늘었다).
+
+`searched_query` 는 *마지막으로 **검색에 쓴** 질의* 다. Router 가 *다시 찾아야 하나* 를
+`current_query` 와의 대조로 판정하는데, 그 값이 없으면 재작성으로 질의를 갈아끼운 뒤에도
+**로그가 이미 차 있어** 다시 검색할 근거를 못 만든다. `ToolCallLog.input_summary` 로 대신하면
+안 된다 — 그것은 120자로 잘린 요약이라 긴 질의에서 조용히 같아진다.
+
+`stop_reason` 은 *루프가 왜 멈췄나* 다. `retry_count` 로는 유추가 안 된다 — 충분 판정으로
+끝났는데 마침 3회차였을 수도 있고, *재작성이 승급할 질의를 못 냈다* 와 *재시도 소진* 이
+같은 수를 낸다. `Answer.verdict`·`Answer.rewrite` 를 필드로 실은 것과 같은 잣대이고,
+**필드여야 LangGraph 경로에서도 같은 자리에서 읽힌다**(그래프 노드는 상태를 주고받는다).
+
 ## `ToolCallLog` 가 요약 문자열인 이유
 
 청크 전문을 실으면 **한 질의의 상태가 코퍼스만큼 커진다.** 이 로그의 소비자는 *무슨 도구가
@@ -49,6 +63,7 @@ __all__ = [
     "AgentState",
     "Message",
     "NextAction",
+    "StopReason",
     "ToolCallLog",
     "ToolInput",
     "ToolOutput",
@@ -56,6 +71,11 @@ __all__ = [
 
 # 다음에 할 일. **Pre-Lock C 가 제외한 vision·llamaparse 는 없다** (모듈 docstring 참고)
 NextAction = Literal["retrieve", "web_search", "rewrite", "generate", "end"]
+
+# 루프가 멈춘 이유. **`answered` 에 *충분* 과 *실패* 와 *판정 꺼짐* 이 함께 들어온다** —
+# 셋을 가르는 것은 `evaluator_verdict` 이지 이 칸이 아니다. 여기가 답하는 것은 하나다:
+# 근거를 더 찾으려는 시도가 **왜 끝났나**
+StopReason = Literal["answered", "retries_exhausted", "rewrite_unavailable"]
 
 
 # 도구에 넣는 것. 도구가 늘어도 이 모양은 안 바뀐다
@@ -96,6 +116,9 @@ class AgentState(BaseModel):
     # 지금 검색에 쓰는 질의. 재작성이 없으면 original_query 와 같다
     current_query: str
 
+    # 마지막으로 **검색에 쓴** 질의. Router 가 이것과 current_query 를 대조해 재검색을 정한다
+    searched_query: str | None = None
+
     retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)
     # 판정을 안 돌렸으면 None. 3상태이므로 `failed` 와 `insufficient` 가 갈린다
     evaluator_verdict: EvaluatorVerdict | None = None
@@ -111,3 +134,6 @@ class AgentState(BaseModel):
 
     # Router 가 정한 다음 행동. 아직 안 정했으면 None
     next_action: NextAction | None = None
+
+    # 루프가 멈춘 이유. 아직 안 멈췄으면 None (모듈 docstring 참고)
+    stop_reason: StopReason | None = None

@@ -5,6 +5,10 @@
 1. **로그와 검색 결과가 함께 간다** — 갈리면 *로그엔 검색이 찍혔는데 청크는 비어 있는*
    상태가 생기고, Router 가 거기서 같은 검색을 무한히 되풀이한다
 2. **결과는 덧붙이지 않고 갈아끼운다** — 순위가 두 벌 섞이면 `ranking_score` 정렬이 뜻을 잃는다
+3. **검색 표시는 도구 결과와 갈라져 있다** — 축이 *찾았나* 가 아니라 *이 질의로 시도했나* 라,
+   실패한 회차에도 남아야 루프가 같은 검색을 안 되고른다. 그리고 클립 전 원본이어야 한다
+4. **재시도를 시작하면 낡은 판정이 사라진다** — 안 지우면 다음 바퀴가 앞 질의의 판정을
+   자기 것으로 읽는데 에러가 안 난다
 
 그리고 전부 **새 상태를 돌려주는지**(원본 불변) 본다.
 """
@@ -12,6 +16,7 @@
 from __future__ import annotations
 
 from rag_pipeline.agent.state import (
+    mark_searched,
     new_state,
     record_tool_call,
     start_retry,
@@ -93,6 +98,37 @@ def test_non_chunk_output_does_not_touch_chunks():
 
     assert state.retrieved_chunks == []
     assert state.tool_call_log[0].output_summary == "웹 문서 3건"
+
+
+# **도구 호출 자체는 검색 표시를 안 남긴다.** 남기는 것은 검색 단계다 (모듈 docstring 참고)
+def test_tool_call_alone_does_not_mark_searched():
+    state = _call(new_state("질문"), ToolOutput(success=True, data=[_chunk("c1")]))
+
+    assert state.searched_query is None
+
+
+# 표시는 **클립 전 원본**으로 남는다. 요약은 잘려 있어 판정에 못 쓴다
+def test_mark_searched_keeps_the_unclipped_query():
+    long_query = "가" * 500
+    state = _call(new_state("질문"), ToolOutput(success=True, data=[_chunk("c1")]), query=long_query)
+
+    marked = mark_searched(state, long_query)
+
+    assert marked.searched_query == long_query
+    assert marked.tool_call_log[0].input_summary != long_query
+
+
+# 재시도를 시작하면 낡은 판정이 사라진다 (모듈 docstring 참고)
+def test_start_retry_clears_stale_verdict():
+    state = with_verdict(
+        new_state("질문"), EvaluatorVerdict(verdict="insufficient", reasoning="근거 부족")
+    )
+
+    retried = start_retry(state, query="새 질의")
+
+    assert retried.evaluator_verdict is None
+    assert retried.retry_count == 1
+    assert state.evaluator_verdict is not None
 
 
 # 원본은 안 바뀐다 — 어느 시점의 상태였는지를 되짚을 수 있어야 한다

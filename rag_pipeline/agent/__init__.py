@@ -15,11 +15,18 @@
 `retrieval.py`·`answer.py`). 여기에 또 두면 **여섯 번째 자리**가 생기고, 그때부터
 "이 타입이 어디 있더라"가 매번 두 곳을 뒤지는 일이 된다.
 
-## 이 폴더가 안 하는 것
+## 판단과 실행은 여전히 갈려 있다
 
-**루프를 돌리지 않는다.** Router 는 *다음에 무엇을 할까* 를 답할 뿐 도구를 실행하지 않고,
-재시도 루프(Checkpoint A)는 아직 없다. 판단과 실행을 한 함수에 합치면 *라우팅이 틀렸나
-도구가 틀렸나* 를 못 가른다 — Evaluator 가 판정과 생성을 안 섞은 것과 같은 이유다.
+**Router 는 도구를 실행하지 않는다.** 루프(`loop.py`)가 생긴 뒤에도 그대로다 — 합치면
+*라우팅이 틀렸나 도구가 틀렸나* 를 못 가른다(Evaluator 가 판정과 생성을 안 섞은 것과 같은
+이유다). `decide_next_action()` 은 부수 효과가 없고, 상태를 바꾸는 것은 전부 핸들러다.
+
+## 여기서 `graph.py` 를 import 하지 않는다
+
+**일부러다.** `langgraph` 는 선택 갈래라(`requirements.txt`) 안 깔린 머신이 있을 수 있는데,
+여기서 끌어오면 `from rag_pipeline.agent import ...` 가 **통째로** ImportError 로 죽는다.
+기본 경로인 `run_agent_loop()` 는 langgraph 를 아예 안 건드리는 것이 그 결정의 실제 내용이라,
+그래프가 필요한 쪽만 `rag_pipeline.agent.graph` 를 직접 import 한다.
 
 ## 이 단계의 규약이 어디 있나
 
@@ -29,35 +36,45 @@
 - 상태 갱신 규칙(로그와 결과가 함께 간다) — `state.py`
 - 라우팅 규칙의 순서와 `failed` 처리 — `router.py`
 - 근거 모양의 출처가 하나인 이유 — `context.py`
+- 재시도가 무엇을 승급하나 / 안 멈추는 것을 무엇이 막나 — `loop.py`
+- 그래프가 while 과 같은 것을 도는지 어떻게 아나 — `graph.py`
 """
 
 from __future__ import annotations
 
 from rag_pipeline.agent.context import build_context, select_within_budget
+from rag_pipeline.agent.loop import LoopDeps, run_agent_loop, step_budget
 from rag_pipeline.agent.router import decide_next_action
 from rag_pipeline.agent.state import (
+    mark_searched,
     new_state,
     record_tool_call,
     start_retry,
     with_answer,
     with_context,
     with_next_action,
+    with_stop_reason,
     with_verdict,
 )
 from rag_pipeline.agent.tools import BaseTool, RetrieverTool, WebSearchTool
 
 __all__ = [
     "BaseTool",
+    "LoopDeps",
     "RetrieverTool",
     "WebSearchTool",
     "build_context",
     "decide_next_action",
+    "mark_searched",
     "new_state",
     "record_tool_call",
+    "run_agent_loop",
     "select_within_budget",
     "start_retry",
+    "step_budget",
     "with_answer",
     "with_context",
     "with_next_action",
+    "with_stop_reason",
     "with_verdict",
 ]

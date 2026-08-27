@@ -8,8 +8,9 @@ DoD 는 *다양한 state 시나리오에 합리적 next_action* 이다. 그중 �
 1. **0건에서 `retrieve` 를 되고르지 않는다** — 검색은 결정적이라 같은 질의면 같은 결과다.
    되고르면 상태를 안 바꾼 채 `max_retries` 까지 돈다
 2. **`failed` 를 재시도로 안 삼킨다** — 죽은 판정자 때문에 질의당 LLM 호출이 늘어난다
-3. **`retrieve` 판정은 청크가 아니라 도구 로그로 한다** — 청크로 하면 *검색했는데 0건* 과
-   *아직 안 했다* 가 안 갈린다
+3. **`retrieve` 판정의 축은 「이 질의로 찾아봤나」다** — 청크로 하면 *검색했는데 0건* 과
+   *아직 안 했다* 가 안 갈리고, 도구 로그로 하면 **재작성이 질의를 갈아끼운 뒤의 재검색**을
+   못 말한다(로그는 이미 차 있다). Checkpoint A 가 그 셋째를 드러냈다
 """
 
 from __future__ import annotations
@@ -28,13 +29,18 @@ def _chunk() -> RetrievedChunk:
 
 
 def _searched(**updates) -> AgentState:
-    """검색을 한 번 돌린 뒤의 상태. 기본은 근거 1건·판정 없음."""
+    """검색을 한 번 돌린 뒤의 상태. 기본은 근거 1건·판정 없음.
+
+    **`searched_query` 를 함께 채우는 것이 이 헬퍼의 요점이다** — 실제로 `record_tool_call()`
+    이 그렇게 하고, 안 채우면 *검색을 돌렸는데 안 돌린 상태* 라는 못 쓰는 조합이 된다.
+    """
     base = new_state("질문").model_copy(
         update={
             "tool_call_log": [
                 ToolCallLog(tool_name="retriever", input_summary="질문", output_summary="청크 1개")
             ],
             "retrieved_chunks": [_chunk()],
+            "searched_query": "질문",
         }
     )
     return base.model_copy(update=updates) if updates else base
@@ -99,6 +105,37 @@ def test_exhausted_retries_with_no_chunks_generate():
     state = _searched(retrieved_chunks=[], retry_count=3, max_retries=3)
 
     assert decide_next_action(state) == "generate"
+
+
+# **재작성이 질의를 갈아끼웠으면 다시 찾는다.** 로그가 차 있어도 그렇다 —
+# 이 규칙이 없으면 루프가 `rewrite` 만 되풀이하며 검색을 영영 안 한다
+def test_promoted_query_retrieves_again():
+    state = _searched(
+        evaluator_verdict=_verdict("insufficient"), current_query="새 질의", retry_count=1
+    )
+
+    assert decide_next_action(state) == "retrieve"
+
+
+# 그리고 그 재검색 뒤에는 다시 안 되고른다 — 같은 질의면 같은 결과다
+def test_after_retrying_the_same_query_is_not_retrieved_again():
+    state = _searched(
+        evaluator_verdict=_verdict("insufficient"),
+        current_query="새 질의",
+        searched_query="새 질의",
+        retry_count=1,
+    )
+
+    assert decide_next_action(state) == "rewrite"
+
+
+# **판정을 요약 문자열로 하지 않는다** — 앞 120자가 같은 긴 질의 둘이 조용히 같아진다.
+# `record_tool_call()` 이 클립 전 원본을 따로 싣는 이유다
+def test_long_queries_that_share_a_prefix_are_not_confused():
+    shared = "가" * 300
+    state = _searched(current_query=shared + "다르다", searched_query=shared + "같지않다")
+
+    assert decide_next_action(state) == "retrieve"
 
 
 # 판단만 한다 — 상태를 안 건드린다
