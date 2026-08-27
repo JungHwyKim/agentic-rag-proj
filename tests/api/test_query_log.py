@@ -21,7 +21,7 @@ from backend.app.main import create_app
 from rag_pipeline.answer_cache import cache_point_id_for
 from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig
 from rag_pipeline.exceptions import GenerationError
-from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
+from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict, RewriteTrace
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -66,10 +66,11 @@ def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-# 질의 하나에 한 줄. **필드 일곱이 곧 계약이다** — 넷은 분자·분모를 만들고(`key`·`cached`),
+# 질의 하나에 한 줄. **필드 아홉이 곧 계약이다** — 넷은 분자·분모를 만들고(`key`·`cached`),
 # 둘은 켰을 때 얼마를 아끼는지를 만들고(`elapsed_ms`·`sources`), `verdict` 는 실사용 판정
-# 분포를 만든다. **`verdict` 키는 판정이 꺼져 있어도 있다** — 없을 때 키를 빼면
-# "판정이 꺼져 있었다"와 "옛 형식이라 칸이 없다"가 집계에서 안 갈린다
+# 분포를, `rewritten`·`rewrite_mode` 는 **무엇으로 검색했나**를 만든다.
+# **셋 다 그 갈래가 꺼져 있어도 키가 있다** — 없을 때 키를 빼면
+# "꺼져 있었다"와 "옛 형식이라 칸이 없다"가 집계에서 안 갈린다
 def test_one_query_writes_one_line(mocker, query_log_path: Path):
     mocker.patch(
         "backend.app.api.routes.query.answer_question",
@@ -79,9 +80,21 @@ def test_one_query_writes_one_line(mocker, query_log_path: Path):
     assert _client().post("/api/v1/query", data={"query": "위약금은?"}).status_code == 200
 
     (row,) = _lines(query_log_path)
-    assert set(row) == {"at", "query", "key", "cached", "elapsed_ms", "sources", "verdict"}
-    # 판정이 꺼진 상태다. 칸은 있고 값이 None 이다
+    assert set(row) == {
+        "at",
+        "query",
+        "key",
+        "cached",
+        "elapsed_ms",
+        "sources",
+        "verdict",
+        "rewritten",
+        "rewrite_mode",
+    }
+    # 판정도 재작성도 꺼진 상태다. 칸은 있고 값이 None 이다
     assert row["verdict"] is None
+    assert row["rewritten"] is None
+    assert row["rewrite_mode"] is None
     assert row["query"] == "위약금은?"
     assert row["cached"] is False
     assert row["sources"] == 1
@@ -179,6 +192,46 @@ def test_reasoning_is_not_recorded(mocker, query_log_path: Path):
     (row,) = _lines(query_log_path)
     assert row["verdict"] == "failed"
     assert "판정을 얻지 못했습니다" not in json.dumps(row, ensure_ascii=False)
+
+
+# **무엇으로 검색했나가 여기에만 남는다.** `.cache/rewrite` 는 내용 해시가 키라 *어떤 질의가
+# 무엇으로 바뀌었나* 를 되짚을 수 없고, 원 질의를 아예 안 담는다 — 나중에 query drift 를
+# 읽을 자리가 이 줄 하나뿐이다
+def test_rewrite_is_recorded_with_the_mode(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="지원 방식 알려줘",
+            text="답",
+            sources=[_chunk()],
+            rewrite=RewriteTrace(query="2026 중등 기초학력 보장 사업의 지원 방식", mode="fuse"),
+        ),
+    )
+
+    assert _client().post("/api/v1/query", data={"query": "지원 방식 알려줘"}).status_code == 200
+
+    (row,) = _lines(query_log_path)
+    assert row["rewritten"] == "2026 중등 기초학력 보장 사업의 지원 방식"
+    # **mode 가 없으면 같은 줄이 두 뜻을 갖는다** — fuse 는 원 질의도 함께 돌았고 replace 는 아니다
+    assert row["rewrite_mode"] == "fuse"
+    # 원 질의는 `query` 칸에 그대로 남는다. 둘을 나란히 놓을 수 있어야 drift 가 읽힌다
+    assert row["query"] == "지원 방식 알려줘"
+
+
+# 재작성이 폴백으로 내려갔으면(호출 실패·응답 손상) 원 질의로만 검색한 것이라 둘 다 None 이다.
+# **`false` 가 아니라 `null` 인 것이 요점이다** — 재작성이 꺼진 것과 실패한 것을 이 줄로는
+# 안 가른다. 가를 날에는 `rewriter.warnings` 가 그 자리에 이미 있다
+def test_fallback_records_null(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[_chunk()]),
+    )
+
+    assert _client().post("/api/v1/query", data={"query": "q"}).status_code == 200
+
+    (row,) = _lines(query_log_path)
+    assert row["rewritten"] is None
+    assert row["rewrite_mode"] is None
 
 
 # **분모의 뜻은 "답이 나온 질의" 하나다.** 예외로 끝난 질의를 섞으면 같은 분모가 두 뜻을 갖고,

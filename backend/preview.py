@@ -32,7 +32,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, RewriteTrace
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -90,6 +90,16 @@ def sample_answer() -> Answer:
             )
             for index, (page, page_end, score) in enumerate(_SAMPLE_HITS)
         ],
+        # 재작성 줄을 그리게 한다. **일부러 길다** — 이 줄에서 사람이 볼 것이 말줄임이고,
+        # 짧은 값을 넣으면 잘림이 안 나와 미리보기가 그 자리를 확인해 주지 못한다.
+        # `fuse` 인 것도 의미가 있다: 꼬리말이 모드마다 갈리는데 저장소 기본값이 이쪽이다
+        rewrite=RewriteTrace(
+            query=(
+                "행정정보 데이터세트 관리 시 기록해야 하는 업무정보의 종류와 "
+                "첨부파일 뷰어·저장방식·경로 작성 기준"
+            ),
+            mode="fuse",
+        ),
     )
 
 

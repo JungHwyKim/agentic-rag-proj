@@ -83,16 +83,26 @@ def test_history_is_placeholder(client: TestClient):
     assert "저장은 아직 준비 중입니다" in body
 
 
-# 재검색 표시는 화면에 있되 아무것도 판정하지 않는다 — Phase 4~5 가 붙을 자리다.
-# **유사질문 배지는 여기서 빠졌다** — 답변 캐시가 실제로 붙어 placeholder 가 아니게 됐다
-def test_rewrite_row_still_placeholder_in_answer_fragment():
+# 재검색 표시가 **실물이 됐다**(2026-08-27). 유사질문 배지·판정 배지가 걸어간 길과 같다 —
+# 붙기 전에는 모양만 있었고, 붙은 뒤에는 값이 있을 때만 그린다.
+#
+# **여기서 재는 것은 «가짜가 안 남았는가» 다.** 모형 문구가 실물 옆에 남으면 재작성에 관한
+# 줄이 둘이 되고 그중 하나가 매 답변에 거짓을 그린다 — 그리고 흐린 줄이라 아무도 안 읽는다
+def test_rewrite_row_is_real_not_a_placeholder():
     from backend.app.core.templates import TEMPLATES_DIR
 
     fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
 
-    assert "재검색 중" in fragment
-    # 흐리게 + 클릭 불가로 표시해야 진짜 기능으로 오인되지 않는다
-    assert "is-placeholder" in fragment
+    # 모형이 그리던 가짜 진행 표시. 남아 있으면 안 된다
+    assert "재검색 중 (1 / 3)" not in fragment
+    assert "준비 중인 기능입니다" not in fragment
+    # 값이 있을 때만 그린다 — 조건 없이 그리면 재작성이 꺼져 있어도 줄이 남는다
+    assert "{% if answer.rewrite %}" in fragment
+    row = fragment.split("{% if answer.rewrite %}", 1)[1].split("{% endif %}", 1)[0]
+    assert "is-placeholder" not in row
+    # **mode 로 문구가 갈려야 한다** — fuse 는 원 질의도 함께 돌았다
+    assert "도 함께 검색했습니다" in row
+    assert "로 바꿔 검색했습니다" in row
 
 
 # 캐시 배지는 **cached_from 이 있을 때만** 그린다. 조건 없이 그리면 캐시가 꺼져 있어도

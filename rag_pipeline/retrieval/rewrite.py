@@ -49,6 +49,20 @@
 (두 번째 프로필이 사실상 무료)가 통째로 사라진다. `rerank_cache_salt_for()` 가 `device` 를
 **싣는** 것과 방향이 반대인데 이유가 같다 — **출력을 가르는 것만 salt 에 넣는다.**
 
+## 다시 쓴 질의를 부르는 쪽이 어떻게 아나
+
+`retrieve()` 의 반환은 **청크 목록**이다. 거기에 문자열을 끼우려면 반환 타입을 넓혀야 하고,
+그러면 `evaluation/run_eval.py` 를 포함한 모든 호출부가 함께 바뀐다 — 재작성 하나를 화면에
+보이자고 검색의 공개 계약을 넓히는 것은 값이 안 맞는다.
+
+그래서 **인스턴스가 답한다**: `last_rewritten` 이 마지막 `rewrite()` 의 결과다.
+`warnings`·`usage` 가 이미 그 자리이고(리랭커도 같다), 라우트가 재작성기를 **질의마다 새로
+만들기** 때문에 요청끼리 섞이지 않는다.
+
+**호출마다 맨 앞에서 `None` 으로 되돌린다.** 안 되돌리면 폴백으로 내려간 질의가 **앞 질의의
+재작성을 자기 것으로 보고**하는데, 그것은 에러가 아니라 화면과 로그에 조용히 실린다 —
+재작성기를 여러 질의에 걸쳐 재사용하는 `run_eval` 이 정확히 그 모양이다.
+
 ## 모킹 이음새
 
 `_make_client()` 는 **모듈 레벨 함수**여야 한다. 테스트가
@@ -163,6 +177,7 @@ class QueryRewriter:
         self._config = config
         self._usage = RewriteUsage()
         self._warnings: list[str] = []
+        self._last_rewritten: str | None = None
         self._cache = ResultCache(config.rewrite_cache_dir, enabled=config.rewrite_cache_enabled)
 
     # 폴백이 일어났을 때 쌓인다. 부르는 쪽이 읽는다 — `Reranker.warnings` 와 같은 자리다
@@ -174,6 +189,13 @@ class QueryRewriter:
     @property
     def usage(self) -> RewriteUsage:
         return self._usage
+
+    # 마지막 `rewrite()` 가 실제로 검색에 쓴 질의. **폴백이면 None** 이고, 그 None 이 곧
+    # "원 질의로만 검색했다"는 뜻이다 (모듈 docstring 참고). 캐시 히트도 값이 있다 —
+    # 재작성이 걸린 것은 같고 갈리는 것은 과금뿐이다
+    @property
+    def last_rewritten(self) -> str | None:
+        return self._last_rewritten
 
     # 어떻게 합치나. `retrieve()` 가 이것을 보고 갈래를 짠다 — **설정을 호출부가 다시 읽지
     # 않는 것이 요점이다.** 읽게 두면 재작성기와 합류가 서로 다른 모드로 도는 상태가
@@ -194,6 +216,9 @@ class QueryRewriter:
 
     # 다시 쓴 질의. **예외를 안 던진다** — 실패는 1차 pool 을 그대로 쓰는 폴백이다
     def rewrite(self, query: str, context: list[RetrievedChunk]) -> str | None:
+        # **맨 앞에서 지운다.** 아래 어느 갈래로 빠져나가도 앞 질의의 값이 안 남는다
+        # (모듈 docstring 참고)
+        self._last_rewritten = None
         text = query.strip()
         # 보여줄 것이 없으면 PRF 가 성립하지 않는다. 호출을 아끼는 것이 아니라 **뜻이 없다**
         if not text or not context:
@@ -208,7 +233,8 @@ class QueryRewriter:
         rewritten = cached.get("query") if isinstance(cached, dict) else None
         if isinstance(rewritten, str) and rewritten.strip():
             self._usage.cache_hits += 1
-            return rewritten.strip()
+            self._last_rewritten = rewritten.strip()
+            return self._last_rewritten
 
         rewritten = self._call_api(text, pool)
         if rewritten is None:
@@ -217,6 +243,7 @@ class QueryRewriter:
 
         # **못 쓸 응답은 캐시에 안 넣는다** (표-경로.md 13회차가 고친 그 실수다)
         self._cache.set(key, {"query": rewritten})
+        self._last_rewritten = rewritten
         return rewritten
 
     # 실제로 보낸다. 실패·손상은 전부 None 으로 바꿔 폴백에 맡긴다

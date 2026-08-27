@@ -159,3 +159,31 @@
   이지 키가 없는 것이 아니다. 빼면 *"판정이 꺼져 있었다"* 와 *"옛 형식이라 칸이 없다"* 가
   집계에서 안 갈린다. **`reasoning` 을 추가하자는 제안도 지적 대상**이다 — 상한도 자동
   정리도 없는 파일이고, 사유를 읽는 도구는 `evaluation/verdicts.py --wrong` 이 이미 있다
+
+## 7. 재작성(rewrite) 흔적 — 위 6절과 같은 규칙, 한 곳만 반대다
+
+`rag_pipeline/schemas/answer.py` · `rag_pipeline/query.py` · `core/query_log.py` ·
+`templates/_answer.html` 에 적용한다. 근거는 `task_log/2026-08-27-재작성-흔적.md` 다.
+
+- **`Answer.rewrite` 를 `rewritten: str` 로 "펴지" 않는다.** `query` 와 `mode` 가 한 덩어리인
+  이유는 **화면 문구가 mode 에서 갈리기** 때문이다 — `fuse` 는 원 질의 갈래도 함께 돌았으므로
+  *"…로 바꿔 검색했습니다"* 가 거짓이고 `replace` 는 *"…도 함께"* 가 거짓이다. 나란한 두
+  필드로 쪼개면 *질의는 있는데 mode 가 없는* 조합을 템플릿이 매번 방어해야 한다.
+  `cached_from` 이 셋을 묶은 것과 같은 잣대다
+- **`retrieve()` 가 다시 쓴 질의를 돌려주게 넓히지 않는다.** 반환은 공개 계약이고
+  `evaluation/run_eval.py` 가 그 모양에 맞춰져 있다. 읽는 자리는 `rewriter.last_rewritten`
+  이고, `warnings`·`usage` 를 부르는 쪽이 읽는 것과 같은 관행이다
+- **`rewrite()` 맨 앞의 `self._last_rewritten = None` 을 지우지 않는다.** 지우면 폴백으로
+  내려간 질의가 **앞 질의의 재작성을 자기 것으로** 화면과 로그에 싣는다. 라우트는 질의마다
+  재작성기를 새로 만들어 안전하지만 `run_eval` 은 **재사용**한다.
+  `tests/retrieval/test_rewrite.py::test_fallback_clears_the_previous_rewrite` 가 막는다
+- **캐시 히트에서 흔적을 `None` 으로 떨어뜨리지 않는다.** 재작성이 걸린 것은 같고 갈리는
+  것은 과금뿐이다 — `None` 을 주면 캐시가 도는 순간 *켜 놓고도 안 보이는* 상태가 된다
+- **`query_log` 의 `rewritten` 은 전문이고, 그것이 6절의 `reasoning` 규칙과 어긋나지
+  않는다.** 축이 둘 다르다 — 판정 사유는 **읽는 도구가 이미 있고**(`verdicts.py --wrong`)
+  재작성은 **여기가 유일한 기록**이다(`.cache/rewrite` 는 내용 해시가 키라 원 질의를 아예
+  안 담아 *무엇이 무엇으로 바뀌었나* 를 못 되짚는다). 길이도 산문 대 한 문장이다
+  (`rewrite_max_tokens` 256). **이 줄을 «`reasoning` 과 같은 위반» 으로 지적하지 않는다**
+- **`.is-placeholder` CSS 규칙은 사용처가 0 이어도 지우지 않는다.** 배지 테스트 셋이
+  *이 클래스가 안 붙었음* 을 단언해 「진짜 값이 흐려지는」 회귀를 막는데, 규칙을 지우면
+  그 셋이 **영원히 참**이 되어 조용히 죽는다

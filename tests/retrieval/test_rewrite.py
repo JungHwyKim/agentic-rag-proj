@@ -262,6 +262,67 @@ def test_empty_context_never_calls(tmp_path, mocker) -> None:
     assert client.calls == []
 
 
+# --- 다시 쓴 질의를 부르는 쪽이 어떻게 아나 --------------------------------------
+
+
+# `retrieve()` 의 반환은 청크 목록이라 문자열이 낄 자리가 없다. 그래서 **인스턴스가 답한다** —
+# `warnings`·`usage` 와 같은 자리이고, `answer_question()` 이 여기서 읽어 `Answer.rewrite` 에
+# 싣는다. 이 속성이 없으면 화면과 로그가 재작성을 영원히 못 본다
+def test_last_rewritten_reports_what_was_searched(tmp_path, mocker) -> None:
+    mocker.patch.object(
+        rewrite_mod, "_make_client", return_value=FakeClient('{"query": "다시 쓴 질문"}')
+    )
+
+    rewriter = get_rewriter(_config(tmp_path))
+    assert rewriter.last_rewritten is None
+    rewriter.rewrite(_ORIGINAL, _context())
+    assert rewriter.last_rewritten == "다시 쓴 질문"
+
+
+# **폴백은 앞 질의의 재작성을 물려받으면 안 된다.** 되돌리지 않으면 원 질의로만 검색한 질의가
+# *앞 질의의* 재작성을 자기 것으로 보고하는데, 에러가 아니라 화면과 로그에 조용히 실린다 —
+# 재작성기를 여러 질의에 걸쳐 재사용하는 `run_eval` 이 정확히 그 모양이다
+def test_fallback_clears_the_previous_rewrite(tmp_path, mocker) -> None:
+    mocker.patch.object(
+        rewrite_mod,
+        "_make_client",
+        side_effect=[FakeClient('{"query": "다시 쓴 질문"}'), FakeClient(error=RuntimeError("429"))],
+    )
+
+    rewriter = get_rewriter(_config(tmp_path))
+    assert rewriter.rewrite(_ORIGINAL, _context()) == "다시 쓴 질문"
+    assert rewriter.rewrite("다른 질문", _context()) is None
+    assert rewriter.last_rewritten is None
+
+
+# 보여줄 것이 없어 아예 안 부른 갈래도 같다. **호출 앞에서 되돌리는 것이 그래서 필요하다**
+def test_empty_context_also_clears(tmp_path, mocker) -> None:
+    mocker.patch.object(
+        rewrite_mod, "_make_client", return_value=FakeClient('{"query": "다시 쓴 질문"}')
+    )
+
+    rewriter = get_rewriter(_config(tmp_path))
+    rewriter.rewrite(_ORIGINAL, _context())
+    assert rewriter.rewrite(_ORIGINAL, []) is None
+    assert rewriter.last_rewritten is None
+
+
+# **캐시 히트도 값이 있다.** 재작성이 걸린 것은 같고 갈리는 것은 과금뿐이라, 여기서 None 을
+# 주면 캐시가 도는 순간 화면의 표시가 사라진다 — 켜 놓고도 안 보이는 상태가 된다
+def test_cache_hit_also_reports_the_query(tmp_path, mocker) -> None:
+    mocker.patch.object(
+        rewrite_mod, "_make_client", return_value=FakeClient('{"query": "다시 쓴 질문"}')
+    )
+
+    config = _config(tmp_path, rewrite_cache_enabled=True)
+    get_rewriter(config).rewrite(_ORIGINAL, _context())
+
+    second = get_rewriter(config)
+    second.rewrite(_ORIGINAL, _context())
+    assert second.usage.cache_hits == 1
+    assert second.last_rewritten == "다시 쓴 질문"
+
+
 # --- 캐시 ---------------------------------------------------------------------
 
 

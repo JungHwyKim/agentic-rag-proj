@@ -172,7 +172,10 @@ body {
 .bubble.assistant { align-self: stretch; background: #fff; border: 1px solid var(--line); }
 .answer-text { white-space: pre-wrap; }
 
-/* 정적 표시 둘. 준비 중이라는 것이 보이도록 흐리고 클릭을 막는다 */
+/* 준비 중이라는 것이 보이도록 흐리고 클릭을 막는다. **답변 조각에는 이제 안 쓴다** —
+   재검색 표시가 실물이 되면서 마지막 사용처가 없어졌다. 규칙을 남겨 두는 이유는 이것이
+   «진짜 값인가 모형인가» 의 표시이고, 배지 테스트 셋이 이 클래스가 **안 붙었음**을 단언해
+   진짜 값이 흐려지는 회귀를 막고 있어서다 */
 .is-placeholder { opacity: .5; pointer-events: none; }
 .badge-row {
   align-self: stretch;
@@ -204,17 +207,26 @@ body {
   background: var(--danger-bg);
   color: var(--danger);
 }
+/* 다시 쓴 질의. **답변보다 먼저 읽히면 안 되므로** 배지가 아니라 흐린 한 줄이다 —
+   라벤더(캐시)·sunken(불충분)·danger(실패) 는 이미 임자가 있고, 여기는 «잘못됐다» 가
+   아니라 «이렇게 검색했다» 라 색을 새로 만들 이유가 없다.
+
+   **자르는 것은 질의뿐이다**: 꼬리말("…도 함께 검색했습니다")이 잘리면 fuse 와 replace 가
+   화면에서 안 갈려 이 줄이 뜻을 잃는다. 그래서 꼬리말은 flex:none 이고 질의만 줄어든다 */
 .rewrite-row {
   align-self: flex-start;
+  max-width: 100%;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: baseline;
+  gap: 5px;
   font-size: 11.5px;
   color: var(--muted);
   padding-left: 2px;
 }
-.dots { display: inline-flex; gap: 3px; }
-.dots i { width: 5px; height: 5px; border-radius: 50%; background: #b9bec6; }
+.rewrite-mark { flex: none; }
+/* min-width:0 이 없으면 flex 자식이 안 줄어들어 말줄임이 아예 안 걸린다 */
+.rewrite-query { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rewrite-tail { flex: none; white-space: nowrap; }
 
 /* ============ 소스 태그 ============
    실데이터 대응이 여기 몰린다 — 태그가 5개이고 이름이 길다. */

@@ -49,6 +49,23 @@
 `reasoning` 은 **안 싣는다.** 상한도 자동 정리도 없는 파일에 모델 문장이 질의마다 쌓이고,
 사유를 읽는 도구는 `evaluation/verdicts.py --wrong` 이 이미 있다.
 
+## 재작성(rewrite)은 왜 **전문**을 싣나 — `reasoning` 은 뺐는데
+
+재려는 것이 다르다. `verdict.reasoning` 은 **판정을 읽는 도구가 이미 있어서**
+(`evaluation/verdicts.py --wrong`) 여기 쌓을 이유가 없었다. 재작성은 그런 도구가 없고,
+무엇보다 **여기가 유일한 기록이다** — `.cache/rewrite` 는 내용 해시가 키라 *어떤 질의가
+무엇으로 바뀌었나* 를 되짚을 수 없고, 재작성 캐시는 원 질의를 아예 안 담는다.
+
+길이 걱정도 축이 다르다. `reasoning` 은 모델이 마음대로 쓰는 산문이고, 재작성 질의는
+**질문 한 문장**에 `rewrite_max_tokens`(256) 상한이 걸려 있다 — 바로 위 `query` 칸이 이미
+같은 급의 문자열을 싣고 있다.
+
+**`rewrite_mode` 를 함께 싣는다.** 없으면 `fuse` 였는지 `replace` 였는지를 로그만 봐서 못
+가르는데, 그 둘은 **원 질의가 함께 돌았는지**가 달라 같은 줄이 두 뜻을 갖는다. `.env` 한 줄로
+바뀌는 값이라 실행 사이에 조용히 갈린다.
+
+**두 칸 다 키를 늘 쓴다** — `verdict` 와 같은 규칙이고 이유도 같다.
+
 **상한도 자동 정리도 없다.** `Settings.originals_dir` 이 같은 판단을 이미 했다 —
 지금 값을 정하면 관측 없는 숫자가 된다. 대신 경로와 on/off 를 밖으로 연다.
 """
@@ -86,6 +103,10 @@ def append_query_log(path: Path, query: str, answer: Answer, *, elapsed_ms: int)
         # 판정을 돌렸으면 세 상태 중 하나, 안 돌렸으면 None (꺼짐 또는 캐시 히트).
         # **키를 늘 쓴다** (모듈 docstring 참고)
         "verdict": answer.verdict.verdict if answer.verdict is not None else None,
+        # 무엇으로 검색했나. 재작성이 안 걸렸으면(꺼짐·폴백·캐시 히트) 둘 다 None 이다.
+        # **전문을 싣는 이유와 mode 를 함께 싣는 이유는 모듈 docstring 에 있다**
+        "rewritten": answer.rewrite.query if answer.rewrite is not None else None,
+        "rewrite_mode": answer.rewrite.mode if answer.rewrite is not None else None,
     }
     line = json.dumps(record, ensure_ascii=False) + "\n"
 

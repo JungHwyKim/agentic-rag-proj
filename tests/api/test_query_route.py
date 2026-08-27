@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import create_app
 from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig, RewriteConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
-from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
+from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict, RewriteTrace
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -496,6 +496,73 @@ def test_verdict_badge_is_not_a_placeholder(mocker):
     body = _client().post("/api/v1/query", data={"query": "질문"}).text
 
     assert "is-placeholder" not in _verdict_badge(body)
+
+
+# --- 재작성 표시 ----------------------------------------------------------------
+
+
+# 재작성 줄 하나를 꺼낸다. `badge-row` 와 클래스가 달라 갈린다
+def _rewrite_row(body: str) -> str:
+    if "rewrite-row" not in body:
+        return ""
+    return body.split("rewrite-row", 1)[1].split("</div>", 1)[0]
+
+
+# **다시 쓴 질의를 사용자가 볼 수 있어야 한다.** 재작성이 엉뚱하게 좁혔을 때 알아볼 수 있는
+# 자리가 화면에 이것 하나다 — 캐시 배지가 원 질문을 보여주는 것과 같은 잣대다
+def test_rewrite_row_shows_the_rewritten_query(mocker):
+    rewritten = "2026 중등 기초학력 보장 사업의 지원 방식 및 운영 방법 안내"
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="지원 방식 알려줘",
+            text="답변",
+            sources=[_chunk()],
+            rewrite=RewriteTrace(query=rewritten, mode="fuse"),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "지원 방식 알려줘"}).text
+
+    assert rewritten in body
+    # **fuse 는 원 질의 갈래가 살아 있다** — "바꿔 검색했다"고 쓰면 거짓이다
+    assert "도 함께 검색했습니다" in _rewrite_row(body)
+    # 원 질의는 말풍선에 그대로 남아야 둘을 나란히 볼 수 있다
+    assert "지원 방식 알려줘" in body
+    # 긴 문장은 CSS 가 자르므로 전문은 title 에 담는다 (캐시 배지·소스 태그와 같은 규칙)
+    assert f'title="{rewritten}"' in body
+
+
+# **replace 는 문구가 달라야 한다.** 원 질의 갈래를 갈아끼운 것이라 "도 함께" 가 거짓이다 —
+# 같은 문구를 두 모드에 쓰면 화면이 둘을 못 가르고, 그것이 이 축의 뜻을 지운다
+def test_replace_mode_says_it_replaced(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="q",
+            text="답변",
+            sources=[_chunk()],
+            rewrite=RewriteTrace(query="다시 쓴 질의", mode="replace"),
+        ),
+    )
+
+    row = _rewrite_row(_client().post("/api/v1/query", data={"query": "q"}).text)
+
+    assert "로 바꿔 검색했습니다" in row
+    assert "도 함께 검색했습니다" not in row
+
+
+# 재작성이 안 걸렸으면 줄 자체가 없다. 빈 줄이 남으면 사용자는 재작성이 켜져 있다고 읽는다 —
+# `cached_from`·`verdict` 배지와 같은 규칙이다
+def test_no_rewrite_draws_no_row(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="질문", text="답변", sources=[_chunk()]),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "질문"}).text
+
+    assert "rewrite-row" not in body
 
 
 # **질의마다 새로 만든다.** embedder·BM25·리랭커와 갈리는 지점이고 이유는 가중치다 —

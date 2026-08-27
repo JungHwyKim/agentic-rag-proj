@@ -37,6 +37,19 @@
 `Answer.verdict` 자체가 `None` 인 것은 **판정을 안 돌렸다**는 뜻이다 — 꺼져 있거나(모델 이름이
 없다) 답이 캐시에서 왔거나. `cached_from` 이 캐시 여부를 혼자 판정하는 것과 같은 모양이다.
 
+## 왜 `rewrite` 가 문자열이 아니라 덩어리인가
+
+**화면 문구가 `mode` 에서 갈리기 때문이다.** `fuse` 는 원 질의 갈래를 남긴 채 재작성 갈래를
+더한 것이라 *"…로 바꿔 검색했습니다"* 가 **거짓**이고, `replace` 는 갈아끼운 것이라
+*"…도 함께"* 가 거짓이다. 둘을 나란한 필드로 쪼개면 *질의는 있는데 mode 가 없는* 조합이
+생기고, 그 조합에서 템플릿이 어느 쪽 문구를 고를지 정할 수 없다 — `cached_from` 이 셋을
+한 덩어리로 묶은 것과 **글자 그대로 같은 잣대**다.
+
+`None` 은 **재작성으로 검색하지 않았다**는 뜻 하나다: 꺼져 있었거나(모델 이름이 없다),
+폴백으로 내려갔거나(호출 실패·응답 손상), 답이 캐시에서 왔거나. 셋을 여기서 안 가르는 이유는
+화면이 셋에 대해 **같은 것**을 해야 하기 때문이다 — 줄을 안 그린다. 사유를 갈라야 하는 날은
+`rewriter.warnings` 가 이미 그 자리에 있다.
+
 ## 왜 `sources` 가 비어 있을 수 있나
 
 **근거를 못 찾은 것은 실패가 아니다.** 관련 청크가 없으면 생성 쪽은 "문서에서 찾지
@@ -54,7 +67,7 @@ from pydantic import BaseModel, Field
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["Answer", "CacheOrigin", "EvaluatorVerdict"]
+__all__ = ["Answer", "CacheOrigin", "EvaluatorVerdict", "RewriteTrace"]
 
 
 # 이 답변이 캐시에서 왔을 때 그 출처. **셋이 늘 함께 있거나 통째로 없다** (모듈 docstring 참고)
@@ -75,6 +88,16 @@ class EvaluatorVerdict(BaseModel):
     reasoning: str = ""
 
 
+# 이 질의를 다시 써서 검색했을 때 그 흔적. **둘이 늘 함께 있거나 통째로 없다**
+# (모듈 docstring 참고)
+class RewriteTrace(BaseModel):
+    # 재작성기가 낸 질의. **원 질의는 `Answer.query` 에 그대로 있다** — 여기가 답하는 것은
+    # "그럼 무엇으로 검색했나" 하나다
+    query: str
+    # 원 질의 갈래를 남겼나(`fuse`) 갈아끼웠나(`replace`). 화면 문구가 여기서 갈린다
+    mode: Literal["fuse", "replace"]
+
+
 # 질문 하나에 대한 답변과 그 근거
 class Answer(BaseModel):
     query: str
@@ -86,3 +109,7 @@ class Answer(BaseModel):
     # Evaluator 를 돌렸으면 그 판정, 안 돌렸으면 None (꺼짐 또는 캐시 히트).
     # **판정이 답변을 바꾸지 않는다** — 지금은 재시도할 곳이 없어 싣기만 한다
     verdict: EvaluatorVerdict | None = None
+    # 재작성으로 검색했으면 그 흔적, 아니면 None (꺼짐·폴백·캐시 히트).
+    # **재작성이 답변을 바꾸는 것은 맞지만 그 사실이 여기 실리는 것은 관측이다** —
+    # `verdict` 와 같은 자리이고, 화면과 `query_log` 가 둘 다 이 하나를 읽는다
+    rewrite: RewriteTrace | None = None

@@ -51,6 +51,12 @@ BM25 인덱스는 저장소를 전량 훑어 짓는다. 여기서 지으면 **�
 **답변 캐시가 히트하면 재작성도 안 돈다.** 캐시 검사가 `retrieve()` 앞이라 저절로 그렇게
 되고, 그것이 곧 질의당 LLM 호출 하나를 아끼는 것이다.
 
+**다시 쓴 질의는 `retrieve()` 가 아니라 재작성기에서 읽는다.** 반환이 청크 목록이라 문자열이
+낄 자리가 없고, 넓히면 `run_eval` 을 포함한 모든 호출부가 함께 바뀐다(`retrieval/rewrite.py`
+docstring). 읽어서 `Answer.rewrite` 에 싣는 것까지가 여기 몫이고 — **그 필드는 관측이지
+스위치가 아니다.** 판정이 답변을 안 바꾸는 것과 같은 자리인데, 이쪽은 반대로 **답변을 이미
+바꾼 뒤에** 그 사실을 적는 것이다. 화면과 `query_log` 가 둘 다 이 하나를 읽는다.
+
 ## `cache` 도 같은 모양이다
 
 답변 캐시 역시 인자이고 `None` 이면 캐시 없이 돈다 — `bm25` 와 같은 이유이자 같은 스위치다.
@@ -94,7 +100,7 @@ from rag_pipeline.generation import OpenAIEvaluator, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
 from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve
-from rag_pipeline.schemas.answer import Answer
+from rag_pipeline.schemas.answer import Answer, RewriteTrace
 
 __all__ = ["answer_question"]
 
@@ -138,8 +144,17 @@ def answer_question(
     # 실패도 그대로 실린다 — 여기서 판정 하나로 접으면 러너가 실패를 따로 못 센다
     verdict = evaluator.evaluate(query, chunks) if evaluator is not None else None
 
+    # 무엇으로 검색했나. **`retrieve()` 뒤에 읽어야 값이 있다** — 재작성은 그 안에서 돈다.
+    # 폴백으로 내려갔으면 `last_rewritten` 이 None 이고, 그때는 원 질의로만 검색한 것이라
+    # 흔적도 None 이 맞다 (모듈 docstring 참고)
+    rewrite = (
+        RewriteTrace(query=rewriter.last_rewritten, mode=rewriter.mode)
+        if rewriter is not None and rewriter.last_rewritten
+        else None
+    )
+
     text = generate_answer(query, chunks, cfg.generation)
-    answer = Answer(query=query, text=text, sources=chunks, verdict=verdict)
+    answer = Answer(query=query, text=text, sources=chunks, verdict=verdict, rewrite=rewrite)
 
     # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
     if cache is not None:

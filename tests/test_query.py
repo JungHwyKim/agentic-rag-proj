@@ -165,13 +165,21 @@ def test_cache_miss_runs_normally_and_stores(mocker, config):
 # --- 재작성(Rewriter) ------------------------------------------------------------
 
 
+# 재작성기 노릇을 하는 최소 가짜. **`last_rewritten` 을 갖는 것이 요점이다** — 재작성 흔적을
+# 읽는 자리가 `retrieve()` 의 반환이 아니라 이 인스턴스라, 여기가 곧 그 계약이다
+class _FakeRewriter:
+    def __init__(self, last_rewritten: str | None = None, mode: str = "fuse") -> None:
+        self.last_rewritten = last_rewritten
+        self.mode = mode
+
+
 # **재작성기를 그대로 retrieve() 에 넘긴다.** 리랭커와 같은 모양이고, 여기서 하는 일도
 # 수명을 정해 넘기는 것뿐이다 — 실제로 붙는 자리는 retrieve() **안**(1차 검색 뒤·합류 앞)이다.
 # 이 배선이 끊기면 .env 를 켜도 아무 일이 안 일어나는데 **에러가 안 난다**
 def test_rewriter_is_passed_through_to_retrieve(mocker, config):
     retrieve = mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
     mocker.patch.object(query_module, "generate_answer", return_value="답변")
-    rewriter = object()
+    rewriter = _FakeRewriter()
 
     answer_question(
         "질문", store=object(), embedder=object(), config=config, rewriter=rewriter
@@ -198,7 +206,7 @@ def test_query_reaches_retrieve_unchanged(mocker, config):
     mocker.patch.object(query_module, "generate_answer", return_value="답변")
 
     answer_question(
-        "원 질의입니다", store=object(), embedder=object(), config=config, rewriter=object()
+        "원 질의입니다", store=object(), embedder=object(), config=config, rewriter=_FakeRewriter()
     )
 
     assert retrieve.call_args.args[0] == "원 질의입니다"
@@ -211,6 +219,8 @@ def test_cache_hit_skips_the_rewriter_too(mocker, config):
     mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
     cached = Answer(query="질문", text="옛 답변", sources=[])
 
+    # **여기만 일부러 맨 `object()` 다** — 캐시 경로가 재작성기의 무엇도 안 읽는다는 것을
+    # 타입으로 못 박는다. 흔적을 읽는 줄이 캐시 검사 위로 올라가면 AttributeError 로 터진다
     answer_question(
         "질문",
         store=object(),
@@ -221,6 +231,56 @@ def test_cache_hit_skips_the_rewriter_too(mocker, config):
     )
 
     assert retrieve.call_args is None
+
+
+# **다시 쓴 질의가 `Answer` 에 실린다.** 화면 배지와 `query_log` 가 둘 다 이 하나를 읽으므로,
+# 여기가 끊기면 재작성은 도는데 흔적만 사라진다 — 그리고 그것이 실제로 한 번 일어났다
+# (2026-08-27, 서버가 두 벌 떠 있어 낡은 쪽이 답한 것을 캐시 수로만 알아냈다)
+def test_rewrite_trace_is_carried_on_the_answer(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question(
+        "지원 방식 알려줘",
+        store=object(),
+        embedder=object(),
+        config=config,
+        rewriter=_FakeRewriter("2026 중등 기초학력 보장 사업의 지원 방식", mode="fuse"),
+    )
+
+    assert answer.rewrite is not None
+    assert answer.rewrite.query == "2026 중등 기초학력 보장 사업의 지원 방식"
+    # **mode 가 같은 덩어리로 온다** — 화면 문구가 여기서 갈린다(fuse 는 원 질의도 함께 돌았다)
+    assert answer.rewrite.mode == "fuse"
+    # 원 질의는 그대로 남는다. 둘을 나란히 놓는 것이 이 흔적의 목적이다
+    assert answer.query == "지원 방식 알려줘"
+
+
+# **폴백이면 흔적이 없다.** 재작성기를 넘겼어도 호출이 실패했으면 원 질의로만 검색한 것이라,
+# 배지를 그리면 사용자에게 거짓을 보여준다
+def test_fallback_leaves_no_trace(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question(
+        "질문",
+        store=object(),
+        embedder=object(),
+        config=config,
+        rewriter=_FakeRewriter(None),
+    )
+
+    assert answer.rewrite is None
+
+
+# 재작성기를 안 넘기면 흔적도 없다. 꺼짐·폴백·캐시 히트가 화면에서 같은 것을 하는 자리다
+def test_no_rewriter_leaves_no_trace(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답변")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert answer.rewrite is None
 
 
 # --- 리랭커 --------------------------------------------------------------------
