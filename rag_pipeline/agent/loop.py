@@ -22,6 +22,30 @@
 사용자가 실제로 물은 문장이다. `retrieval/hybrid.py` 가 리랭커에 원 질의를 넘기는 것과 같은
 잣대이고, 어기면 **질문이 바뀐 답**이 나간다.
 
+**스펙(`retrieval/IMPLEMENTATION_SPEC.md` Phase 10)은 `current_query` 로 생성하라고 적었는데
+따르지 않는다.** 재작성 질의는 PRF 로 부풀린 검색어 뭉치라 질문의 모양이 아니고(실측 예:
+`지원금 액수가 궁금해요` → `2026 중등 기초학력 보장 추진 계획 내 두드림학교 및 기초학력보장
+선도학교 지원금 액수와 예산 배분 내역`), 그것에 답하면 **사용자가 묻지 않은 질문에 답한다.**
+게다가 저장소가 이미 같은 규칙을 셋에서 쓴다 — 리랭커·Evaluator·`answer_question()` 의 생성.
+여기만 바꾸면 **네 번째 진입점만 나머지 셋과 다르게 답한다.** 스펙은 재작성기가 생기기 전
+초안이고, 초안과 실물이 어긋날 때 실물을 따른 전례가 `schemas/agent.py` 에 있다.
+
+## 근거는 **한 번만** 자르고 그 목록을 둘에 나눠 준다
+
+`context_budget_chars` 로 자른 결과가 **`final_context` 와 생성 입력 양쪽**에 간다.
+한때 근거 문자열만 자르고 생성기에는 자르지 않은 `retrieved_chunks` 를 넘겼는데, 그러면
+예산이 걸린 회차에서 **상태에 적힌 근거와 모델이 실제로 본 근거가 다른데 아무 에러가 안
+난다** — *이 답이 무엇을 보고 나왔나* 를 되짚는 칸이 바로 그 자리다. 덤으로
+`context_budget_chars` 가 **죽은 설정**이었다(값을 줘도 생성 입력이 안 줄었다).
+
+**`retrieved_chunks` 자체는 안 자른다.** 자르는 것은 *이번에 보여줄 것* 이고 저쪽은
+*검색이 물어온 것* 이다. 덮으면 `evidence_unchanged_at` 의 앞뒤 대조와 `_reason_for()` 의
+0건 판정이 **조용히 다른 것을 보게 된다.**
+
+**자르기를 두 번 하지 않는 것도 규약이다.** `build_context(chunks, budget_chars=...)` 를
+그대로 두고 생성 쪽에서 또 자르면 같은 계산이 두 벌이 되고, 한쪽 인자만 고쳐도 에러가
+안 난다 — 그 모양이 정확히 위 버그였다. 그래서 자른 목록을 **변수로 잡아** 나눠 준다.
+
 ## `rewrite` 단계가 하는 일은 「승급」이다
 
 이 저장소의 재작성기는 `(원질의, verdict) → 새 질의` 가 아니라 `retrieve()` **안**에서 도는
@@ -90,7 +114,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from rag_pipeline.agent.context import build_context
+from rag_pipeline.agent.context import build_context, select_within_budget
 from rag_pipeline.agent.router import decide_next_action
 from rag_pipeline.agent.state import (
     mark_evidence_unchanged,
@@ -174,9 +198,12 @@ def step_rewrite(state: AgentState, deps: LoopDeps) -> AgentState:
 
 # 근거를 조립하고 답을 만든다. **여기가 유일한 정상 출구다**
 def step_generate(state: AgentState, deps: LoopDeps) -> AgentState:
-    context = build_context(state.retrieved_chunks, budget_chars=deps.context_budget_chars)
-    state = with_context(state, context)
-    state = with_answer(state, deps.generate(state.original_query, state.retrieved_chunks))
+    # **한 번만 자르고 그 목록을 둘에 나눠 준다** (모듈 docstring 참고).
+    # `build_context()` 를 예산 없이 부르는 것이 «두 번 안 자른다» 의 실제 내용이다
+    shown = select_within_budget(state.retrieved_chunks, deps.context_budget_chars)
+    state = with_context(state, build_context(shown))
+    # **원 질의로 생성한다** (모듈 docstring 참고)
+    state = with_answer(state, deps.generate(state.original_query, shown))
     # 앞 단계가 이미 사유를 적었으면 그것이 이긴다 — 더 구체적인 사유를 덮어쓰지 않는다
     return with_stop_reason(state, state.stop_reason or _reason_for(state))
 

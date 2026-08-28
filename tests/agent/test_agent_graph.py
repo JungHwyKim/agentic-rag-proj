@@ -184,3 +184,17 @@ def test_unknown_action_raises_in_the_graph(monkeypatch: pytest.MonkeyPatch):
 
     with pytest.raises(RuntimeError, match="다룰 수 없는 행동"):
         run_agent_graph(QUERY, retriever=StubRetriever(), generate=StubGenerate())
+
+
+# 예산도 두 경로가 똑같이 먹는다. **`StubGenerate` 가 근거 수를 답변에 싣기 때문에**
+# 상태 비교 하나로 «같은 목록을 봤나» 까지 걸린다 — 한쪽만 안 자르면 `final_answer` 가
+# `답변(1건)` 과 `답변(0건)` 으로 갈린다
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_graph_applies_the_same_budget(name: str):
+    # 청크 하나도 못 담는 예산이다. **빈 근거가 되는 것이 사실이고**, 반쪽 청크를 넣어
+    # 답이 있는 것처럼 보이게 하지 않는다 (context.py docstring 참고)
+    loop_state, _, graph_state, _ = _both(SCENARIOS[name], context_budget_chars=1)
+
+    assert _comparable(loop_state) == _comparable(graph_state)
+    assert loop_state.final_answer == "답변(0건)"
+    assert loop_state.final_context == ""

@@ -340,3 +340,59 @@ def test_the_first_search_is_never_counted():
 
     assert state.retry_count == 0
     assert state.evidence_unchanged_at == []
+
+
+# --- 예산이 생성에도 먹는가 -----------------------------------------------
+
+
+# **`final_context` 를 만들어 놓고 안 쓰던 자리다.** 예산으로 자른 목록이 근거 문자열과
+# 생성 입력 **양쪽**에 가야, 상태에 적힌 근거와 모델이 실제로 본 근거가 같아진다.
+# 어긋나도 아무 에러가 안 나고, *이 답이 무엇을 보고 나왔나* 를 되짚는 칸이 바로 거기다
+def test_budget_trims_what_the_generator_sees():
+    generate = StubGenerate()
+    three = [chunk("c1"), chunk("c2"), chunk("c3")]
+
+    state = run_agent_loop(
+        QUERY,
+        retriever=StubRetriever(chunks=three),
+        evaluator=StubEvaluator("sufficient"),
+        generate=generate,
+        # 청크 하나 분량이다 — `chunk()` 의 본문이 5자다
+        context_budget_chars=5,
+    )
+
+    assert generate.chunk_ids == [["c1"]]
+    assert "c1" in state.final_context
+    assert "c2" not in state.final_context
+
+
+# **검색이 물어온 것은 그대로 남는다.** 자르는 것은 *이번에 보여줄 것* 이고
+# `retrieved_chunks` 는 *검색이 물어온 것* 이다 — 덮으면 `evidence_unchanged_at` 의 앞뒤
+# 대조와 `_reason_for()` 의 0건 판정이 **조용히 다른 것을 보게 된다**
+def test_budget_does_not_shrink_the_retrieved_chunks():
+    three = [chunk("c1"), chunk("c2"), chunk("c3")]
+
+    state = run_agent_loop(
+        QUERY,
+        retriever=StubRetriever(chunks=three),
+        evaluator=StubEvaluator("sufficient"),
+        generate=StubGenerate(),
+        context_budget_chars=5,
+    )
+
+    assert [c.chunk_id for c in state.retrieved_chunks] == ["c1", "c2", "c3"]
+
+
+# 예산을 안 주면 오늘과 똑같다 — 기본값은 여전히 «안 자른다» (context.py docstring 참고)
+def test_without_a_budget_the_generator_sees_everything():
+    generate = StubGenerate()
+    three = [chunk("c1"), chunk("c2"), chunk("c3")]
+
+    run_agent_loop(
+        QUERY,
+        retriever=StubRetriever(chunks=three),
+        evaluator=StubEvaluator("sufficient"),
+        generate=generate,
+    )
+
+    assert generate.chunk_ids == [["c1", "c2", "c3"]]

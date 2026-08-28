@@ -10,6 +10,10 @@
 
 가짜는 넷이고 전부 **호출된 질의를 기록한다.** 무엇으로 검색했고 무엇으로 판정·생성했는지가
 이 루프에서 제일 자주 어긋나는 자리이기 때문이다(검색만 재작성 질의를 쓴다).
+
+**생성기만 하나를 더 기록한다 — 받은 근거의 `chunk_id` 다.** 질의가 맞아도 *무엇을 보고*
+답했는지가 어긋날 수 있고, 실제로 그랬다: 예산으로 자른 목록이 `final_context` 에만 가고
+생성에는 안 갔다(31회차).
 """
 
 from __future__ import annotations
@@ -98,11 +102,18 @@ class StubEvaluator:
         return EvaluatorVerdict(verdict=self._verdicts[index], reasoning="테스트")
 
 
-# 무슨 질의로 생성했는지 기록한다
+# 무슨 질의로, **무슨 근거로** 생성했는지 기록한다
 class StubGenerate:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        # 회차마다 받은 근거의 chunk_id. **질의만으로는 안 잡히는 어긋남이 있다** —
+        # 예산으로 자른 목록이 생성까지 안 가면 상태의 `final_context` 와 모델이 실제로
+        # 본 근거가 갈리는데 아무 에러가 안 난다 (loop.py docstring 참고)
+        self.chunk_ids: list[list[str]] = []
 
     def __call__(self, query: str, chunks: list[RetrievedChunk]) -> str:
         self.queries.append(query)
+        self.chunk_ids.append([c.chunk_id for c in chunks])
+        # **근거 수를 답변에 싣는 것이 그래프 동등성 시험의 이음새다** —
+        # 상태만 견줘도 «두 경로가 같은 목록을 봤나» 가 함께 걸린다
         return f"답변({len(chunks)}건)"
