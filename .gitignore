@@ -28,6 +28,9 @@ original_files/
 # 벡터 DB 바이너리라 커밋하면 안 되고, 임베딩 모델을 바꾸면 내용도 통째로 달라진다
 .qdrant/
 
+# PPT 초안 메모 등 임시 작업 파일
+/tmp/
+
 # 에디터
 .vscode/
 .idea/
