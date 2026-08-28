@@ -194,7 +194,12 @@ def _cached_scores(query: str, pool: list[Any], *, cache: Any, salt: str) -> lis
 # 실행 하나의 풀을 되살리고 캐시 점수를 얹는다. `rerank_diff.py` 의 재현 규약을 그대로 쓰되
 # **재작성기를 넘긴다** — 그것이 이 모듈이 저쪽을 못 빌려 쓰는 이유다
 class _Side:
-    def __init__(self, report: dict[str, Any], stem: str) -> None:
+    # `borrow` 는 **같은 컬렉션을 두 번 열지 않기 위한 것**이다. qdrant 로컬 파일 모드는
+    # 디렉터리에 배타 잠금을 걸어 두 번째 클라이언트가 `RuntimeError` 로 죽는다(CLAUDE.md).
+    # 짝의 두 이름이 같은 자기짝은 **비싼 실행 전 예비검사**로 쓴다 — 신참이 0개라 수치는
+    # 동어반복이지만, «그 실행의 점수가 캐시에 살아 있고 풀이 재현되는가» 를 공짜로 답한다.
+    # **빌린 쪽은 안 닫는다** — 저장소의 소유권 규칙이 "연 쪽이 닫는다" 이기 때문이다
+    def __init__(self, report: dict[str, Any], stem: str, *, borrow: _Side | None = None) -> None:
         from rag_pipeline.ingestion.embedding import get_embedder
         from rag_pipeline.ingestion.indexing import get_store
         from rag_pipeline.ingestion.loader.content.base import ResultCache
@@ -213,15 +218,21 @@ class _Side:
         self.salt = rerank_cache_salt(self.config.rerank)
         # **캐시를 강제로 켠다** — 프로필이 껐으면 읽을 것이 없어 이 도구가 성립하지 않는다
         self.cache = ResultCache(self.config.rerank.rerank_cache_dir, enabled=True)
-        self.embedder = get_embedder(self.config.embedding)
-        self.store = get_store(self.config.indexing, self.config.embedding)
-        require_fresh_store(
-            self.store.count(),
-            sum(x["chunks"] for x in report["indexed"]),
-            label=report["label"],
-            fmt=report["format"],
-        )
-        self.bm25 = build_bm25_index(self.store) if report["retriever"]["use_bm25"] else None
+        self._owns_store = borrow is None
+        if borrow is not None:
+            self.embedder = borrow.embedder
+            self.store = borrow.store
+            self.bm25 = borrow.bm25
+        else:
+            self.embedder = get_embedder(self.config.embedding)
+            self.store = get_store(self.config.indexing, self.config.embedding)
+            require_fresh_store(
+                self.store.count(),
+                sum(x["chunks"] for x in report["indexed"]),
+                label=report["label"],
+                fmt=report["format"],
+            )
+            self.bm25 = build_bm25_index(self.store) if report["retriever"]["use_bm25"] else None
         self.rewriter = get_rewriter(self.config.rewrite)
         self.ranks = {row["query_id"]: row["rank"] for row in report["per_query"]}
 
@@ -250,7 +261,8 @@ class _Side:
         return pool, _cached_scores(item.query, pool, cache=self.cache, salt=self.salt)
 
     def close(self) -> None:
-        self.store.close()
+        if self._owns_store:
+            self.store.close()
 
 
 # 두 실행을 질의마다 견준다. **색인하지 않는다**
@@ -277,7 +289,9 @@ def compare_pair(
     on: _Side | None = None
     rows: list[PairRow] = []
     try:
-        on = _Side(on_report, on_stem)
+        # 같은 컬렉션이면 저장소를 빌린다 (자기짝 예비검사 · `_Side` 주석 참고)
+        same_store = off_stem == on_stem
+        on = _Side(on_report, on_stem, borrow=off if same_store else None)
         for item in items:
             if item.query_id not in off.ranks or item.query_id not in on.ranks:
                 continue

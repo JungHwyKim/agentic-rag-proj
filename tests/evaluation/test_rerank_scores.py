@@ -23,6 +23,7 @@ from evaluation.rerank_scores import (
     PairRow,
     _cached_scores,
     _inversions,
+    _Side,
     agreement,
     newcomer_percentiles,
     predict_agreement,
@@ -172,3 +173,36 @@ def test_cached_scores_rejects_a_wrong_length_entry(tmp_path):
     pool = [_chunk("c1"), _chunk("c2")]
     cache.set(content_hash(rerank_cache_key("질의", pool, salt="salt")), {"scores": [0.2]})
     assert _cached_scores("질의", pool, cache=cache, salt="salt") is None
+
+
+# 짝의 두 실행이 **같은 컬렉션**이면 저장소를 빌린다. qdrant 로컬 파일 모드는 디렉터리에
+# 배타 잠금을 걸어, 안 빌리면 자기짝 예비검사가 `RuntimeError` 로 죽는다
+def test_borrowed_side_does_not_close_the_store():
+    class FakeStore:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    side = object.__new__(_Side)
+    side.store = FakeStore()
+    side._owns_store = False
+    side.close()
+    assert side.store.closed is False
+
+
+# **연 쪽은 닫는다** — 소유권 규칙을 뒤집으면 다음 실행이 잠금으로 통째로 죽는다
+def test_owning_side_closes_the_store():
+    class FakeStore:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    side = object.__new__(_Side)
+    side.store = FakeStore()
+    side._owns_store = True
+    side.close()
+    assert side.store.closed is True
