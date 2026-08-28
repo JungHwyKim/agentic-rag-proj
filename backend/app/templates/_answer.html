@@ -82,6 +82,29 @@
       <span class="rewrite-tail">{% if answer.rewrite.mode == 'fuse' %}도 함께 검색했습니다{% else %}로 바꿔 검색했습니다{% endif %}</span>
     </div>
   {% endif %}
+
+  {# 재시도 루프. **실제로 다시 찾아갔을 때만 그린다** — `retry` 가 통째로 None 인 것은
+     셋을 한꺼번에 뜻하고(루프 꺼짐 · 캐시 히트 · 단발 경로) 화면이 할 일이 같아 안 가른다.
+     `count == 0` 을 안 그리는 것도 같은 이유다: 첫 검색에서 «충분» 이 나온 회차는 단발과
+     화면상 구별할 것이 없다. 배지 셋(`cached_from`·`verdict`·`citation`)과 같은 규칙이다.
+
+     **`answered` 를 빼면 안 된다.** 계획에는 «위 조건에서 걸러진다» 고 적었는데 틀렸다 —
+     `count > 0` 이면서 `answered` 인 회차가 바로 **다시 찾아서 근거를 채운** 경우이고,
+     이 줄이 제일 말할 값어치가 있는 자리다. 빼면 성공한 재시도가 화면에서 사라지고
+     실패한 재시도만 남아, 루프가 손해만 보는 것처럼 읽힌다.
+
+     **모델 이름은 안 그린다** — 사용자가 고를 축이 아니다(`query_log` 에는 실린다) #}
+  {% if answer.retry and answer.retry.count > 0 %}
+    <div class="retry-row">
+      <span class="retry-count">{{ answer.retry.count }}회 다시 찾았습니다</span>
+      <span class="retry-tail">&mdash;
+        {%- if answer.retry.stop_reason == 'retries_exhausted' %} 재시도를 다 썼습니다
+        {%- elif answer.retry.stop_reason == 'rewrite_unavailable' %} 더 넓힐 질의를 못 만들었습니다
+        {%- else %} 근거를 채우고 멈췄습니다
+        {%- endif %}
+      </span>
+    </div>
+  {% endif %}
   {# 인용 어긋남. **어긋났을 때만 그린다** — 위 배지 셋과 같은 규칙이다. `citation` 이
      None 인 것은 «맞게 인용했다» 뿐 아니라 «검사할 자리가 아니었다» 도 뜻한다:
      근거가 0건이거나 답변이 «문서에서 찾지 못했습니다» 일 때는 인용 0개가 옳다

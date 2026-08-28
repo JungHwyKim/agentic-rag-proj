@@ -69,8 +69,8 @@ def _lines(path: Path) -> list[dict]:
 # 질의 하나에 한 줄. **필드 열이 곧 계약이다** — 넷은 분자·분모를 만들고(`key`·`cached`),
 # 둘은 켰을 때 얼마를 아끼는지를 만들고(`elapsed_ms`·`sources`), `verdict` 는 실사용 판정
 # 분포를, `rewritten`·`rewrite_mode` 는 **무엇으로 검색했나**를, `source` 는 **그 분모가
-# 실사용인가**를 만든다.
-# **넷 다 그 갈래가 꺼져 있어도 키가 있다** — 없을 때 키를 빼면
+# 실사용인가**를 만든다. `retries`·`stop_reason` 은 **몇 바퀴 돌아 왜 멈췄나**를 만든다.
+# **여섯 다 그 갈래가 꺼져 있어도 키가 있다** — 없을 때 키를 빼면
 # "꺼져 있었다"와 "옛 형식이라 칸이 없다"가 집계에서 안 갈린다
 def test_one_query_writes_one_line(mocker, query_log_path: Path):
     mocker.patch(
@@ -92,11 +92,18 @@ def test_one_query_writes_one_line(mocker, query_log_path: Path):
         "rewritten",
         "rewrite_mode",
         "source",
+        "retries",
+        "stop_reason",
+        "generation_model",
     }
-    # 판정도 재작성도 꺼진 상태다. 칸은 있고 값이 None 이다
+    # **이 칸만 「꺼짐」이 없다** — 답이 나온 이상 무언가가 썼으므로 늘 값이 있다
+    assert row["generation_model"]
+    # 판정도 재작성도 재시도 루프도 꺼진 상태다. 칸은 있고 값이 None 이다
     assert row["verdict"] is None
     assert row["rewritten"] is None
     assert row["rewrite_mode"] is None
+    assert row["retries"] is None
+    assert row["stop_reason"] is None
     assert row["query"] == "위약금은?"
     # 헤더를 안 붙인 요청은 실사용이다 — 화면에서 오는 질의가 이 경로다
     assert row["source"] == "user"

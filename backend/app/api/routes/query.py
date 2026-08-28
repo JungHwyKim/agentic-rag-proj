@@ -81,7 +81,7 @@ from backend.app.core.query_log import QUERY_SOURCE_HEADER, append_query_log
 from backend.app.core.singletons import BUILD_LOCK, embedder_for
 from backend.app.core.templates import templates
 from rag_pipeline.generation.evaluate import get_evaluator
-from rag_pipeline.query import answer_question
+from rag_pipeline.query import answer_question, answer_question_with_retries
 from rag_pipeline.retrieval import build_bm25_index, get_reranker, get_rewriter
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
@@ -189,17 +189,24 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
             request, "_answer.html", {"answer": None, "echo": ""}
         )
 
+    # **어느 진입점을 부르나는 설정 한 줄이 정한다.** 아래 다섯(bm25·reranker·cache·evaluator·
+    # rewriter)은 *안 넘기는 것이 곧 끄는 것* 이라 라우트에 스위치가 없는데, 이쪽만 다르다 —
+    # 끄고 켜는 것이 인자가 아니라 **함수**라 인자로 접을 자리가 없다.
+    # `agent_max_retries=0` 이면 글자 그대로 예전 경로다 (`rag_pipeline/config.py`)
+    cfg = request.app.state.ingest_config
+    entry = answer_question_with_retries if cfg.agent.agent_max_retries > 0 else answer_question
+
     # 검색·생성은 동기·네트워크 바운드라 이벤트 루프 밖으로 뺀다 (업로드가 로더를 넘기는 것과 같다)
     started = time.perf_counter()
     answer = await run_in_threadpool(
-        answer_question,
+        entry,
         text,
         store=request.app.state.store,
         # **임베더도 threadpool 로 넘긴다** — 리랭커와 같은 이유인데 이쪽이 더 크다.
         # 워밍업이 꺼져 있으면 첫 인코딩이 11.8~14.7초이고(verify_log/2026-08-26-첫질의-대표값.md)
         # 그동안 이벤트 루프에서 하면 **서버 전체가 그만큼 멈춘다**
         embedder=await run_in_threadpool(embedder_for, request.app),
-        config=request.app.state.ingest_config,
+        config=cfg,
         bm25=await run_in_threadpool(_bm25, request.app),
         # 모델 이름이 없으면 None 이라 RRF 순서로 돈다. 라우트에 스위치를 두지 않는 이유는
         # bm25·cache 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
@@ -216,7 +223,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # **질의마다 새로 만든다** — 저 셋과 달리 가중치가 없어 만드는 값이 사실상 0 이고,
         # 싱글턴으로 두면 `warnings` 가 서버 수명 내내 누적된다 (모듈 docstring 참고).
         # `config.evaluator` 는 lazy 프로퍼티라 첫 호출 뒤에는 `.env` 를 다시 안 읽는다
-        evaluator=get_evaluator(request.app.state.ingest_config.evaluator),
+        evaluator=get_evaluator(cfg.evaluator),
         # 모델 이름이 없으면 None 이라 재작성 없이 돈다. 라우트에 스위치를 두지 않는 이유는
         # bm25·cache·reranker·evaluator 와 같다 — 안 넘기는 것이 곧 끄는 것이다.
         # **evaluator 와 같이 질의마다 새로 만든다** — 올릴 가중치가 없어 만드는 값이 사실상
@@ -224,7 +231,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         # 수명 내내 누적된다. **딸린 `ResultCache` 는 경로 + 불리언뿐이라 축이 아니다** —
         # 상태를 안 들고 디스크를 보므로 질의마다 만든 인스턴스가 같은 캐시 파일을 읽는다.
         # **threadpool 로 안 감싸는 것도 evaluator 와 같다** — 적재가 없어 감쌀 것이 없다
-        rewriter=get_rewriter(request.app.state.ingest_config.rewrite),
+        rewriter=get_rewriter(cfg.rewrite),
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
 
@@ -242,6 +249,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
             # 정규화(빈 값 → `user` · 길이 자르기)를 한 곳에 둔다. 화면에서 온 질의는
             # 이 헤더가 없어 실사용으로 세어진다
             source=request.headers.get(QUERY_SOURCE_HEADER),
+            generation_model=cfg.generation.generation_model,
         )
 
     # **`query` 가 아니라 `echo` 로 넘긴다.** 질문 말풍선은 이제 화면이 그린다 — 보내는 즉시

@@ -798,6 +798,27 @@ def test_fingerprint_splits_on_top_k() -> None:
     assert _fp(top_k=10) != _fp()
 
 
+# **재시도 루프가 꺼진 지문은 이 인자가 생기기 전과 글자 그대로 같아야 한다.**
+# 여기가 이 축에서 제일 조용한 자리다 — 조각을 늘 붙이면 `.qdrant/qa_cache_*` 의 기존 항목이
+# **전부 한 번에 죽고**, 그러면 `exact` 캐시의 «50줄에서 5% 미만이면 끈다» 표본이 미스 쪽으로
+# 밀린다(`evaluation/README.md` 8절). 에러가 안 나고 **수치로만** 드러나는 종류다.
+#
+# 인자를 아예 안 준 것과도 같아야 한다 — 옛 호출부(`answer_question()`)가 그대로 산다
+def test_fingerprint_is_unchanged_when_the_loop_is_off() -> None:
+    assert _fp(max_retries=0) == _fp()
+
+
+# 반대쪽. 켜지면 실제로 파이프라인이 다르므로(검색이 여러 번 돈다) 지문이 갈려야 한다 —
+# 안 갈리면 **루프가 만든 답을 단발 질의에 서빙**하고 그 반대도 된다
+def test_fingerprint_splits_when_the_loop_is_on() -> None:
+    assert _fp(max_retries=2) != _fp()
+
+
+# 회차 수까지 갈린다. 2바퀴와 3바퀴는 근거가 다를 수 있어 같은 답으로 접으면 안 된다
+def test_fingerprint_splits_on_the_retry_budget() -> None:
+    assert _fp(max_retries=3) != _fp(max_retries=2)
+
+
 # **꺼진 단계의 설정은 지문에 안 든다.** 리랭커가 꺼져 있는데 `RERANK_DEVICE` 를 바꿨다고
 # 캐시가 죽으면, 그때 아무것도 안 하는 설정이 캐시를 버리는 것이 된다
 def test_fingerprint_ignores_settings_of_a_disabled_stage() -> None:

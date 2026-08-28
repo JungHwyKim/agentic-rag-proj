@@ -5,10 +5,37 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 프로젝트 루트 (rag_pipeline/ 의 부모). cwd와 무관하게 .env를 찾기 위해 사용
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# `.env` 의 **빈 값**을 `None` 으로 읽는다. temperature 처럼 «안 보낸다» 가 합법 상태인
+# 설정에 붙인다.
+#
+# **이것이 없으면 `.env` 로는 그 상태를 아예 못 만든다** — 2026-08-29 실측으로 확인했다.
+# 줄을 지우거나 주석 처리하면 **코드 기본값**(0.2 · 0.0)이 살아나고, 빈 값·`null`·`None` 은
+# 전부 `ValidationError` 다. 그래서 `gpt-5.6-luna` 로 바꾸면 `temperature=0.2` 가 그대로
+# 나가 **400** 이 났다(`Unsupported value: 'temperature' does not support 0.2`).
+# **한때 문서가 «줄을 주석 처리한다» 로 적어 두었는데 그 처방은 틀렸다** — 기본값이 `None`
+# 이 아닌 한 주석 처리는 «안 보냄» 이 아니라 «기본값을 쓴다» 다.
+#
+# **기본값을 `None` 으로 내리는 안은 기각했다** — 0.2 는 *"근거를 벗어나지 않되 베끼지는
+# 않는다"*, 0.0 은 *"판정은 재현이 값어치"* 로 고른 값이라, 기본을 지우면 그 근거가 사라진다.
+# 빈 값을 쓰는 쪽은 `.env` 를 **쓴 사람이 명시**한 것이라 그 사고가 없다
+# **아무 `float | None` 에나 붙이지 않는다. 조건이 둘이다** — ① 「안 보냄」이 합법 상태이고
+# ② **기본값이 `None` 이 아니라서** 줄을 지우는 것으로는 그 상태를 못 만들 때.
+#
+# 둘 다 아닌 자리에 붙이면 뜻이 같아 보이는데 **축이 하나 는다.** 실제 사례 둘이 저장소에 있다 —
+# `ANSWER_CACHE_THRESHOLD` 는 **기본값이 이미 `None`** 이라 주석 처리로 꺼지므로 ②가 아니고,
+# `TAVILY_API_KEY` 는 **빈 값이 곧 「꺼짐」**이라(`''` 가 falsy) ①이 아니다. 뒤엣것에 붙이면
+# *꺼짐* 이 *안 보냄* 으로 바뀌면서 합법값이 하나 늘어난다.
+def _blank_means_none(value: object) -> object:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
 
 
 # 콘텐츠 유형별로 어떤 핸들러를 쓸지, 외부 API 비용을 어디서 끊을지 결정하는 설정
@@ -410,8 +437,20 @@ class GenerationConfig(BaseSettings):
     generation_max_tokens: int = 1024
 
     # 근거에서 벗어나지 않는 것이 목적이라 낮게 둔다. 0 이 아닌 이유는 표·목록을 그대로
-    # 베끼는 대신 질문에 맞게 추리는 여지를 남기기 위해서다
-    generation_temperature: float = 0.2
+    # 베끼는 대신 질문에 맞게 추리는 여지를 남기기 위해서다.
+    #
+    # **`None` 은 «인자를 안 보낸다» 는 뜻이다** — gpt-5 계열이 기본값(1) 말고는 400 이라
+    # 그 모델로 가려면 이 값을 비워야 한다(`EvaluatorConfig.evaluator_temperature` 와 같은
+    # 자리 · CLAUDE.md). **`1.0` 을 대신 적지 않는다** — 그건 기본값을 명시하는 것뿐이면서
+    # *0.2 가 위 이유로 고른 값이었다* 는 사실을 지운다. **`.env` 에서는 줄을 주석 처리한다**
+    # — 빈 값은 `''` 를 float 로 파싱하다 죽는다
+    generation_temperature: float | None = 0.2
+
+    # **`.env` 에서는 빈 값(`GENERATION_TEMPERATURE=`)이 «안 보냄» 이다** — 줄을 지우면
+    # 위 기본값 0.2 가 살아나 gpt-5 계열에서 400 이 난다 (`_blank_means_none` 참고)
+    _blank_temperature = field_validator("generation_temperature", mode="before")(
+        _blank_means_none
+    )
 
     # 컨텍스트에 실을 청크 수. **임시값이다** — baseline 이 hit@1 0.150 / @5 0.400 /
     # @10 0.483 / @20 0.617 이라 늘리면 오르는 것은 알지만, 대가(컨텍스트 토큰·답변 품질)를
@@ -489,6 +528,13 @@ class EvaluatorConfig(BaseSettings):
     # (`EMBEDDING_DIMENSIONS` 가 `.env.example` 에서 주석인 것과 같은 이유다)
     evaluator_temperature: float | None = 0.0
 
+    # 위 `generation_temperature` 와 같은 자리다. **여기가 먼저 있었는데 결함도 먼저
+    # 있었다** — 문서가 「줄을 주석 처리하면 안 보낸다」로 적어 둔 것이 틀렸고,
+    # 주석 처리하면 기본값 0.0 이 살아나 gpt-5 계열에서 그대로 400 이었다 (2026-08-29 실측)
+    _blank_temperature = field_validator("evaluator_temperature", mode="before")(
+        _blank_means_none
+    )
+
     # verdict 한 줄 + 사유 한두 문장. **임시값이다** — 사유가 잘리는지는 첫 혼동행렬의
     # reasoning 을 사람이 읽고 정한다.
     # **API 인자 이름은 `max_completion_tokens` 다** — gpt-5 계열이 `max_tokens` 를 400 으로
@@ -500,6 +546,29 @@ class EvaluatorConfig(BaseSettings):
     # 읽고 프롬프트를 고치는 반복이 성립한다. 프롬프트를 고치면 salt 가 갈려 자동으로 미스가 된다
     evaluator_cache_enabled: bool = True
     evaluator_cache_dir: Path = PROJECT_ROOT / ".cache" / "evaluator"
+
+
+# 재시도 루프(⚑Checkpoint A) 설정. **켜는 축이 수 하나뿐이다.**
+#
+# **`0` 이 곧 꺼짐이다.** `agent_loop_enabled` 를 따로 두지 않은 것은 결정이다 — 리랭커가
+# 「켜는 데 세 줄」로 물린 자리와 같은 모양이 되고, 두 설정이 어긋난 조합(`enabled=true` 인데
+# `max_retries=0`)이 **에러 없이** 생긴다. 대가는 «검색 한 번 + 생성» 루프를 못 쓰는 것인데,
+# 그 조합은 `answer_question()` 과 관측상 같아 잃는 것이 없다.
+#
+# **저장소 커밋본은 꺼진 채다** — `RERANK_MODEL`·`REWRITE_MODEL`·`EVALUATOR_MODEL` 과 같은
+# 규칙이고 이유도 같다. 켜는 순간 질의당 LLM 호출이 회차 수만큼 늘어(회차마다 판정 1회 +
+# 마지막에 생성 1회), 값을 하는지 재기 전에 과금이 먼저 붙는 것을 막는다
+class AgentConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 근거가 불충분할 때 질의를 승급해 다시 찾아갈 최대 횟수. **0 이면 루프를 아예 안 돈다.**
+    # 3 은 스펙(`retrieval/IMPLEMENTATION_SPEC.md` ⚑Checkpoint A)의 값이고 실측으로 고른
+    # 수가 아니다 — 실사용 회차 분포를 보고 정할 자리인데 아직 표본이 없다
+    agent_max_retries: int = 0
 
 
 # 적재 파이프라인 전체 설정
@@ -611,6 +680,15 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_evaluator"):
             object.__setattr__(self, "_evaluator", EvaluatorConfig())
         return self._evaluator  # type: ignore[attr-defined]
+
+    # 재시도 루프 설정. 같은 lazy 형태라 테스트에서 _agent 로 덮어쓸 수 있다.
+    # **evaluator 와 같은 이유로 lazy 여야 한다** — AgentConfig() 가 .env 를 직접 읽으므로,
+    # 안 덮으면 개발자 머신에서 켜 둔 회차 수가 픽스처에 실려 **기본 pytest 가 루프를 돈다**
+    @property
+    def agent(self) -> AgentConfig:
+        if not hasattr(self, "_agent"):
+            object.__setattr__(self, "_agent", AgentConfig())
+        return self._agent  # type: ignore[attr-defined]
 
 
 # 프로세스 전역인 것만 여기 온다. **`EmbeddingConfig`·`RerankConfig` 로 가르지 않는 이유**가

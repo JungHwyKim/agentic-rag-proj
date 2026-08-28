@@ -14,13 +14,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig, RewriteConfig
+from rag_pipeline.config import (
+    AgentConfig,
+    EvaluatorConfig,
+    GenerationConfig,
+    IngestConfig,
+    RewriteConfig,
+)
 from rag_pipeline.exceptions import GenerationError, IndexingError
 from rag_pipeline.schemas.answer import (
     Answer,
     CacheOrigin,
     CitationTrace,
     EvaluatorVerdict,
+    RetryTrace,
     RewriteTrace,
 )
 from rag_pipeline.schemas.retrieval import RetrievedChunk
@@ -59,7 +66,7 @@ class ProtocolOnlyStore:
 
 
 # 앱을 만들고 가짜 상태를 꽂는다. lifespan 은 일부러 안 돌린다 (모듈 docstring 참고)
-def _client(store=None, tmp_path: Path | None = None) -> TestClient:
+def _client(store=None, tmp_path: Path | None = None, retries: int = 0) -> TestClient:
     app = create_app()
     config = IngestConfig()
     object.__setattr__(config, "_generation", GenerationConfig(openai_api_key=None))
@@ -77,6 +84,11 @@ def _client(store=None, tmp_path: Path | None = None) -> TestClient:
     object.__setattr__(
         config, "_rewrite", RewriteConfig(rewrite_model=None, openai_api_key=None)
     )
+    # **재시도 루프도 못 박는다.** 라우트가 `cfg.agent.agent_max_retries` 로 **어느 진입점을
+    # 부를지** 를 정하므로, 안 박으면 개발자 `.env` 한 줄이 이 파일의 모든 테스트를 루프
+    # 경로로 보낸다 — 그러면 `answer_question` 을 모킹한 테스트들이 **모킹이 안 먹은 채로**
+    # 돈다. 위 두 핀과 같은 자리이고, 갈리는 것은 «과금» 이 아니라 «다른 함수를 잰다» 다
+    object.__setattr__(config, "_agent", AgentConfig(agent_max_retries=retries))
     app.state.ingest_config = config
     app.state.store = store if store is not None else FakeStore()
     app.state.embedder = object()
@@ -823,3 +835,112 @@ def test_status_carries_the_warmup_reason_in_the_title():
     body = client.get("/api/v1/status").text
 
     assert 'title="reranker: boom"' in body
+
+
+# ---------------------------------------------------------------------------
+# 재시도 루프 배선 — 어느 진입점을 부르나
+# ---------------------------------------------------------------------------
+
+
+# **0 이면 글자 그대로 예전 경로다.** 이것이 깨지면 루프를 끌 방법이 없어진다
+def test_retries_off_calls_the_single_shot_entry(mocker):
+    single = mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[_chunk()]),
+    )
+    loop = mocker.patch("backend.app.api.routes.query.answer_question_with_retries")
+
+    assert _client(retries=0).post("/api/v1/query", data={"query": "q"}).status_code == 200
+
+    assert single.call_count == 1
+    assert loop.call_count == 0
+
+
+# 켜면 반대쪽을 부른다. **인자 목록은 그대로다** — 갈리는 것이 함수 하나뿐이라
+# 어느 쪽으로 가든 같은 것을 넘긴다
+def test_retries_on_calls_the_loop_entry(mocker):
+    single = mocker.patch("backend.app.api.routes.query.answer_question")
+    loop = mocker.patch(
+        "backend.app.api.routes.query.answer_question_with_retries",
+        return_value=Answer(
+            query="q",
+            text="답",
+            sources=[_chunk()],
+            retry=RetryTrace(count=1, stop_reason="answered"),
+        ),
+    )
+
+    assert _client(retries=2).post("/api/v1/query", data={"query": "q"}).status_code == 200
+
+    assert loop.call_count == 1
+    assert single.call_count == 0
+    assert loop.call_args.kwargs["store"] is not None
+    assert "evaluator" in loop.call_args.kwargs
+
+
+# 재시도 줄은 **실제로 다시 찾아갔을 때만** 그린다. 배지 셋과 같은 규칙이다
+def test_retry_row_is_drawn_when_it_actually_retried(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question_with_retries",
+        return_value=Answer(
+            query="q",
+            text="답",
+            sources=[_chunk()],
+            retry=RetryTrace(count=2, stop_reason="retries_exhausted"),
+        ),
+    )
+
+    body = _client(retries=3).post("/api/v1/query", data={"query": "q"}).text
+
+    assert "retry-row" in body
+    assert "2회 다시 찾았습니다" in body
+    assert "재시도를 다 썼습니다" in body
+
+
+# **성공한 재시도가 화면에 남아야 한다.** `answered` 를 빼면 실패한 회차만 보여서
+# 루프가 손해만 보는 것처럼 읽힌다 — 계획이 여기서 틀렸다
+def test_a_successful_retry_is_still_drawn(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question_with_retries",
+        return_value=Answer(
+            query="q",
+            text="답",
+            sources=[_chunk()],
+            retry=RetryTrace(count=1, stop_reason="answered"),
+        ),
+    )
+
+    body = _client(retries=3).post("/api/v1/query", data={"query": "q"}).text
+
+    assert "retry-row" in body
+    assert "1회 다시 찾았습니다" in body
+    assert "근거를 채우고 멈췄습니다" in body
+
+
+# 0회는 안 그린다. 첫 검색에서 «충분» 이 나온 회차는 단발과 화면상 구별할 것이 없다
+def test_zero_retries_draws_no_row(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question_with_retries",
+        return_value=Answer(
+            query="q",
+            text="답",
+            sources=[_chunk()],
+            retry=RetryTrace(count=0, stop_reason="answered"),
+        ),
+    )
+
+    body = _client(retries=3).post("/api/v1/query", data={"query": "q"}).text
+
+    assert "retry-row" not in body
+
+
+# 단발 경로(`retry is None`)도 안 그린다. 캐시 히트·루프 꺼짐과 화면이 할 일이 같다
+def test_single_shot_draws_no_retry_row(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[_chunk()]),
+    )
+
+    body = _client(retries=0).post("/api/v1/query", data={"query": "q"}).text
+
+    assert "retry-row" not in body

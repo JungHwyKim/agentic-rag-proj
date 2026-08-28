@@ -11,6 +11,24 @@
 **검색 0건은 실패가 아니다.** 모델을 부르지 않고 `NO_EVIDENCE_ANSWER` 를 그대로 돌려준다 —
 근거 없이 부르면 돈을 쓰면서 환각할 기회만 준다.
 
+## 모델 축 — `gpt-4.1-mini` 와 `gpt-5.6-luna` 를 둘 다 받는다
+
+**토큰 상한은 분기가 없다.** gpt-5 계열이 `max_tokens` 를 400
+(`Use 'max_completion_tokens' instead`)으로 거부하는데 `gpt-4.1-mini` 는 **새 이름도 받으므로**
+`max_completion_tokens` 하나로 둘 다 돈다(2026-08-27 실측 7호출).
+
+**갈리는 것은 `temperature` 하나다.** gpt-5 계열은 기본값(1) 말고는 400
+(`Only the default (1) value is supported`)이라 `generation_temperature` 가 `float | None` 이고
+**`None` 이 «보내지 않는다» 는 뜻**이다. `1.0` 을 대신 싣지 않는다 — 그건 기본값을 명시하는
+것뿐이면서 *0.2 가 «근거를 벗어나지 않되 베끼지는 않는다» 로 고른 값이었다* 는 사실을 지운다.
+
+**대가는 재현성이다** — luna 로 잰 답변 수치는 온도를 못 고정해 다시 돌리면 달라질 수 있다.
+그래서 `evaluation/config.py` 의 기본 생성 프로필은 `prod`(mini) 그대로다.
+
+`generation/evaluate.py` · `retrieval/rewrite.py` 가 같은 모양이다.
+**`retrieval/reranker/openai_llm.py` 를 본보기로 삼지 말 것** — 이 실측 이전 코드라 아직
+`max_tokens=` 를 쓴다(리랭커를 `gpt-4.1-mini` 로만 돌려 안 깨졌을 뿐이다).
+
 ## 모킹 이음새
 
 `_make_client()` 는 **모듈 레벨 함수**여야 한다. 인라인화하거나 메서드로 옮기면
@@ -65,16 +83,22 @@ def generate_answer(
             user_message="답변 생성에 필요한 API 키가 설정되지 않았습니다.",
         )
 
+    # **`max_completion_tokens` 는 분기가 없다** — gpt-5 계열이 `max_tokens` 를 400 으로
+    # 거부하는데 gpt-4.1-mini 는 새 이름도 받는다(2026-08-27 실측 7호출). 갈리는 것은
+    # temperature 하나라, **None 이면 인자 자체를 안 싣는다** (모듈 docstring 참고)
+    kwargs: dict[str, Any] = {
+        "model": cfg.generation_model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_user_prompt(query, chunks)},
+        ],
+        "max_completion_tokens": cfg.generation_max_tokens,
+    }
+    if cfg.generation_temperature is not None:
+        kwargs["temperature"] = cfg.generation_temperature
+
     try:
-        response = client.chat.completions.create(
-            model=cfg.generation_model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(query, chunks)},
-            ],
-            max_tokens=cfg.generation_max_tokens,
-            temperature=cfg.generation_temperature,
-        )
+        response = client.chat.completions.create(**kwargs)
     except Exception as exc:  # noqa: BLE001 - 원인을 GenerationError로 바꿔 올린다
         raise GenerationError(
             f"답변 생성에 실패했습니다: {type(exc).__name__}: {exc}",

@@ -132,7 +132,13 @@ def normalize_source(raw: str | None) -> str:
 # 라우트에 인라인하지 않은 이유는 테스트 이음새를 남기기 위해서다 — 외부 API 핸들러의
 # `_make_client()` 가 모듈 레벨 함수인 것과 같은 잣대다.
 def append_query_log(
-    path: Path, query: str, answer: Answer, *, elapsed_ms: int, source: str | None
+    path: Path,
+    query: str,
+    answer: Answer,
+    *,
+    elapsed_ms: int,
+    source: str | None,
+    generation_model: str,
 ) -> bool:
     record = {
         "at": datetime.now(UTC).isoformat(),
@@ -150,6 +156,18 @@ def append_query_log(
         # 판정을 돌렸으면 세 상태 중 하나, 안 돌렸으면 None (꺼짐 또는 캐시 히트).
         # **키를 늘 쓴다** (모듈 docstring 참고)
         "verdict": answer.verdict.verdict if answer.verdict is not None else None,
+        # 재시도 루프를 돌았으면 몇 바퀴에 왜 멈췄나, 안 돌았으면 둘 다 None
+        # (루프 꺼짐 · 캐시 히트 · 단발 경로). **키를 늘 쓴다** (모듈 docstring 참고)
+        "retries": answer.retry.count if answer.retry is not None else None,
+        "stop_reason": answer.retry.stop_reason if answer.retry is not None else None,
+        # 어느 모델이 이 답을 썼나. **`Answer` 가 아니라 설정에서 온다** — 답변의 속성이
+        # 아니라 그 실행의 속성이고, 부르는 쪽만 안다.
+        # **`citation` 을 안 싣는 이유(«언제든 다시 계산된다»)가 여기서는 성립하지 않는다** —
+        # 모델을 바꾼 뒤에는 옛 줄이 무엇으로 나왔는지 되짚을 방법이 없다. 화면 질의의
+        # 기록은 이 파일 하나뿐이라 `rewritten` 이 실린 것과 같은 자리다.
+        # **기본값을 안 두는 것은 `source` 와 같은 이유다** — 새 호출부가 빠뜨리면 조용히
+        # 틀린 모델로 기록되는 대신 `TypeError` 로 터진다
+        "generation_model": generation_model,
         # 무엇으로 검색했나. 재작성이 안 걸렸으면(꺼짐·폴백·캐시 히트) 둘 다 None 이다.
         # **전문을 싣는 이유와 mode 를 함께 싣는 이유는 모듈 docstring 에 있다**
         "rewritten": answer.rewrite.query if answer.rewrite is not None else None,

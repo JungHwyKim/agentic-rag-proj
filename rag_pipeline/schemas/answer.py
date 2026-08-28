@@ -83,7 +83,15 @@ from pydantic import BaseModel, Field
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["Answer", "CacheOrigin", "CitationTrace", "EvaluatorVerdict", "RewriteTrace"]
+__all__ = [
+    "Answer",
+    "CacheOrigin",
+    "CitationTrace",
+    "EvaluatorVerdict",
+    "RetryTrace",
+    "RewriteTrace",
+    "StopReason",
+]
 
 
 # 이 답변이 캐시에서 왔을 때 그 출처. **셋이 늘 함께 있거나 통째로 없다** (모듈 docstring 참고)
@@ -112,6 +120,27 @@ class RewriteTrace(BaseModel):
     query: str
     # 원 질의 갈래를 남겼나(`fuse`) 갈아끼웠나(`replace`). 화면 문구가 여기서 갈린다
     mode: Literal["fuse", "replace"]
+
+
+# 재시도 루프가 멈춘 이유. **`answered` 에 *충분* 과 *실패* 와 *판정 꺼짐* 이 함께 들어온다** —
+# 셋을 가르는 것은 `evaluator_verdict` 이지 이 칸이 아니다. 여기가 답하는 것은 하나다:
+# 근거를 더 찾으려는 시도가 **왜 끝났나**
+#
+# **루프의 개념인데 여기 사는 것은 import 방향 때문이다** — `schemas/agent.py` 가
+# `EvaluatorVerdict` 를 여기서 가져가므로 반대로는 순환이다. `RetryTrace` 가 `Answer` 에
+# 붙으면서 이 낱말이 답변 쪽 어휘도 되었고, 두 벌로 적으면 한쪽만 고쳐져도 에러가 안 난다.
+# `schemas/agent.py` 가 `StopReason` 이라는 이름으로 그대로 재수출하므로 부르는 쪽은 안 바뀐다
+StopReason = Literal["answered", "retries_exhausted", "rewrite_unavailable"]
+
+
+# 재시도 루프로 답했을 때 그 흔적. **루프를 안 돌았으면 통째로 None 이다**
+# (모듈 docstring 참고) — 꺼짐·캐시 히트·단발 경로 셋을 한꺼번에 뜻한다
+class RetryTrace(BaseModel):
+    # 몇 번 다시 찾아갔나. **0 이 정상값이다** — 첫 검색으로 «충분» 이 나오면 0 이고,
+    # 그것은 루프를 돌았다는 사실과 다르지 않다(화면이 0 을 안 그리는 것은 화면의 규칙이다)
+    count: int
+    # 왜 멈췄나. `Answer.verdict` 와 함께 읽어야 «충분해서» 와 «실패해서» 가 갈린다
+    stop_reason: StopReason
 
 
 # 답변이 쓴 출처 번호가 근거와 어긋났을 때 그 흔적. **맞으면 통째로 None 이다**
@@ -146,3 +175,8 @@ class Answer(BaseModel):
     # `verdict` 와 같은 계약이고, 틀린 번호를 지우지 않는 이유는
     # `generation/citations.py` docstring 에 있다. 캐시 히트에도 값이 실린다(위 참고)
     citation: CitationTrace | None = None
+    # 재시도 루프로 답했으면 그 흔적, 아니면 None (루프 꺼짐 · 캐시 히트 · 단발 경로).
+    # **`verdict` 와 같은 축이라 캐시 payload 에는 안 실린다** — *이번 실행에서 몇 번
+    # 돌았나* 는 실행의 속성이지 답변의 속성이 아니다. 인용 검사가 반대쪽인 이유
+    # (*이 답변의 인용이 맞나* 는 답변의 속성이라 캐시 히트에도 다시 계산된다)와 짝이다
+    retry: RetryTrace | None = None

@@ -110,7 +110,11 @@ def test_blank_content_raises(mocker, content):
         generate_answer("질문", [_chunk("근거")], _config())
 
 
-# 설정값이 실제로 요청에 실린다. 안 실리면 죽은 설정이 된다
+# 설정값이 실제로 요청에 실린다. 안 실리면 죽은 설정이 된다.
+#
+# **토큰 상한은 `max_completion_tokens` 이고 `max_tokens` 는 나가면 안 된다** — gpt-5 계열이
+# 옛 이름을 400 으로 거부한다(2026-08-27 실측). 새 이름은 `gpt-4.1-mini` 도 받으므로
+# 분기가 없고, 그래서 **옛 이름이 안 나가는 것까지 재야** 두 모델이 다 도는지가 잠긴다
 def test_config_reaches_request(mocker):
     client = FakeClient(FakeResponse("답변"))
     mocker.patch.object(answer_module, "_make_client", return_value=client)
@@ -123,7 +127,30 @@ def test_config_reaches_request(mocker):
 
     call = client.calls[0]
     assert call["model"] == "gpt-test"
-    assert call["max_tokens"] == 77
+    assert call["max_completion_tokens"] == 77
+    assert "max_tokens" not in call
+
+
+# **온도는 `None` 이면 인자 자체가 안 나간다** — gpt-5 계열은 기본값(1) 말고 어떤 값도 400 이라
+# *보내지 않는 것* 과 *기본값을 명시하는 것* 이 다르다. `1.0` 을 대신 싣는 구현이면 이 테스트가
+# 빨개진다 (`rag_pipeline/generation/answer.py` docstring)
+def test_temperature_is_omitted_when_none(mocker):
+    client = FakeClient(FakeResponse("답변"))
+    mocker.patch.object(answer_module, "_make_client", return_value=client)
+
+    generate_answer("질문", [_chunk("근거")], _config(generation_temperature=None))
+
+    assert "temperature" not in client.calls[0]
+
+
+# 반대쪽. 값이 있으면 그대로 실린다 — 위 테스트만 있으면 온도를 통째로 안 보내는 구현도 통과한다
+def test_temperature_is_sent_when_set(mocker):
+    client = FakeClient(FakeResponse("답변"))
+    mocker.patch.object(answer_module, "_make_client", return_value=client)
+
+    generate_answer("질문", [_chunk("근거")], _config(generation_temperature=0.2))
+
+    assert client.calls[0]["temperature"] == 0.2
 
 
 # 근거는 번호가 달려 프롬프트에 실린다. 번호가 있어야 답변의 [1] 과 소스 태그가 맞춰진다

@@ -66,7 +66,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from rag_pipeline.schemas.answer import EvaluatorVerdict
+from rag_pipeline.schemas.answer import EvaluatorVerdict, StopReason
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 __all__ = [
@@ -82,10 +82,10 @@ __all__ = [
 # 다음에 할 일. **Pre-Lock C 가 제외한 vision·llamaparse 는 없다** (모듈 docstring 참고)
 NextAction = Literal["retrieve", "web_search", "rewrite", "generate", "end"]
 
-# 루프가 멈춘 이유. **`answered` 에 *충분* 과 *실패* 와 *판정 꺼짐* 이 함께 들어온다** —
-# 셋을 가르는 것은 `evaluator_verdict` 이지 이 칸이 아니다. 여기가 답하는 것은 하나다:
-# 근거를 더 찾으려는 시도가 **왜 끝났나**
-StopReason = Literal["answered", "retries_exhausted", "rewrite_unavailable"]
+# 루프가 멈춘 이유. **정의는 `schemas/answer.py` 에 있고 여기서는 이름만 되판다** —
+# `RetryTrace` 가 `Answer` 에 붙으면서 이 낱말이 답변 쪽 어휘도 되었는데, 이 모듈이
+# `EvaluatorVerdict` 를 저기서 가져오므로 반대 방향은 순환이다. 두 벌로 적으면 한쪽만
+# 고쳐져도 에러가 안 난다. **부르는 쪽은 계속 여기서 가져가면 된다**
 
 
 # 도구에 넣는 것. 도구가 늘어도 이 모양은 안 바뀐다

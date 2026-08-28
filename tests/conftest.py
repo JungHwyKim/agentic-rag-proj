@@ -19,6 +19,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from rag_pipeline.config import (
+    AgentConfig,
     AnswerCacheConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
@@ -183,6 +184,14 @@ def offline_config(tmp_path: Path) -> IngestConfig:
             rewrite_cache_enabled=False,
         ),
     )
+    # 재시도 루프도 같은 이유로 덮어쓴다. **여기는 「키가 없어 못 돈다」가 방어가 아니다** —
+    # 루프 자체는 키를 안 보고, 회차 수 하나로 돈다. 개발자가 .env 에 AGENT_MAX_RETRIES 를
+    # 켜 두면 기본 pytest 의 루프 경로가 **검색을 여러 번 도는 상태**로 조용히 바뀐다.
+    #
+    # **위 핀들과 갈리는 자리가 하나 있다**: 저쪽은 «과금 경로로 새는가» 인데 이쪽은
+    # «몇 바퀴 도는가» 라, 새도 과금이 아니라 **회차 수가 달라진 채 통과하는 테스트**가 된다.
+    # 그것이 더 조용하다 — 위 핀들이 지키는 「필드를 더한 회차가 핀도 넓힌다」 규약 그대로다
+    object.__setattr__(config, "_agent", AgentConfig(agent_max_retries=0))
     return config
 
 

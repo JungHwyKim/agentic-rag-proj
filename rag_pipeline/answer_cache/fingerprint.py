@@ -109,6 +109,7 @@ def pipeline_fingerprint(
     reranker_on: bool,
     rewriter_on: bool,
     top_k: int,
+    max_retries: int = 0,
 ) -> str:
     parts = [
         _VERSION,
@@ -119,4 +120,15 @@ def pipeline_fingerprint(
         _fields("rewrite", config.rewrite) if rewriter_on else "rewrite=off",
         _fields("generation", config.generation),
     ]
+    # **재시도 루프는 켜졌을 때만 조각을 붙인다.** 위 셋(`rerank=off` 꼴)과 모양이 갈리는데,
+    # 일부러다 — 꺼진 지문이 **이 인자가 생기기 전과 글자 그대로 같아야** `qa_cache_*` 의
+    # 기존 항목이 살아남는다. 그것이 필요한 이유는 지금 `exact` 캐시가 켜진 채
+    # *"`source=="user"` 50줄에서 적중률 5% 미만이면 끈다"* 의 표본을 모으는 중이라
+    # (`evaluation/README.md` 8절), 전량 미스가 그 판정을 아래로 밀기 때문이다.
+    #
+    # **「기본은 싣고 뺄 것만 명시」와 어긋나지 않는다**(모듈 docstring) — 그 규칙이 막는 것은
+    # *파이프라인이 다른데 지문이 같은* 경우인데, 루프가 꺼져 있으면 파이프라인이 **실제로**
+    # 예전과 같다. 켜지면 검색이 여러 번 돌아 실제로 다르므로 그때 조각이 붙는다
+    if max_retries > 0:
+        parts.append(f"agent_retries={max_retries}")
     return "|".join(parts)

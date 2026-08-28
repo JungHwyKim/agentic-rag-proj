@@ -8,8 +8,11 @@ from pathlib import Path
 import pytest
 
 from rag_pipeline import query as query_module
-from rag_pipeline.config import GenerationConfig, IngestConfig
+from rag_pipeline.agent.tools.base import BaseTool
+from rag_pipeline.answer_cache.qdrant_cache import _to_payload
+from rag_pipeline.config import AgentConfig, EvaluatorConfig, GenerationConfig, IngestConfig
 from rag_pipeline.query import answer_question
+from rag_pipeline.schemas.agent import ToolInput, ToolOutput
 from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
@@ -554,3 +557,240 @@ def test_no_evidence_answer_leaves_no_trace(mocker, config):
     answer = answer_question("아무거나", store=object(), embedder=object(), config=config)
 
     assert answer.citation is None
+
+
+# ---------------------------------------------------------------------------
+# 재시도 루프 어댑터 — answer_question_with_retries()
+# ---------------------------------------------------------------------------
+
+
+# 회차 수를 못 박은 설정. **`.env` 를 못 타게 하는 것이 요점이다** — 개발자가 켜 두면
+# 이 파일의 기대값이 머신마다 달라진다 (`tests/conftest.py` 의 offline_config 와 같은 자리)
+def _loop_config(config: IngestConfig, retries: int) -> IngestConfig:
+    object.__setattr__(config, "_agent", AgentConfig(agent_max_retries=retries))
+    return config
+
+
+# 루프가 부를 검색 도구. **`BaseTool` 을 그대로 상속한다** — `run()` 이 예외를 값으로
+# 바꾸는 계약까지 함께 타야 «도구가 죽은 회차» 를 흉내 낼 수 있다
+class _FakeTool(BaseTool):
+    name = "retriever"
+
+    def __init__(self, *batches: list[RetrievedChunk]) -> None:
+        self._batches = list(batches)
+        self.queries: list[str] = []
+
+    def _run(self, tool_input: ToolInput) -> ToolOutput:
+        self.queries.append(tool_input.query)
+        index = min(len(self.queries) - 1, len(self._batches) - 1)
+        return ToolOutput(success=True, data=self._batches[index])
+
+
+# 검색 도구를 갈아끼운다. 어댑터가 만드는 RetrieverTool 자리에 가짜를 꽂아, 루프는 진짜가 돈다
+def _patch_tool(mocker, tool: _FakeTool) -> _FakeTool:
+    mocker.patch.object(query_module, "RetrieverTool", lambda **kwargs: tool)
+    return tool
+
+
+# **캐시가 히트하면 루프가 한 바퀴도 안 돈다.** 검사가 `retrieve()` 앞이라 저절로 그렇고,
+# 그것이 곧 유료 호출을 회차 수만큼 아끼는 것이다 — 단발 경로의 같은 성질과 짝이다
+def test_cache_hit_skips_the_whole_loop(mocker, config):
+    # **어긋난 인용을 일부러 담는다** — 멀쩡하면 `citation` 이 None 이라 «다시 계산했다» 와
+    # «안 했다» 가 안 갈린다. 근거는 하나인데 [2] 를 가리킨다
+    hit = Answer(
+        query="위약금은?",
+        text="20% 입니다 [2]",
+        sources=[_chunk()],
+        cached_from=CacheOrigin(query="위약금", score=0.99, created_at=datetime.now(UTC)),
+    )
+    tool = _patch_tool(mocker, _FakeTool([_chunk()]))
+    generate = mocker.patch.object(query_module, "generate_answer")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 2),
+        cache=_FakeCache(hit),
+    )
+
+    assert tool.queries == []
+    assert generate.call_count == 0
+    assert answer.cached_from is not None
+    # **캐시 히트에 `retry` 를 안 채운다** — 한 바퀴도 안 돌았으므로 None 이 사실이다
+    assert answer.retry is None
+    # 반대로 인용은 다시 계산된다. 그것이 답변의 속성이기 때문이다
+    assert answer.citation is not None
+
+
+# 판정이 «충분» 이면 첫 바퀴에 멈춘다. `count == 0` 이 정상값이라 흔적은 그대로 실린다
+def test_sufficient_stops_at_the_first_round(mocker, config):
+    tool = _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 2),
+        evaluator=_FakeEvaluator("sufficient"),
+    )
+
+    assert tool.queries == ["위약금은?"]
+    assert answer.retry is not None
+    assert answer.retry.count == 0
+    assert answer.retry.stop_reason == "answered"
+
+
+# **모델이 본 근거가 그대로 `sources` 다.** 예산으로 자른 목록과 상태에 남는 목록이 갈리면
+# `check_citations()` 의 범위가 넓어져 범위 밖 인용을 놓친다 (모듈 docstring 참고)
+def test_sources_are_what_the_model_saw(mocker, config):
+    chunks = [_chunk("안내서.pdf:0001"), _chunk("안내서.pdf:0002")]
+    _patch_tool(mocker, _FakeTool(chunks))
+    generate = mocker.patch.object(query_module, "generate_answer", return_value="답 [1][2]")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?", store=object(), embedder=object(), config=_loop_config(config, 1)
+    )
+
+    assert generate.call_args.args[1] == answer.sources
+    # 근거가 둘이고 인용도 [1][2] 라 어긋난 것이 없다
+    assert answer.citation is None
+
+
+# 재시도가 실제로 도는 자리. 재작성기가 새 질의를 내면 승급해 다시 찾아간다
+def test_insufficient_retries_with_the_promoted_query(mocker, config):
+    tool = _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+    rewriter = _FakeRewriter("위약금 손해배상 산정 기준")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 1),
+        rewriter=rewriter,
+        evaluator=_FakeEvaluator("insufficient"),
+    )
+
+    assert tool.queries == ["위약금은?", "위약금 손해배상 산정 기준"]
+    assert answer.retry is not None
+    assert answer.retry.count == 1
+    assert answer.retry.stop_reason == "retries_exhausted"
+    # **생성·판정은 원 질의로 한다** — 승급된 질의는 검색용 확장어다 (`agent/loop.py`)
+    assert answer.query == "위약금은?"
+
+
+# 재작성기가 없으면 승급할 질의가 없어 그 자리에서 멈춘다. **재시도 소진과 다른 사유다** —
+# 둘을 접으면 «질의를 못 만들었다» 와 «다 써서 멈췄다» 가 로그에서 안 갈린다
+def test_no_rewriter_stops_with_rewrite_unavailable(mocker, config):
+    _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 2),
+        evaluator=_FakeEvaluator("insufficient"),
+    )
+
+    assert answer.retry is not None
+    assert answer.retry.count == 0
+    assert answer.retry.stop_reason == "rewrite_unavailable"
+
+
+# **지문에 회차 수가 실린다.** 안 실으면 루프가 만든 답이 단발 질의에 서빙되는데 에러가 없다.
+# 조회와 저장이 같은 지문을 쓰는 것도 단발 경로와 같다
+def test_fingerprint_carries_the_retry_budget(mocker, config):
+    _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+    cache = _FakeCache()
+
+    query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 2),
+        cache=cache,
+    )
+
+    assert len(set(cache.fingerprints)) == 1
+    assert "agent_retries=2" in cache.fingerprints[0]
+
+
+# 답도 캐시에 실린다. **`retry` 는 payload 에 안 들어간다** — `_to_payload` 가 필드를 나열해
+# 실으므로 저절로 빠지고, 그것이 «실행의 속성은 캐시에 안 산다» 의 실제 내용이다
+def test_loop_answer_is_stored(mocker, config):
+    _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+    cache = _FakeCache()
+
+    query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 1),
+        cache=cache,
+    )
+
+    (stored,) = cache.put_calls
+    assert stored.retry is not None
+    assert "retry" not in _to_payload(stored, created_at=datetime.now(UTC), fingerprint="fp")
+
+
+# 재작성 흔적은 단발 경로와 **같은 규칙**으로 실린다. 두 진입점이 갈리면 화면이 두 벌이 된다
+def test_rewrite_trace_rides_along_on_the_loop_answer(mocker, config):
+    _patch_tool(mocker, _FakeTool([_chunk()]))
+    mocker.patch.object(query_module, "generate_answer", return_value="답 [1]")
+
+    answer = query_module.answer_question_with_retries(
+        "위약금은?",
+        store=object(),
+        embedder=object(),
+        config=_loop_config(config, 1),
+        rewriter=_FakeRewriter("위약금 손해배상"),
+    )
+
+    assert answer.rewrite is not None
+    assert answer.rewrite.query == "위약금 손해배상"
+
+
+# ---------------------------------------------------------------------------
+# temperature 의 「안 보냄」 상태 — `.env` 가 그것을 표현할 수 있어야 한다
+# ---------------------------------------------------------------------------
+
+
+# **빈 값이 `None` 이다.** 이 규칙이 없으면 `.env` 로는 «안 보냄» 을 아예 못 만든다 —
+# 2026-08-29 에 실측으로 밟았다: `GENERATION_MODEL=gpt-5.6-luna` 만 적고 온도 줄을 지우니
+# 코드 기본값 0.2 가 살아나 **400**(`Unsupported value: 'temperature' does not support 0.2`)
+# 이 났다. 한때 문서가 「줄을 주석 처리한다」로 적어 둔 처방이 바로 이것 때문에 틀렸다
+@pytest.mark.parametrize(
+    ("env_name", "config_cls", "field"),
+    [
+        ("GENERATION_TEMPERATURE", GenerationConfig, "generation_temperature"),
+        ("EVALUATOR_TEMPERATURE", EvaluatorConfig, "evaluator_temperature"),
+    ],
+)
+def test_blank_temperature_means_do_not_send(monkeypatch, env_name, config_cls, field):
+    monkeypatch.setenv(env_name, "")
+
+    assert getattr(config_cls(), field) is None
+
+
+# 반대쪽 둘. **줄을 지우면 기본값이지 `None` 이 아니다** — 이 비대칭이 위 사고의 원인이라
+# 여기서 함께 못 박는다. 값을 주면 그대로 실린다
+@pytest.mark.parametrize(
+    ("env_name", "config_cls", "field", "default"),
+    [
+        ("GENERATION_TEMPERATURE", GenerationConfig, "generation_temperature", 0.2),
+        ("EVALUATOR_TEMPERATURE", EvaluatorConfig, "evaluator_temperature", 0.0),
+    ],
+)
+def test_absent_temperature_is_the_code_default(monkeypatch, env_name, config_cls, field, default):
+    monkeypatch.delenv(env_name, raising=False)
+
+    assert getattr(config_cls(), field) == default
+
+    monkeypatch.setenv(env_name, "0.7")
+    assert getattr(config_cls(), field) == 0.7

@@ -105,15 +105,38 @@ Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 5 이고 7회�
 
 from __future__ import annotations
 
+from rag_pipeline.agent import RetrieverTool, run_agent_loop
 from rag_pipeline.answer_cache import QdrantAnswerCache, pipeline_fingerprint
 from rag_pipeline.config import IngestConfig
+from rag_pipeline.exceptions import GenerationError
 from rag_pipeline.generation import OpenAIEvaluator, check_citations, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
 from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve, uses_bm25
-from rag_pipeline.schemas.answer import Answer, RewriteTrace
+from rag_pipeline.schemas.answer import Answer, RetryTrace, RewriteTrace
+from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["answer_question"]
+__all__ = ["answer_question", "answer_question_with_retries"]
+
+
+# 캐시가 돌려준 답에 붙일 마무리. **두 진입점이 나눠 쓴다** — 복사하면 한쪽만 고쳐져도
+# 에러가 안 나는데, 이 처리는 *캐시냐 아니냐로 배지가 갈리지 않게* 하는 것이 전부라
+# 갈리는 순간 사용자가 화면에서 그것을 본다 (모듈 docstring 참고)
+def _finish_cached(cached: Answer) -> Answer:
+    # 캐시된 답도 같은 검사를 받는다. 캐시가 이 값을 안 싣는 것이 실수가 아니라 결정이다 —
+    # 순수 함수라 다시 계산이 공짜이고, 안 먹이면 같은 답변이 캐시냐 아니냐로 배지가 갈린다.
+    # **`retry` 는 반대로 안 채운다** — *이번 실행에서 몇 번 돌았나* 는 실행의 속성이고,
+    # 캐시 히트는 한 바퀴도 안 돈 것이라 `None` 이 사실이다 (`verdict` 와 같은 자리)
+    return cached.model_copy(update={"citation": check_citations(cached.text, cached.sources)})
+
+
+# 재작성 흔적. **`retrieve()` 뒤에 읽어야 값이 있다** — 재작성은 그 안에서 돈다.
+# 폴백으로 내려갔으면 `last_rewritten` 이 None 이고, 그때는 원 질의로만 검색한 것이라
+# 흔적도 None 이 맞다 (모듈 docstring 참고). 두 진입점이 같은 규칙을 써야 화면이 안 갈린다
+def _rewrite_trace(rewriter: QueryRewriter | None) -> RewriteTrace | None:
+    if rewriter is None or not rewriter.last_rewritten:
+        return None
+    return RewriteTrace(query=rewriter.last_rewritten, mode=rewriter.mode)
 
 
 # 질문 하나에 근거를 붙여 답한다. 검색 -> 생성을 합성하는 것이 하는 일의 전부다
@@ -149,12 +172,7 @@ def answer_question(
     if cache is not None:
         cached = cache.lookup(query, embedder=embedder, fingerprint=fingerprint)
         if cached is not None:
-            # 캐시된 답도 같은 검사를 받는다. 캐시가 이 값을 안 싣는 것이 실수가 아니라
-            # 결정이다 — 순수 함수라 다시 계산이 공짜이고, 안 먹이면 같은 답변이 캐시냐
-            # 아니냐로 배지가 갈린다 (모듈 docstring 참고)
-            return cached.model_copy(
-                update={"citation": check_citations(cached.text, cached.sources)}
-            )
+            return _finish_cached(cached)
 
     chunks = retrieve(
         query,
@@ -172,14 +190,7 @@ def answer_question(
     # 실패도 그대로 실린다 — 여기서 판정 하나로 접으면 러너가 실패를 따로 못 센다
     verdict = evaluator.evaluate(query, chunks) if evaluator is not None else None
 
-    # 무엇으로 검색했나. **`retrieve()` 뒤에 읽어야 값이 있다** — 재작성은 그 안에서 돈다.
-    # 폴백으로 내려갔으면 `last_rewritten` 이 None 이고, 그때는 원 질의로만 검색한 것이라
-    # 흔적도 None 이 맞다 (모듈 docstring 참고)
-    rewrite = (
-        RewriteTrace(query=rewriter.last_rewritten, mode=rewriter.mode)
-        if rewriter is not None and rewriter.last_rewritten
-        else None
-    )
+    rewrite = _rewrite_trace(rewriter)
 
     text = generate_answer(query, chunks, cfg.generation)
     answer = Answer(
@@ -194,6 +205,117 @@ def answer_question(
     )
 
     # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
+    if cache is not None:
+        cache.put(answer, embedder=embedder, fingerprint=fingerprint)
+    return answer
+
+
+# 질문 하나를 근거가 찰 때까지 다시 찾아가며 답한다. **`answer_question()` 의 형제이지
+# 스위치가 아니다** — 한 함수에 넣으면 *판정이 답변을 안 바꾼다* 와 *판정이 흐름을 가른다*
+# 라는 반대되는 두 계약을 동시에 갖게 된다 (`agent/loop.py` docstring).
+#
+# ## 하는 일은 「번역」이다
+#
+# 루프는 `AgentState` 를 돌려주는데 화면 배지 넷과 `append_query_log` 는 `Answer` 하나를
+# 읽는다. 그 사이를 옮기는 것이 이 함수이고, **그래서 템플릿도 로그 스키마도 두 벌이 안 된다.**
+# 라우트에 두지 않은 것은 캐시 북엔드(지문·`lookup`·`put`) 때문이다 — 거기 두면
+# `answer_question()` 과 같은 계산이 두 벌이 되고, 진입점이 HTTP 를 모른다는 경계도 깨진다.
+#
+# ## 캐시는 루프 **앞**이다
+#
+# 재작성 캐시가 `retrieve()` 앞에서 걸리는 것과 같은 자리이고, 히트하면 루프가 한 바퀴도
+# 안 돈다 — 그것이 곧 유료 호출 여러 개를 아끼는 것이다. **지문에 회차 수가 실린다** —
+# 루프가 만든 답과 단발이 만든 답은 다른 파이프라인이라, 안 실으면 서로에게 서빙되는데
+# 에러가 안 난다 (`answer_cache/fingerprint.py`).
+#
+# ## `context_budget_chars` 를 안 넘긴다
+#
+# 넘기면 `step_generate()` 가 자른 목록으로 생성하는데 `AgentState` 에는 **안 자른**
+# `retrieved_chunks` 만 남는다. 그것을 `sources` 로 쓰면 `check_citations()` 의 범위가
+# `1..len(sources)` 로 **넓어져 범위 밖 인용을 놓치고**, 화면 출처 목록도 모델이 안 본
+# 청크를 보여준다. 예산을 켜려면 상태에 «보여준 목록» 칸이 먼저 있어야 한다 — 그때까지는
+# 안 자르는 것이 `answer_question()` 과 같은 자[尺]를 지킨다
+def answer_question_with_retries(
+    query: str,
+    *,
+    store: VectorStore,
+    embedder: Embedder,
+    config: IngestConfig | None = None,
+    top_k: int | None = None,
+    bm25: Bm25Index | None = None,
+    reranker: Reranker | None = None,
+    rewriter: QueryRewriter | None = None,
+    cache: QdrantAnswerCache | None = None,
+    evaluator: OpenAIEvaluator | None = None,
+) -> Answer:
+    cfg = config or IngestConfig()
+    limit = top_k if top_k is not None else cfg.generation.generation_top_k
+    max_retries = cfg.agent.agent_max_retries
+
+    fingerprint = pipeline_fingerprint(
+        cfg,
+        use_bm25=uses_bm25(bm25),
+        reranker_on=reranker is not None,
+        rewriter_on=rewriter is not None,
+        top_k=limit,
+        max_retries=max_retries,
+    )
+
+    if cache is not None:
+        cached = cache.lookup(query, embedder=embedder, fingerprint=fingerprint)
+        if cached is not None:
+            return _finish_cached(cached)
+
+    retriever = RetrieverTool(
+        store=store,
+        embedder=embedder,
+        top_k=limit,
+        bm25=bm25,
+        reranker=reranker,
+        # 재작성기는 도구가 들고 돈다 — 루프는 그것이 이미 쓴 질의를 승급할 뿐이라
+        # 추가 LLM 호출이 0이다 (`agent/loop.py` docstring)
+        rewriter=rewriter,
+        config=cfg.retrieval,
+    )
+
+    # 설정을 인자로 안 받는 `default_generate` 대신 이것을 넘긴다 (`agent/loop.py` 의
+    # *"필요하면 호출부가 설정을 닫아 넘긴다"*). 안 넘기면 생성이 `.env` 를 다시 읽어
+    # 평가·테스트가 꽂아 넣은 설정이 조용히 안 먹는다
+    def _generate(loop_query: str, loop_chunks: list[RetrievedChunk]) -> str:
+        return generate_answer(loop_query, loop_chunks, cfg.generation)
+
+    state = run_agent_loop(
+        query,
+        retriever=retriever,
+        evaluator=evaluator,
+        rewriter=rewriter,
+        generate=_generate,
+        max_retries=max_retries,
+    )
+
+    # 루프는 근거가 0건이어도 `step_generate()` 를 지나 `NO_EVIDENCE_ANSWER` 를 담아 온다.
+    # `final_answer` 가 None 인 것은 그 출구를 안 지났다는 뜻이라 빈 문자열로 접지 않는다 —
+    # 접으면 화면에 빈 말풍선이 뜨고 *근거를 못 찾았다* 와 *생성이 실패했다* 가 안 갈린다
+    if state.final_answer is None:
+        raise GenerationError(
+            f"재시도 루프가 답을 만들지 못했습니다: stop_reason={state.stop_reason}",
+            user_message="답변을 만들지 못했습니다. 다시 시도해 주세요.",
+        )
+
+    answer = Answer(
+        query=query,
+        text=state.final_answer,
+        # **자르지 않은 목록이 그대로 근거다** (위 참고). 루프가 마지막 회차의 것으로
+        # 갈아끼우므로 *이 답이 무엇을 보고 나왔나* 가 그대로 담긴다
+        sources=state.retrieved_chunks,
+        verdict=state.evaluator_verdict,
+        rewrite=_rewrite_trace(rewriter),
+        citation=check_citations(state.final_answer, state.retrieved_chunks),
+        # `stop_reason` 은 `step_generate()` 가 반드시 채운다 — 위에서 답이 있음을 확인했으므로
+        # 여기서 None 일 수 없다. 그래도 기본값을 두는 것은 타입을 좁히기 위해서다
+        retry=RetryTrace(count=state.retry_count, stop_reason=state.stop_reason or "answered"),
+    )
+
     if cache is not None:
         cache.put(answer, embedder=embedder, fingerprint=fingerprint)
     return answer

@@ -391,6 +391,23 @@ EVAL_GENERATORS: dict[str, dict[str, Any]] = {
         "generation_temperature": 0.2,
         "generation_top_k": 5,
     },
+    # 모델 축. **`prod` 를 갈아끼지 않고 더한다** — 이름이 곧 실험의 정체라, 갈아끼면 이미
+    # 나온 수치가 어느 모델로 재졌는지 파일이 못 말한다(`EVAL_EMBEDDINGS` 의 gpu 프로필과
+    # 같은 규칙이다).
+    #
+    # **`generation_temperature` 가 `None` 인 것이 이 프로필의 전부다** — gpt-5 계열은 기본값
+    # (1) 말고는 400 이라 «보내지 않는다» 로 가야 한다(`generation/answer.py` docstring).
+    # 나머지 셋을 `prod` 와 같게 둔 것은 **갈리는 축을 모델 하나로 고립시키기 위해서**다.
+    #
+    # **그래서 이 프로필로 잰 수치는 재현이 보장되지 않는다** — 온도를 못 고정한다. `prod`
+    # 수치와 나란히 놓으면 차이에 모델과 샘플링이 함께 들어간다. 되읽기는 되는데(리포트가
+    # 답변 원문을 싣는다) 다시 돌리면 같다는 보장이 없는 것이 `luna` 판정 프로필과 같다
+    "luna": {
+        "generation_model": "gpt-5.6-luna",
+        "generation_max_tokens": 1024,
+        "generation_temperature": None,
+        "generation_top_k": 5,
+    },
 }
 
 # 아무것도 안 주면 이것. **꺼짐 프로필이 없다** — 생성을 끄면 잴 대상 자체가 없어져,

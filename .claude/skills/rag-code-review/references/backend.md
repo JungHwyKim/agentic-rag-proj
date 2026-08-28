@@ -230,3 +230,46 @@
 - **`source` 키를 조건부로 만들지 않는다.** 6절의 `verdict` 규칙과 같다. 옛 줄에 키가
   **없다는 것**이 *"이번 형식의 실사용"* 과 *"옛 형식"* 을 가르는 신호라, 없을 때 키를
   빼면 그 둘이 집계에서 안 갈린다
+
+## 9. 재시도 루프 배선 — 「정리」가 여섯 자리에서 조용히 틀린다
+
+`routes/query.py:ask()` · `rag_pipeline/query.py` · `core/query_log.py` ·
+`templates/_answer.html` · `rag_pipeline/answer_cache/fingerprint.py` 에 적용한다.
+근거는 `task_log/2026-08-29-재시도루프-배선-모델스위치.md` 다.
+
+- **`answer_question_with_retries()` 를 `answer_question()` 의 인자 스위치로 접지 않는다.**
+  제일 그럴듯한 「중복 제거」인데, 두 함수의 계약이 **반대**다 — 이쪽은 *판정이 답변을 안
+  바꾼다* 이고 저쪽은 *판정이 흐름을 가른다* 다. 합치면 한 함수가 둘을 동시에 갖고,
+  *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞인다(`agent/loop.py` docstring 이 이미
+  기각해 둔 안이다). **반대로 캐시 히트 처리와 재작성 흔적은 헬퍼로 묶여 있어야 한다** —
+  거기가 갈리면 같은 답변이 어느 진입점을 탔느냐로 배지가 달라진다
+- **어댑터를 라우트로 옮기지 않는다.** 캐시가 루프 **앞**에 있으므로 지문 계산·`lookup`·
+  `put` 북엔드가 따라간다. 라우트에 두면 `answer_question()` 과 두 벌이 되고 *"진입점은
+  HTTP를 모른다"* 도 깨진다
+- **`pipeline_fingerprint()` 의 `agent_retries` 조각을 `rerank=off` 처럼 «늘 붙이기» 로
+  통일하지 않는다.** 비대칭이 실수처럼 보이는데 일부러다 — 꺼진 지문이 이 인자가 생기기
+  전과 **글자 그대로 같아야** `.qdrant/qa_cache_*` 의 기존 항목이 산다. 지금 `exact` 캐시가
+  *"`source=="user"` 50줄에서 5% 미만이면 끈다"* 의 표본을 모으는 중이라(`evaluation/README.md`
+  8절) 전량 미스는 **그 판정을 아래로 민다.** 「기본은 싣고 뺄 것만 명시」와 어긋나지도
+  않는다: 루프가 꺼져 있으면 파이프라인이 **실제로** 예전과 같다.
+  `tests/answer_cache/test_answer_cache.py::test_fingerprint_is_unchanged_when_the_loop_is_off`
+  가 그 결정 자체다
+- **`run_agent_loop(context_budget_chars=)` 를 어댑터에서 넘기지 않는다. 테스트가 없는
+  자리다.** 넘기면 `step_generate()` 는 **자른** 목록으로 생성하는데 `AgentState` 에는
+  **안 자른** `retrieved_chunks` 만 남는다. 그것을 `sources` 로 쓰면 `check_citations()` 의
+  범위가 `1..len(sources)` 로 **넓어져 범위 밖 인용을 놓치고**, 화면 출처 목록도 모델이
+  안 본 청크를 보여준다. 예산을 켜려면 `AgentState` 에 «보여준 목록» 칸을 더하는 것이
+  선결이다 — **「죽은 인자를 살리자」는 제안을 그 칸 없이 받으면 안 된다**
+- **화면 재시도 줄에서 `answered` 를 빼지 않는다.** *"실패 사유만 보여주면 된다"* 가
+  그럴듯한데, `count > 0` 이면서 `answered` 인 회차가 바로 **다시 찾아 근거를 채운 성공
+  사례**다. 빼면 실패한 재시도만 남아 루프가 손해만 보는 것처럼 읽힌다. 반대로 `count == 0`
+  을 그리자는 제안도 기각이다 — 단발과 화면상 구별할 것이 없다(6절 배지 규칙과 같다).
+  `tests/api/test_query_route.py::test_a_successful_retry_is_still_drawn` 이 막는다
+- **`query_log` 의 `generation_model` 을 «다시 계산되니 빼자» 로 지적하지 않는다.**
+  7절이 `rewritten` 에 쓴 잣대가 그대로다 — 인용 검사는 `(text, sources)` 로 언제든 다시
+  계산되지만 **모델 이름은 모델을 바꾼 뒤에 되짚을 방법이 없고**, 화면 질의의 기록은 이
+  파일 하나뿐이다. `source=` 와 같이 기본값을 안 두는 것도 유지한다
+- **`tests/api/test_query_route.py` 의 `_client()` 안 `_agent` 핀과 `offline_config` 의
+  `_agent` 핀을 지우지 않는다.** 다른 핀들과 달리 여기서 새는 것은 **과금이 아니라 경로**다
+  — `.env` 의 `AGENT_MAX_RETRIES` 한 줄이 기본 pytest 를 루프로 보내면
+  `answer_question` 을 모킹한 테스트들이 **모킹이 안 먹은 채로** 돈다
