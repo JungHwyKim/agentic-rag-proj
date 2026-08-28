@@ -18,10 +18,14 @@ import pytest
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
     DEFAULT_EVALUATOR_PROFILE,
+    DEFAULT_GENERATOR_PROFILE,
+    DEFAULT_JUDGE_PROFILE,
     DEFAULT_RERANK_PROFILE,
     DEFAULT_REWRITE_PROFILE,
     EVAL_EMBEDDINGS,
     EVAL_EVALUATORS,
+    EVAL_GENERATORS,
+    EVAL_JUDGES,
     EVAL_RERANKERS,
     EVAL_REWRITERS,
     EVAL_SETTINGS,
@@ -33,6 +37,7 @@ from rag_pipeline.config import (
     ContentRoutingConfig,
     EmbeddingConfig,
     EvaluatorConfig,
+    GenerationConfig,
     IngestConfig,
     RerankConfig,
     RetrievalConfig,
@@ -54,6 +59,7 @@ _MODELS = {
     "rerank": RerankConfig,
     "rewrite": RewriteConfig,
     "evaluator": EvaluatorConfig,
+    "generation": GenerationConfig,
 }
 
 
@@ -465,3 +471,102 @@ def test_evaluator_default_is_the_same_as_naming_it() -> None:
         eval_config(evaluator=DEFAULT_EVALUATOR_PROFILE).evaluator.model_dump()
     )
 
+
+
+# ---------------------------------------------------------------------------
+# 생성 프로필 축 — **2026-08-28 에 생겼다.** 그전까지 평가가 생성을 한 번도 안 불렀다
+# ---------------------------------------------------------------------------
+
+
+# **두 곳에 안 적는다.** 기본 프로필을 그대로 가리켜야 리포트의 `generation_profile` 과
+# 실제로 실린 설정이 갈릴 수 없다
+def test_fixed_settings_point_at_the_default_generation_profile() -> None:
+    assert EVAL_SETTINGS["generation"] is EVAL_GENERATORS[DEFAULT_GENERATOR_PROFILE]
+
+
+# 프로필도 `extra="ignore"` 를 통과하므로 오타가 조용히 무시된다. 전부 대조한다
+@pytest.mark.parametrize("profile", sorted(EVAL_GENERATORS))
+def test_every_generation_profile_key_is_a_real_field(profile: str) -> None:
+    unknown = set(EVAL_GENERATORS[profile]) - set(GenerationConfig.model_fields)
+    assert not unknown, f"생성 프로필 '{profile}' 에 실재하지 않는 설정 이름: {sorted(unknown)}"
+
+
+# 고른 프로필의 값이 실제로 객체에 실려야 한다. 이름만 맞고 안 실리면 뜻이 없다
+@pytest.mark.parametrize("profile", sorted(EVAL_GENERATORS))
+def test_named_generation_profile_actually_lands(profile: str) -> None:
+    config = eval_config(generation=profile)
+    for key, value in EVAL_GENERATORS[profile].items():
+        assert getattr(config.generation, key) == value, f"{profile}.{key}"
+
+
+# **이 축이 없으면 `answer_eval` 이 재는 답변만 `.env` 를 탄다.** 다른 여섯 축을 고정한
+# 이유가 여기서만 새는 상태가 조용히 생기는데, 그러면 같은 명령이 머신마다 다른 답변을
+# 채점한다 — 이 축을 만든 이유가 그것이다
+def test_env_cannot_move_the_generation_settings(monkeypatch) -> None:
+    monkeypatch.setenv("GENERATION_MODEL", "gpt-4o")
+    monkeypatch.setenv("GENERATION_TEMPERATURE", "1.0")
+    monkeypatch.setenv("GENERATION_TOP_K", "20")
+
+    config = eval_config()
+
+    assert config.generation.generation_model == "gpt-4.1-mini"
+    assert config.generation.generation_temperature == 0.2
+    assert config.generation.generation_top_k == 5
+
+
+# **키는 여전히 `.env` 에서 온다** — 생성은 유료 갈래뿐이라 키가 없으면 못 재는 것이지
+# 나쁘게 재는 것이 아니다. 이 파일이 일부러 고정하지 않는 둘 중 하나다
+def test_generation_key_still_comes_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    assert eval_config().generation.openai_api_key == "sk-from-env"
+
+
+# 없는 이름이면 조용히 기본값으로 안 돌아간다 — 다른 축과 같은 이유다
+def test_unknown_generation_profile_stops() -> None:
+    with pytest.raises(SystemExit) as err:
+        eval_config(generation="없는생성")
+    assert "없는생성" in str(err.value)
+    assert DEFAULT_GENERATOR_PROFILE in str(err.value)
+
+
+# 아무것도 안 주면 지금까지와 같은 실행이어야 한다
+def test_generation_default_is_the_same_as_naming_it() -> None:
+    assert eval_config().generation.model_dump() == (
+        eval_config(generation=DEFAULT_GENERATOR_PROFILE).generation.model_dump()
+    )
+
+
+# ---------------------------------------------------------------------------
+# 채점자 프로필 축 — **이것만 `eval_config()` 가 안 쓴다**
+# ---------------------------------------------------------------------------
+
+
+# 대응하는 제품 설정 클래스가 없다. 그래서 오타 방어가 `model_fields` 대조가 아니라
+# **dataclass 가 모르는 키에 `TypeError` 를 내는 것**이고, 여기서 그것을 못 박는다
+@pytest.mark.parametrize("profile", sorted(EVAL_JUDGES))
+def test_every_judge_profile_builds_a_judge_config(profile: str) -> None:
+    from evaluation.answer_eval import JudgeConfig
+
+    config = JudgeConfig(**EVAL_JUDGES[profile])
+    assert config.judge_model
+
+
+# **모든 프로필이 온도를 명시해야 한다** — `EVAL_EVALUATORS` 와 같은 함정이다.
+# dataclass 라 빠뜨리면 `TypeError` 로 죽지만, 그 사실을 여기서 이름으로도 못 박아
+# 새 프로필을 더할 때 무엇을 적어야 하는지가 테스트에 남게 한다
+@pytest.mark.parametrize("profile", sorted(EVAL_JUDGES))
+def test_every_judge_profile_pins_its_temperature(profile: str) -> None:
+    assert "judge_temperature" in EVAL_JUDGES[profile], (
+        f"채점자 프로필 '{profile}' 이 judge_temperature 를 안 박았습니다 — "
+        "gpt-5 계열이면 None 을 명시해야 하고, 아니면 재현을 위해 0.0 입니다"
+    )
+
+
+# 없는 이름이면 멈춘다
+def test_unknown_judge_profile_stops() -> None:
+    from evaluation.config import judge_profile
+
+    with pytest.raises(SystemExit) as err:
+        judge_profile("없는채점자")
+    assert "없는채점자" in str(err.value)
+    assert DEFAULT_JUDGE_PROFILE in str(err.value)

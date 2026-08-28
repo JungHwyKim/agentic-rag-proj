@@ -24,13 +24,19 @@
 - **API 키** — `.env` 에서 온다. 없으면 폴백이 돌고, 그것도 관측 대상이다
 - **`tesseract_cmd`** — 설치 경로가 머신마다 다르다
 
-## 축이 넷 있다 — 이름 붙인 프로필
+## 축이 다섯 있다 — 이름 붙인 프로필
 
-고정 중에 **네 블록만** 이름으로 갈아끼울 수 있다 — `EVAL_EMBEDDINGS` · `EVAL_RERANKERS` ·
-`EVAL_REWRITERS` · `EVAL_EVALUATORS`. 넷 다 같은 이유로 열렸다: 비교하려는 대상이
-**둘 이상 실재**하는데 `.env` 를 타게 하면 위 "왜 `.env` 를 안 타나"가 통째로 무너지기 때문이다.
+고정 중에 **다섯 블록만** 이름으로 갈아끼울 수 있다 — `EVAL_EMBEDDINGS` · `EVAL_RERANKERS` ·
+`EVAL_REWRITERS` · `EVAL_EVALUATORS` · `EVAL_GENERATORS`. 다섯 다 같은 이유로 열렸다:
+비교하려는 대상이 **둘 이상 실재**하는데 `.env` 를 타게 하면 위 "왜 `.env` 를 안 타나"가
+통째로 무너지기 때문이다.
 
-**넷의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
+**여섯째(`EVAL_JUDGES`)는 여기 있지만 `eval_config()` 가 안 쓴다** — 대응하는 제품 설정
+클래스가 없다. `evaluation/answer_eval.py` 의 답변 채점자만 읽는다. 그래도 이 파일에 두는
+이유는 나머지와 같다: **저장소에 커밋된 닫힌 집합**이어야 리포트 이름만 보고 무엇으로 잰
+수치인지 안다.
+
+**다섯의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
 
 | 축 | 기본 | 왜 |
 |---|---|---|
@@ -38,6 +44,7 @@
 | `EVAL_RERANKERS` | `off` | 켜지는 순간 질의당 LLM 호출이 2회가 된다 — 기본값이 곧 과금 여부다 |
 | `EVAL_REWRITERS` | `off` | 같은 이유다. 리랭커와 **함께 켜면 질의당 3회**가 된다 |
 | `EVAL_EVALUATORS` | `mini` | **꺼짐이 기본이 아니다.** 채점 도구는 판정이 반드시 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다 |
+| `EVAL_GENERATORS` | `prod` | **꺼짐 프로필이 없다.** 생성을 끄면 잴 대상 자체가 사라진다. 기본이 운영값 그대로인 것은 재는 것이 *운영이 내는 답변* 이어야 해서다 |
 
 **재작성 축만 가르는 것이 모델이 아니라 「합류 방식」이다**(`fuse` vs `replace`). 그렇게
 만든 것은 21회차 상한 프로브가 `replace` 를 쟀는데 7회차 로드맵이 `fuse` 였기 때문이다 —
@@ -74,6 +81,7 @@ from rag_pipeline.config import (
     ContentRoutingConfig,
     EmbeddingConfig,
     EvaluatorConfig,
+    GenerationConfig,
     IndexingConfig,
     IngestConfig,
     RerankConfig,
@@ -85,16 +93,22 @@ from rag_pipeline.config import (
 __all__ = [
     "DEFAULT_EMBEDDING_PROFILE",
     "DEFAULT_EVALUATOR_PROFILE",
+    "DEFAULT_GENERATOR_PROFILE",
+    "DEFAULT_JUDGE_PROFILE",
     "DEFAULT_RERANK_PROFILE",
     "DEFAULT_REWRITE_PROFILE",
     "EVAL_EMBEDDINGS",
     "EVAL_EVALUATORS",
+    "EVAL_GENERATORS",
+    "EVAL_JUDGES",
     "EVAL_RERANKERS",
     "EVAL_REWRITERS",
     "EVAL_SETTINGS",
     "embedding_profile",
     "eval_config",
     "evaluator_profile",
+    "generation_profile",
+    "judge_profile",
     "rerank_profile",
     "rewrite_profile",
 ]
@@ -355,6 +369,59 @@ EVAL_EVALUATORS: dict[str, dict[str, Any]] = {
 # 아무것도 안 주면 이것. 지금까지의 모든 혼동행렬이 이 프로필로 나왔다
 DEFAULT_EVALUATOR_PROFILE = "mini"
 
+
+# 갈아끼울 수 있는 생성 설정들. **이 축은 2026-08-28 에 처음 생겼다** — 그전까지 평가가
+# 생성을 한 번도 안 불러서(`run_eval` 은 순위만, `verdicts` 는 판정만 잰다) 고정할 대상이
+# 아예 없었다. `evaluation/answer_eval.py` 가 그 축의 첫 소비자다.
+#
+# **없으면 이 축에서만 `.env` 가 이긴다.** `IngestConfig.generation` 은 lazy 프로퍼티라
+# 안 덮으면 `GenerationConfig()` 가 개발자 `.env` 를 읽는다 — 모듈 docstring 의 "왜 `.env` 를
+# 안 타나"가 다른 여섯 축에서만 참이고 여기서만 거짓인 상태가 **에러 없이** 생긴다.
+#
+# **기본 프로필이 운영값 그대로인 것이 의도다.** 재현성을 위해 `temperature=0` 으로 내리고
+# 싶어지는데, 그러면 재는 것이 *운영이 내는 답변* 이 아니게 된다. 재현은 온도가 아니라
+# **원자료 보존**으로 얻는다 — `answer_eval` 이 답변 원문을 리포트에 실어, 채점 규칙이
+# 바뀌어도 유료 재실행 없이 다시 먹일 수 있다(30회차가 `retry_diff` 에서 밟은 길이다).
+EVAL_GENERATORS: dict[str, dict[str, Any]] = {
+    # `.env` 와 코드 기본값이 지금 둘 다 이 값이다. **운영이 내는 답변을 재는 것이 목적**이라
+    # 일부러 같게 둔다 — 여기를 흔들면 잰 것이 운영 답변이 아니게 된다
+    "prod": {
+        "generation_model": "gpt-4.1-mini",
+        "generation_max_tokens": 1024,
+        "generation_temperature": 0.2,
+        "generation_top_k": 5,
+    },
+}
+
+# 아무것도 안 주면 이것. **꺼짐 프로필이 없다** — 생성을 끄면 잴 대상 자체가 없어져,
+# 리랭커·재작성처럼 `off` 를 두는 것이 뜻이 없다(`EVAL_EVALUATORS` 와 같은 자리다)
+DEFAULT_GENERATOR_PROFILE = "prod"
+
+
+# 갈아끼울 수 있는 **답변 채점자** 설정들. 앞의 다섯과 모양은 같은데 **한 가지가 다르다** —
+# `eval_config()` 가 이것을 안 쓴다. 대응하는 제품 설정 클래스가 없기 때문이고, 그것이
+# 맞다: 이 판정자는 제품 경로에 없는 `evaluation/` 전용 도구다.
+#
+# **그래서 오타를 막는 방법도 다르다.** 다른 축은 pydantic 이 `extra="ignore"` 라 이름 대조
+# 테스트가 따로 필요한데, 이쪽은 `answer_eval.JudgeConfig` 가 **dataclass** 라 모르는 키가
+# 오면 `TypeError` 로 그 자리에서 죽는다 — 조용히 안 먹는 실패 모양이 원리적으로 없다.
+#
+# **기본이 꺼짐이 아닌 것은 `EVAL_EVALUATORS` 와 같은 이유다** — 채점 도구는 판정이 반드시
+# 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다.
+#
+# **gpt-5 계열을 기본에 두지 않는다** — `temperature` 를 못 고정해 잰 수치가 재현되지
+# 않는다(2026-08-27 실측). 더할 때는 `judge_temperature: None` 을 함께 적는다
+EVAL_JUDGES: dict[str, dict[str, Any]] = {
+    "mini": {
+        "judge_model": "gpt-4.1-mini",
+        "judge_temperature": 0.0,
+        "judge_max_tokens": 512,
+    },
+}
+
+# 아무것도 안 주면 이것
+DEFAULT_JUDGE_PROFILE = "mini"
+
 # 평가가 고정하는 값 전부. **`baseline.json` 의 `_meta` 가 이것을 그대로 싣는다** —
 # 기준선 파일만 보고도 어떤 설정으로 잰 값인지 알 수 있어야 하고, 두 곳에 손으로 적으면
 # 한쪽이 조용히 낡는다. 여기 없는 것(API 키·tesseract 경로)은 일부러 뺀 것이다
@@ -415,6 +482,10 @@ EVAL_SETTINGS: dict[str, dict[str, Any]] = {
     # 판정이 **반드시 돌아야** 하는 자리라 리랭커(`off` 가 기본)와 축이 다르다.
     # **앞의 둘과 같은 이유로 두 곳에 안 적는다** — 기본 프로필을 그대로 가리킨다
     "evaluator": EVAL_EVALUATORS[DEFAULT_EVALUATOR_PROFILE],
+    # 생성 설정. **여기 없으면 `answer_eval` 이 재는 답변이 개발자 `.env` 를 탄다** —
+    # 다른 여섯 축을 고정한 이유가 이 축에서만 새는 상태가 조용히 생긴다.
+    # 같은 규칙으로 기본 프로필을 그대로 가리킨다
+    "generation": EVAL_GENERATORS[DEFAULT_GENERATOR_PROFILE],
 }
 
 
@@ -470,6 +541,27 @@ def evaluator_profile(name: str) -> dict[str, Any]:
     return EVAL_EVALUATORS[name]
 
 
+# 이름으로 생성 프로필을 찾는다. **앞의 넷과 같은 이유로 같은 모양이다**
+def generation_profile(name: str) -> dict[str, Any]:
+    if name not in EVAL_GENERATORS:
+        raise SystemExit(
+            f"'{name}' 은 없는 생성 프로필입니다. "
+            f"있는 것: {sorted(EVAL_GENERATORS)} (evaluation/config.py 의 EVAL_GENERATORS)"
+        )
+    return EVAL_GENERATORS[name]
+
+
+# 이름으로 답변 채점자 프로필을 찾는다. **이것만 `eval_config()` 가 안 쓴다** —
+# `answer_eval.JudgeConfig` 가 직접 받는다 (위 EVAL_JUDGES 주석)
+def judge_profile(name: str) -> dict[str, Any]:
+    if name not in EVAL_JUDGES:
+        raise SystemExit(
+            f"'{name}' 은 없는 채점자 프로필입니다. "
+            f"있는 것: {sorted(EVAL_JUDGES)} (evaluation/config.py 의 EVAL_JUDGES)"
+        )
+    return EVAL_JUDGES[name]
+
+
 # 평가용 IngestConfig. lazy 프로퍼티를 명시 값으로 덮어 `.env` 가 결과를 못 흔들게 한다.
 # `qdrant_path` 는 색인하는 쪽만 넘긴다 — 로컬 파일 모드가 배타 잠금을 걸어 실행마다 갈라야 한다.
 # `embedding`·`rerank`·`evaluator` 가 갈아끼울 수 있는 세 축이고 나머지는 고정이다
@@ -481,6 +573,7 @@ def eval_config(
     rerank: str = DEFAULT_RERANK_PROFILE,
     rewrite: str = DEFAULT_REWRITE_PROFILE,
     evaluator: str = DEFAULT_EVALUATOR_PROFILE,
+    generation: str = DEFAULT_GENERATOR_PROFILE,
 ) -> IngestConfig:
     config = IngestConfig(**EVAL_SETTINGS["ingest"])
 
@@ -500,6 +593,10 @@ def eval_config(
     # 판정도 같은 이유로 고정한다. **키는 여기서도 안 지운다** — 판정은 유료 갈래뿐이라
     # 키가 없으면 `verdict="failed"` 가 나오고, 그것은 채점 도구의 실패 열에 그대로 보인다
     object.__setattr__(config, "_evaluator", EvaluatorConfig(**evaluator_profile(evaluator)))
+    # 생성도 같은 이유로 고정한다. **키는 여기서도 안 지운다** — 생성은 유료 갈래뿐이라
+    # 키가 없으면 `GenerationError` 가 올라오고, 그것은 안 재진 것이지 나쁘게 재진 것이 아니다.
+    # **이 줄이 없으면 `answer_eval` 이 재는 답변만 `.env` 를 탄다** (EVAL_GENERATORS 주석)
+    object.__setattr__(config, "_generation", GenerationConfig(**generation_profile(generation)))
 
     if qdrant_path is not None:
         object.__setattr__(config, "_indexing", IndexingConfig(qdrant_path=qdrant_path))
