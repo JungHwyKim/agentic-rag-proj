@@ -220,7 +220,7 @@ def test_control_needs_different_evidence() -> None:
 # **순서만 다른 같은 근거도 대조군이 못 된다.** 한때 이 테스트는 반대를 못 박고 있었고
 # 이유는 *"프롬프트의 번호가 순서에서 나와 모델이 다른 것을 본다"* 였다 — 그 문장은 맞지만
 # 이 자리의 계약이 아니다. 대조군은 **빌린 근거로는 뒷받침될 수 없어야** 성립하는데,
-# 순서를 바꾼 같은 근거는 여전히 답변을 뒷받침한다. 41회차 실측에서 뒤집었다
+# 순서를 바꾼 같은 근거는 여전히 답변을 뒷받침한다. 43회차 실측에서 뒤집었다
 def test_control_rejects_the_same_chunks_in_a_different_order() -> None:
     rows = [row("a", "문서1", ["c1", "c2"]), row("b", "문서2", ["c2", "c1"])]
     assert control_partner(0, rows) is None
@@ -245,7 +245,7 @@ def test_an_abstained_row_is_not_counted_as_unpaired() -> None:
     assert summarize([abstained])["shuffled_control"]["unpaired"] == 0
 
 
-# **겹침 하나로 막는다 — 이것이 41회차가 실제로 밟은 자리다.** `ai-01` 의 대조군이 빌린 다섯
+# **겹침 하나로 막는다 — 이것이 43회차가 실제로 밟은 자리다.** `ai-01` 의 대조군이 빌린 다섯
 # 청크 중 하나가 답변의 이메일 주소를 담은 바로 그 청크였고, 채점자는 옳게 «뒷받침된다» 고
 # 했는데 게이트만 무효를 외쳤다. 검색은 문서를 안 가려 오므로 **질의의 `source_doc` 이 다르다는
 # 것이 근거의 출처를 전혀 보장하지 않는다** — 실측 60건 중 3건이 이 상태였다
@@ -577,7 +577,7 @@ def test_the_rerank_profile_splits_the_report() -> None:
 
 
 # **`top_k` 는 프로필이 아닌데도 실행을 가른다** — 생성이 보는 근거 수가 곧 그 값이라
-# 5와 10은 다른 답변을 낳는다. 41회차가 같은 라벨로 두 짝을 돌리며 이 자리를 밟았다
+# 5와 10은 다른 답변을 낳는다. 43회차가 같은 라벨로 두 짝을 돌리며 이 자리를 밟았다
 def test_the_top_k_splits_the_report() -> None:
     common = {"label": "L", "judge": "mini", "rerank": "cohere", "rewrite": "off", "fmt": "pdf"}
 

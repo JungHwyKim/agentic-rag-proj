@@ -266,7 +266,7 @@ def control_partner(index: int, rows: list[AnswerRow]) -> AnswerRow | None:
     fallback: AnswerRow | None = None
     for step in range(1, total):
         other = rows[(index + step) % total]
-        # **완전 일치가 아니라 겹침 하나로 막는다.** 41회차가 실측으로 밟았다 — `ai-01` 의
+        # **완전 일치가 아니라 겹침 하나로 막는다.** 43회차가 실측으로 밟았다 — `ai-01` 의
         # 대조군이 `sch-01` 의 근거를 빌렸는데 그 다섯 중 하나가 **답변의 이메일 주소를 담은
         # 바로 그 청크**였다. 채점자는 옳게 «뒷받침된다» 고 했고 게이트만 무효를 외쳤다.
         # 검색은 문서를 안 가려 오므로 «질의의 `source_doc` 이 다르다» 가 근거의 출처를 전혀
@@ -557,7 +557,7 @@ def summarize(rows: list[AnswerRow]) -> dict[str, Any]:
         "positive": bucket([row for row in rows if row.answerable]),
         "shuffled_control": {
             "judged": len(controls),
-            # **짝을 못 찾아 대조군이 아예 없는 행. 제3의 상태다** — 41회차가 짝 거르기를
+            # **짝을 못 찾아 대조군이 아예 없는 행. 제3의 상태다** — 43회차가 짝 거르기를
             # «완전 일치» 에서 «하나라도 겹치면» 으로 넓히면서 이 자리가 실재하게 됐다.
             # 안 세면 대조군이 줄어든 것이 «supported 0» 으로 보여 **표본 부족이 실력으로
             # 읽힌다** — Cohere 한도 초과가 품질로 읽힌 그 사고와 같은 모양이다.
@@ -713,7 +713,7 @@ def score_answers(
 # 빼 두었더니, 같은 라벨에 `--rewrite fuse` 로 한 번 더 돌리면 본판을 **에러 없이 덮었다**.
 # `verdicts.py` 가 13회차에 실제로 잃은 사고(luna v1 이 v3 표를 덮었다)와 같은 모양이다.
 #
-# **`rerank` 와 `top_k` 는 41회차에 같은 이유로 들어왔다.** 그 판이 같은 라벨·같은 채점자로
+# **`rerank` 와 `top_k` 는 43회차에 같은 이유로 들어왔다.** 그 판이 같은 라벨·같은 채점자로
 # `--top-k` 만 5→10 으로 바꿔 두 짝을 돌리는데, 안 담으면 **뒤 짝이 앞 짝을 에러 없이 덮는다**.
 # `--tag k5` 로 손으로 막을 수도 있었지만, 그것을 기각하는 문장이 바로 아래에 이미 있었다.
 #
