@@ -43,6 +43,16 @@
 같은 수를 낸다. `Answer.verdict`·`Answer.rewrite` 를 필드로 실은 것과 같은 잣대이고,
 **필드여야 LangGraph 경로에서도 같은 자리에서 읽힌다**(그래프 노드는 상태를 주고받는다).
 
+## `evidence_unchanged_at` 은 접는 칸이 아니라 **세는 칸**이다
+
+재시도가 질의를 바꿨는데 검색이 **글자 그대로 같은 근거**를 물어온 회차가 있다(실측 6회 중
+2회). 그 회차를 접을지는 **아직 안 정했다** — 원리적으로 중복인 것은 판정 하나이고 검색까지
+무의미하지는 않기 때문이다(`agent/loop.py`). 그래서 이 칸은 흐름을 안 바꾸고 **세기만** 한다.
+
+**`warnings: list[str]` 이 아닌 이유**는 목적이 세는 것이어서다. 문장을 파싱해야 세지는 채널로
+두면 그 목적이 약해지고, 일반 채널을 먼저 만들면 관계없는 것이 섞여 들어와 **그 수가 더 이상
+그 수가 아니게** 된다. 소비자가 둘이 될 때 채널로 넓힌다.
+
 ## `ToolCallLog` 가 요약 문자열인 이유
 
 청크 전문을 실으면 **한 질의의 상태가 코퍼스만큼 커진다.** 이 로그의 소비자는 *무슨 도구가
@@ -137,3 +147,7 @@ class AgentState(BaseModel):
 
     # 루프가 멈춘 이유. 아직 안 멈췄으면 None (모듈 docstring 참고)
     stop_reason: StopReason | None = None
+
+    # 앞 회차와 근거가 글자 그대로 같았던 재시도의 `retry_count`. **흐름을 안 바꾼다**
+    # (모듈 docstring 참고)
+    evidence_unchanged_at: list[int] = Field(default_factory=list)

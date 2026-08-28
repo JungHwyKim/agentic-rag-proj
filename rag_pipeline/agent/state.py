@@ -27,12 +27,21 @@ Router 는 *다시 찾아야 하나* 를 `searched_query` 와 `current_query` �
 Checkpoint A 를 지으며 실제로 드러난 자리다.
 
 그래서 축을 *찾았나* 가 아니라 ***이 질의로 시도했나*** 로 두고, 그 표시는 검색 단계가 직접
-남긴다(`agent/loop.py:_step_retrieve`). 도구 종류로 판정하는 안은 기각했다 — `state.py` 가
+남긴다(`agent/loop.py:step_retrieve`). 도구 종류로 판정하는 안은 기각했다 — `state.py` 가
 `RetrieverTool` 을 알게 되고, 가짜 도구로 루프를 재는 테스트가 통째로 막힌다.
 
 **클립 전 원본을 싣는다.** `ToolCallLog.input_summary` 로 대신하면 앞 120자가 같은 긴 질의
 둘이 **조용히 같아진다** — 요약은 사람이 읽는 것이고 이 칸은 코드가 읽는 것이라, 한 값으로
 겸하면 자르는 길이가 곧 판정 기준이 된다.
+
+## `mark_evidence_unchanged()` 도 흐름을 안 바꾼다
+
+바로 위 표시와 **모양은 같고 뜻이 반대다.** `mark_searched` 는 *이 질의로 시도했나* 를 남겨
+Router 가 읽지만, 이쪽은 **아무도 안 읽는다** — 재시도가 근거를 하나도 안 바꾼 회차를 세어
+둘 뿐이고, 접을지는 몇 판 모아 본 뒤에 정한다(`agent/loop.py`).
+
+그래서 `stop_reason` 을 안 건드린다. 표시가 곧 종료 사유가 되면 *세는 것* 과 *접는 것* 이
+한 칸에 붙어, 세어 보고 안 접기로 결정하는 길이 없어진다.
 
 ## `start_retry()` 가 낡은 판정을 함께 지운다
 
@@ -65,6 +74,7 @@ from rag_pipeline.schemas.answer import EvaluatorVerdict
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 __all__ = [
+    "mark_evidence_unchanged",
     "mark_searched",
     "with_stop_reason",
     "new_state",
@@ -116,6 +126,14 @@ def record_tool_call(
 # (모듈 docstring 참고). 클립 전 원본을 싣는다
 def mark_searched(state: AgentState, query: str) -> AgentState:
     return state.model_copy(update={"searched_query": query})
+
+
+# 이 재시도가 앞 회차와 **같은 근거**를 물어왔다고 세어 둔다. **접지 않는다**
+# (모듈 docstring 참고). 판정은 부르는 쪽이 그대로 돌린다
+def mark_evidence_unchanged(state: AgentState, retry_count: int) -> AgentState:
+    return state.model_copy(
+        update={"evidence_unchanged_at": [*state.evidence_unchanged_at, retry_count]}
+    )
 
 
 # 판정을 싣는다. **답변을 바꾸지 않는다** — 그것은 Router 가 읽고 정할 일이다

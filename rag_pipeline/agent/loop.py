@@ -40,6 +40,34 @@ PRF 다(`retrieval/rewrite.py`). 그래서 루프가 재작성기를 **다시 �
 같은 결과라 재시도가 아무것도 안 바꾸기 때문이다 — `router.py` 가 0건에서 `retrieve` 를
 안 되고르는 것과 같은 이유다.
 
+## 근거가 안 바뀐 재시도를 **센다** — 접지는 않는다
+
+재작성이 어절 하나만 바꾸면(`무엇입니까?` → `무엇인지 알려주시기 바랍니다.`) 재시도가 질의를
+바꿨는데 검색 결과가 **글자 그대로 같다.** 실측으로 재시도 6회 중 2회이고 색인을 309 →
+721청크로 넓힌 뒤에도 난다(`verify_log/2026-08-28-재시도루프-langgraph.md` 3·3-B절).
+
+**그런데 접는 것은 증명이 아니라 추정이다.** 그 회차에서 원리적으로 중복인 것은 **판정 하나**다
+— 판정자를 `original_query` 로 부르므로 근거가 같으면 verdict 도 같다(실측으로 그 회차가 판정
+캐시 히트였다 = 이미 무료다). **검색까지 무의미하지는 않다**: 다음 회차의 재작성은
+`(그 질의, 그 pool)` 을 새 키로 부르므로 **또 다른 질의가 나올 수 있고** 그것이 무엇을 찾을지는
+모른다. 그래서 지금은 세기만 하고, *접었다면 놓쳤을 회차가 무엇을 찾았나* 를 몇 판 모아 본 뒤
+규칙을 정한다.
+
+판정 넷.
+
+- **순서까지 견준다.** `build_evidence_block()` 이 근거에 번호를 매겨 **순서가 프롬프트를
+  가른다** — 집합으로 보면 실제로 다른 프롬프트를 같다고 센다
+- **도구가 실패한 회차는 안 센다.** `record_tool_call()` 이 실패 시 `retrieved_chunks` 를 아예
+  안 건드려 앞뒤가 **자동으로** 같아진다. 세면 한 칸이 *같은 것을 물어왔다* 와 *검색이 죽었다*
+  두 가지를 뜻하게 되는데, 뒤엣것은 `ToolCallLog.output_summary` 가 이미 적는다.
+  **`mark_searched` 가 실패해도 표시하는 것의 거울상이다** — 저기는 축이 *이 질의로 시도했나*
+  라 실패도 시도이고, 여기는 축이 *이 검색이 근거를 바꿨나* 라 실패는 잴 대상이 아니다
+- **첫 검색(`retry_count == 0`)은 안 센다.** 견줄 앞 회차가 없다
+- **판정은 그대로 돌린다.** 건너뛰면 `start_retry()` 가 지운 verdict 자리가 빈 채 남아
+  화면·로그가 *판정을 안 돌렸다* 와 못 갈린다
+
+**빈 목록 → 빈 목록도 센다** — 검색이 성공했는데 둘 다 0건이면 그것이 곧 같은 근거다.
+
 ## 안 멈추는 것을 무엇이 막나 — 상수가 아니라 구조다
 
 바퀴마다 상태가 반드시 전진한다. `retrieve` 는 `searched_query` 를(**도구가 실패해도**),
@@ -65,6 +93,7 @@ from dataclasses import dataclass
 from rag_pipeline.agent.context import build_context
 from rag_pipeline.agent.router import decide_next_action
 from rag_pipeline.agent.state import (
+    mark_evidence_unchanged,
     mark_searched,
     new_state,
     record_tool_call,
@@ -115,11 +144,19 @@ def step_budget(max_retries: int) -> int:
     return 2 * max(max_retries, 0) + 3
 
 
-# 검색 한 번 + 판정 한 번. **표시는 성공·실패를 안 가린다** (state.py 참고)
+# 검색 한 번 + 판정 한 번. **검색 표시는 성공·실패를 안 가린다** (state.py 참고)
 def step_retrieve(state: AgentState, deps: LoopDeps) -> AgentState:
     tool_input = ToolInput(query=state.current_query)
+    # `record_tool_call()` 이 결과를 갈아끼우므로 **그 직전**이 앞 회차 근거다.
+    # 그래서 앞 회차를 담을 칸이 상태에 안 는다 (모듈 docstring 참고)
+    before = _evidence_of(state)
     output = deps.retriever.run(tool_input)
     state = mark_searched(record_tool_call(state, deps.retriever, tool_input, output), tool_input.query)
+
+    # 근거가 그대로인 재시도를 **세기만 한다** (모듈 docstring 참고).
+    # `output.success` 를 함께 보는 것이 실패한 회차를 빼는 자리다
+    if output.success and state.retry_count > 0 and _evidence_of(state) == before:
+        state = mark_evidence_unchanged(state, state.retry_count)
 
     if deps.evaluator is None:
         return state
@@ -161,6 +198,11 @@ def step_for(action: NextAction) -> Callable[[AgentState, LoopDeps], AgentState]
     if step is None:
         raise RuntimeError(f"재시도 루프가 다룰 수 없는 행동입니다: {action}")
     return step
+
+
+# 근거를 견줄 모양으로. **순서까지 담는다** (모듈 docstring 참고)
+def _evidence_of(state: AgentState) -> list[str]:
+    return [chunk.chunk_id for chunk in state.retrieved_chunks]
 
 
 # 승급할 질의. 없거나 지금 것과 같으면 None — 그것이 곧 "더 갈 수 없다"다

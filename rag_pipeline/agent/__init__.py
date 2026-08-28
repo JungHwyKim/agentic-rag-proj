@@ -46,6 +46,7 @@ from rag_pipeline.agent.context import build_context, select_within_budget
 from rag_pipeline.agent.loop import LoopDeps, run_agent_loop, step_budget
 from rag_pipeline.agent.router import decide_next_action
 from rag_pipeline.agent.state import (
+    mark_evidence_unchanged,
     mark_searched,
     new_state,
     record_tool_call,
@@ -65,6 +66,7 @@ __all__ = [
     "WebSearchTool",
     "build_context",
     "decide_next_action",
+    "mark_evidence_unchanged",
     "mark_searched",
     "new_state",
     "record_tool_call",

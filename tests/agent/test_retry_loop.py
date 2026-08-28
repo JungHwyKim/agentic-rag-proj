@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import pytest
-from _loop_stubs import QUERY, StubEvaluator, StubGenerate, StubRetriever, StubRewriter
+from _loop_stubs import QUERY, StubEvaluator, StubGenerate, StubRetriever, StubRewriter, chunk
 
 from rag_pipeline.agent import loop as loop_module
 from rag_pipeline.agent.loop import run_agent_loop, step_budget
@@ -260,3 +260,83 @@ def test_a_router_that_never_finishes_raises(monkeypatch: pytest.MonkeyPatch):
 def test_unknown_action_raises():
     with pytest.raises(RuntimeError, match="다룰 수 없는 행동"):
         loop_module.step_for("web_search")
+
+
+# --- 근거가 안 바뀐 재시도를 센다 (접지는 않는다) --------------------------
+
+
+# 재작성이 질의만 바꾸고 검색이 같은 것을 물어오면 그 회차가 세어진다.
+# **그런데도 루프는 안 접는다** — 접는 것은 증명이 아니라 추정이다 (loop.py docstring 참고)
+def test_unchanged_evidence_is_counted_not_folded():
+    rewriter = StubRewriter()
+    retriever = StubRetriever(rewriter=rewriter)
+
+    state = run_agent_loop(
+        QUERY,
+        retriever=retriever,
+        evaluator=StubEvaluator("insufficient"),
+        rewriter=rewriter,
+        generate=StubGenerate(),
+    )
+
+    assert state.evidence_unchanged_at == [1, 2, 3]
+    # 접었으면 여기가 달라진다 — 재시도는 끝까지 돌고 사유도 안 바뀐다
+    assert state.retry_count == 3
+    assert state.stop_reason == "retries_exhausted"
+    assert len(retriever.queries) == 4
+
+
+# 근거가 실제로 달라진 회차는 안 세어진다
+def test_changed_evidence_is_not_counted():
+    rewriter = StubRewriter()
+    retriever = StubRetriever(
+        chunks_per_call=[[chunk("c1")], [chunk("c2")], [chunk("c3")], [chunk("c4")]],
+        rewriter=rewriter,
+    )
+
+    state = run_agent_loop(
+        QUERY,
+        retriever=retriever,
+        evaluator=StubEvaluator("insufficient"),
+        rewriter=rewriter,
+        generate=StubGenerate(),
+    )
+
+    assert state.evidence_unchanged_at == []
+    assert state.retry_count == 3
+
+
+# **도구가 실패한 회차는 안 센다.** 실패하면 `record_tool_call()` 이 결과를 아예 안 건드려
+# 앞뒤가 자동으로 같아진다 — 세면 한 칸이 *같은 것을 물어왔다* 와 *검색이 죽었다* 두 가지를
+# 뜻하게 된다 (loop.py docstring 참고). `mark_searched` 가 실패해도 표시하는 것의 거울상이다
+def test_a_failed_search_is_not_counted():
+    rewriter = StubRewriter()
+    # 1차 검색이 죽어 `note_retrieval` 이 안 돌므로 승급할 질의를 손으로 놓는다.
+    # 그래야 **실패한 채로 재시도가 한 번 돈다**
+    rewriter.last_rewritten = "다시 쓴 질의"
+    retriever = StubRetriever(fails=True)
+
+    state = run_agent_loop(
+        QUERY,
+        retriever=retriever,
+        evaluator=StubEvaluator("insufficient"),
+        rewriter=rewriter,
+        generate=StubGenerate(),
+    )
+
+    assert retriever.queries == [QUERY, "다시 쓴 질의"]
+    assert state.retry_count == 1
+    assert state.evidence_unchanged_at == []
+
+
+# 첫 검색은 안 센다 — 견줄 앞 회차가 없다
+def test_the_first_search_is_never_counted():
+    state = run_agent_loop(
+        QUERY,
+        retriever=StubRetriever(),
+        evaluator=StubEvaluator("sufficient"),
+        generate=StubGenerate(),
+    )
+
+    assert state.retry_count == 0
+    assert state.evidence_unchanged_at == []

@@ -47,6 +47,10 @@ class StubRewriter:
 
 
 # 부른 질의를 기록하는 가짜 검색 도구. 실패는 예외로 내고 `BaseTool.run()` 이 값으로 바꾼다
+#
+# **기본값은 질의와 무관하게 같은 목록을 낸다** — 실물에서도 재작성이 어투만 바꾸면 그렇게
+# 되고, 그 회차를 세는 것이 `evidence_unchanged_at` 이다. 결과가 **달라지는** 쪽을 재려면
+# `chunks_per_call` 로 회차마다 다른 목록을 준다(다 쓰면 마지막 것을 되풀이한다)
 class StubRetriever(BaseTool):
     name = "retriever"
     description = "테스트용"
@@ -55,10 +59,12 @@ class StubRetriever(BaseTool):
         self,
         *,
         chunks: list[RetrievedChunk] | None = None,
+        chunks_per_call: list[list[RetrievedChunk]] | None = None,
         rewriter: StubRewriter | None = None,
         fails: bool = False,
     ) -> None:
         self._chunks = [chunk()] if chunks is None else chunks
+        self._chunks_per_call = chunks_per_call
         self._rewriter = rewriter
         self._fails = fails
         self.queries: list[str] = []
@@ -70,7 +76,14 @@ class StubRetriever(BaseTool):
             raise RuntimeError("저장소 응답 없음")
         if self._rewriter is not None:
             self._rewriter.note_retrieval(tool_input.query)
-        return ToolOutput(success=True, data=list(self._chunks))
+        return ToolOutput(success=True, data=list(self._chunks_for_this_call()))
+
+    # 이번 회차가 낼 목록. `chunks_per_call` 을 안 주면 늘 같은 것이다
+    def _chunks_for_this_call(self) -> list[RetrievedChunk]:
+        if self._chunks_per_call is None:
+            return self._chunks
+        index = min(len(self.queries) - 1, len(self._chunks_per_call) - 1)
+        return self._chunks_per_call[index]
 
 
 # 정해둔 판정을 순서대로 낸다. 다 쓰면 마지막 것을 되풀이한다
