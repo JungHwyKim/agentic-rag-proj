@@ -65,12 +65,12 @@ from rag_pipeline.retrieval.reranker.base import (
 )
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["CohereReranker"]
+__all__ = ["API_VERSION", "CohereReranker"]
 
 # 호출 규약이 바뀌면 올린다(모델·파라미터가 아니라 **우리가 보내는 모양**이 바뀔 때).
-# `openai_llm._PROMPT_VERSION` · `local_ce._SCORING_VERSION` 과 같은 자리다 —
+# `openai_llm.PROMPT_VERSION` · `local_ce.SCORING_VERSION` 과 같은 자리다 —
 # 캐시가 옛 점수를 새 규약의 답인 척 돌려주는 것을 막는다
-_API_VERSION = "v1"
+API_VERSION = "v1"
 
 
 # Cohere 클라이언트를 만든다. 키가 없거나 SDK 가 없으면 None.
@@ -141,7 +141,7 @@ class CohereReranker:
     # 캐시 salt. 규칙은 base 가 정한다
     @property
     def _salt(self) -> str:
-        return rerank_cache_salt_for(self._config, prompt_version=_API_VERSION)
+        return rerank_cache_salt_for(self._config, prompt_version=API_VERSION)
 
     # 후보를 점수 순으로. **예외를 안 던진다** — 실패는 RRF 순서로 내려가는 폴백이다
     def rerank(self, query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:

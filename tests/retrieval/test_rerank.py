@@ -734,3 +734,24 @@ def test_cohere_cache_does_not_collide_with_other_providers(tmp_path):
         for provider in ("openai", "local", "cohere")
     }
     assert len(set(salts.values())) == 3
+
+
+# **객체 없이 만든 salt 가 구현체의 것과 글자까지 같아야 한다.** `.cache/rerank` 를 밖에서
+# 읽는 도구(`evaluation/rerank_scores.py`)가 이 함수를 쓰는데, 어긋나면 에러가 아니라
+# **없는 키를 찾아 「캐시 미스」로 보인다** — 그 도구는 그것을 *그 실행이 캐시에 없다* 로 읽는다.
+# 네 번째 구현체가 생겼는데 표만 안 고치면 여기서 터진다
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("local", "BAAI/bge-reranker-v2-m3"),
+        ("cohere", "rerank-v3.5"),
+        ("openai", "gpt-4.1-mini"),
+    ],
+)
+def test_salt_helper_matches_each_implementation(tmp_path, provider, model):
+    from rag_pipeline.retrieval.reranker import rerank_cache_salt
+
+    config = RerankConfig(
+        rerank_provider=provider, rerank_model=model, rerank_cache_dir=tmp_path
+    )
+    assert rerank_cache_salt(config) == get_reranker(config)._salt

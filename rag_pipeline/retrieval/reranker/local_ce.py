@@ -50,11 +50,11 @@ from rag_pipeline.retrieval.reranker.base import (
 from rag_pipeline.runtime import apply_torch_threads
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["LocalCrossEncoderReranker"]
+__all__ = ["SCORING_VERSION", "LocalCrossEncoderReranker"]
 
-# 채점 규약이 바뀌면 올린다. OpenAI 갈래의 `_PROMPT_VERSION` 과 같은 자리다 —
+# 채점 규약이 바뀌면 올린다. OpenAI 갈래의 `PROMPT_VERSION` 과 같은 자리다 —
 # 캐시가 옛 점수를 새 규약의 답인 척 돌려주는 것을 막는다
-_SCORING_VERSION = "v1"
+SCORING_VERSION = "v1"
 
 
 # cross-encoder 를 올린다. 실패하면 None.
@@ -108,7 +108,7 @@ class LocalCrossEncoderReranker:
     # 캐시 salt. 규칙은 base 가 정한다
     @property
     def _salt(self) -> str:
-        return rerank_cache_salt_for(self._config, prompt_version=_SCORING_VERSION)
+        return rerank_cache_salt_for(self._config, prompt_version=SCORING_VERSION)
 
     # 후보를 점수 순으로. **예외를 안 던진다** — 실패는 RRF 순서로 내려가는 폴백이다
     def rerank(self, query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:

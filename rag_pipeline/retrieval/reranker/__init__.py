@@ -33,13 +33,21 @@
 from __future__ import annotations
 
 from rag_pipeline.config import RerankConfig
-from rag_pipeline.retrieval.reranker.base import Reranker, RerankUsage
-from rag_pipeline.retrieval.reranker.cohere_api import CohereReranker
-from rag_pipeline.retrieval.reranker.local_ce import LocalCrossEncoderReranker
-from rag_pipeline.retrieval.reranker.openai_llm import OpenAILLMReranker
+from rag_pipeline.retrieval.reranker.base import (
+    Reranker,
+    RerankUsage,
+    rerank_cache_salt_for,
+)
+from rag_pipeline.retrieval.reranker.cohere_api import API_VERSION, CohereReranker
+from rag_pipeline.retrieval.reranker.local_ce import (
+    SCORING_VERSION,
+    LocalCrossEncoderReranker,
+)
+from rag_pipeline.retrieval.reranker.openai_llm import PROMPT_VERSION, OpenAILLMReranker
 
 __all__ = [
     "CohereReranker",
+    "rerank_cache_salt",
     "LocalCrossEncoderReranker",
     "OpenAILLMReranker",
     "RerankUsage",
@@ -64,3 +72,23 @@ def get_reranker(config: RerankConfig | None = None) -> Reranker | None:
     if cfg.rerank_provider == "cohere":
         return CohereReranker(cfg)
     return OpenAILLMReranker(cfg)
+
+
+# 캐시 salt 를 **리랭커 객체 없이** 만든다. `.cache/rerank` 를 밖에서 읽는 도구가 쓰는
+# 자리다(`evaluation/rerank_scores.py`) — 유료 갈래는 객체를 만드는 것만으로는 과금이
+# 안 되지만, 객체를 안 만들면 **과금이 구조적으로 불가능**해진다
+#
+# **분기가 `get_reranker()` 와 같은 모양인 것이 요점이다.** 갈리는 것은 `prompt_version`
+# 하나뿐인데 그 값이 구현체마다 다른 모듈 상수라, 부르는 쪽이 다시 적으면 `base.py` 가
+# *"구현체마다 다시 짜면 한쪽이 빠뜨려도 아무 에러가 안 난다"* 로 경계한 그 상태가 된다.
+# 여기서도 `else` 를 유료 갈래로 두지 않는다 — 오타 난 provider 가 조용히 그쪽 키를 읽는다
+#
+# **어긋나도 에러가 아니라 「캐시 미스」로 보인다** — 없는 키를 찾을 뿐이라 도구는 그것을
+# *그 실행이 캐시에 없다* 로 읽는다. 그래서 `tests/retrieval/test_rerank.py` 가 세 갈래
+# 모두에서 구현체의 `_salt` 와 글자까지 대조한다
+def rerank_cache_salt(config: RerankConfig) -> str:
+    if config.rerank_provider == "local":
+        return rerank_cache_salt_for(config, prompt_version=SCORING_VERSION)
+    if config.rerank_provider == "cohere":
+        return rerank_cache_salt_for(config, prompt_version=API_VERSION)
+    return rerank_cache_salt_for(config, prompt_version=PROMPT_VERSION)

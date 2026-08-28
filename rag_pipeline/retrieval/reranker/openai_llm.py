@@ -29,7 +29,7 @@ listwise 는 호출 1회다. 후보 50 × 최대 1200자라 입력이 최대 6�
 
 ## 프롬프트를 고치면 캐시가 갈린다
 
-`_PROMPT_VERSION` 이 캐시 salt 에 들어간다. 고칠 때 함께 올리지 않으면 **옛 응답이 새
+`PROMPT_VERSION` 이 캐시 salt 에 들어간다. 고칠 때 함께 올리지 않으면 **옛 응답이 새
 프롬프트의 답인 척** 돌아오는데, 에러가 아니라 수치로만 드러난다(`표-경로.md` 14회차).
 """
 
@@ -48,10 +48,10 @@ from rag_pipeline.retrieval.reranker.base import (
 )
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["OpenAILLMReranker"]
+__all__ = ["PROMPT_VERSION", "OpenAILLMReranker"]
 
 # 프롬프트를 고치면 **반드시 올린다** (모듈 docstring 참고)
-_PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v1"
 
 _SYSTEM = (
     "당신은 한국어 공문서 검색 결과를 다시 정렬하는 채점자입니다. "
@@ -145,7 +145,7 @@ class OpenAILLMReranker:
     # 캐시 salt. 규칙은 base 가 정한다 — 구현체가 다시 짜면 한쪽이 빠뜨려도 에러가 안 난다
     @property
     def _salt(self) -> str:
-        return rerank_cache_salt_for(self._config, prompt_version=_PROMPT_VERSION)
+        return rerank_cache_salt_for(self._config, prompt_version=PROMPT_VERSION)
 
     # 후보를 점수 순으로. **예외를 안 던진다** — 실패는 RRF 순서로 내려가는 폴백이다
     def rerank(self, query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
