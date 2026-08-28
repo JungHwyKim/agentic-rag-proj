@@ -116,6 +116,22 @@ def test_lifespan_skips_warmup_when_disabled(mocker, monkeypatch) -> None:
     warm.assert_not_called()
 
 
+# **`.env` 가 켜 놓아도 이 폴더에서는 안 뜬다.** 위 두 검사는 환경변수를 명시로 덮어
+# 개발자 `.env` 를 안 타는데, `test_shadow_routes.py` 처럼 **워밍업을 모르는** 테스트는
+# 안 덮는다 — 거기서 배경 스레드가 KURE 를 올린다(2026-08-28 실측 13.61초).
+# `conftest.py` 의 autouse 핀이 그것을 막고, 이 테스트가 그 핀이 살아 있는지 본다.
+#
+# **`warm_up` 을 모킹하지 않는 것이 요점이다** — 모킹하면 «핀이 없어도» 통과한다
+def test_warmup_does_not_start_in_this_folder_even_if_env_enables_it(mocker) -> None:
+    mocker.patch(
+        "backend.app.main.get_store",
+        return_value=SimpleNamespace(close=lambda: None, sibling_for=lambda _n: None),
+    )
+
+    with TestClient(create_app()):
+        assert not [t for t in threading.enumerate() if t.name == "warmup"]
+
+
 # --- 3. 워밍업이 실제로 쓰는가 ---
 
 

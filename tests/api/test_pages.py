@@ -354,3 +354,24 @@ def test_sidebar_shows_originals_size():
 
     assert "originals_mb" in fragment
     assert "MB" in fragment
+
+
+# 인용 줄도 **값이 있을 때만** 그린다 — 배지 셋이 이미 쓰는 규칙이다. 조건 없이 그리면
+# 맞게 인용한 답변에도 줄이 남아, 사용자가 «늘 뜨는 것» 으로 읽고 그때부터 안 읽는다.
+#
+# **문구가 problem 에서 갈려야 한다**: 인용이 아예 없는데 «없는 근거를 가리킵니다» 는
+# 거짓이고, 범위 밖인데 «출처 표시가 없습니다» 도 거짓이다 — rewrite 줄이 mode 로
+# 갈리는 것과 같은 자리다
+def test_citation_row_is_conditional_and_branches_on_problem():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
+
+    assert "{% if answer.citation %}" in fragment
+    row = fragment.split("{% if answer.citation %}", 1)[1].split("</div>", 1)[0]
+    assert "is-placeholder" not in row
+    assert "없는 근거를 가리킵니다" in row
+    assert "출처 표시가 없습니다" in row
+    # **danger 를 안 쓴다** — 거짓 경고가 날 수 있어(generation/citations.py) 빨강으로
+    # 말하면 멀쩡한 답변이 고장 난 것으로 읽힌다
+    assert "error" not in row

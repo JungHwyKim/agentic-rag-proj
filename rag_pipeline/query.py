@@ -85,6 +85,17 @@ docstring). 읽어서 `Answer.rewrite` 에 싣는 것까지가 여기 몫이고 
 `evaluator.warnings` 에 쌓인다. 여기서 *불충분* 으로 바꿔 적으면 부정 예시 질의에서 죽은
 Evaluator 가 만점을 받는다(`generation/evaluate.py`).
 
+## 인용 검사만 인자가 아니다 — **고를 축이 없다**
+
+위 여섯은 전부 *안 넘기면 그 갈래 없이 돈다* 가 스위치인데, 인용 검사는 그렇지 않다.
+LLM 을 안 부르고 외부 키도 안 보며 `(text, sources)` 만 읽는 문자열 검사라, 끄는 것이
+아끼는 것이 아니다 — *"고를 축이 실재할 때만 설정이 생긴다"* 의 반대쪽 사례다.
+
+**부르는 자리가 둘인 것이 요점이다.** 새로 만든 답변과 **캐시가 돌려준 답변**에 같은
+검사를 먹인다. 안 그러면 글자가 똑같은 답변이 캐시냐 아니냐에 따라 배지가 갈리는데,
+그것을 사용자가 화면에서 본다. 공짜로 다시 계산되므로 캐시 payload 에는 안 싣는다
+(`schemas/answer.py` · `generation/citations.py`).
+
 ## 여기서 안 하는 것
 
 Rewriter 재검색 루프. `plan_log/검색-생성.md` 의 Phase 5 이고 7회차에서 물렸다 — 되살릴
@@ -96,7 +107,7 @@ from __future__ import annotations
 
 from rag_pipeline.answer_cache import QdrantAnswerCache, pipeline_fingerprint
 from rag_pipeline.config import IngestConfig
-from rag_pipeline.generation import OpenAIEvaluator, generate_answer
+from rag_pipeline.generation import OpenAIEvaluator, check_citations, generate_answer
 from rag_pipeline.ingestion.embedding.base import Embedder
 from rag_pipeline.ingestion.indexing.base import VectorStore
 from rag_pipeline.retrieval import Bm25Index, QueryRewriter, Reranker, retrieve, uses_bm25
@@ -138,7 +149,12 @@ def answer_question(
     if cache is not None:
         cached = cache.lookup(query, embedder=embedder, fingerprint=fingerprint)
         if cached is not None:
-            return cached
+            # 캐시된 답도 같은 검사를 받는다. 캐시가 이 값을 안 싣는 것이 실수가 아니라
+            # 결정이다 — 순수 함수라 다시 계산이 공짜이고, 안 먹이면 같은 답변이 캐시냐
+            # 아니냐로 배지가 갈린다 (모듈 docstring 참고)
+            return cached.model_copy(
+                update={"citation": check_citations(cached.text, cached.sources)}
+            )
 
     chunks = retrieve(
         query,
@@ -166,7 +182,16 @@ def answer_question(
     )
 
     text = generate_answer(query, chunks, cfg.generation)
-    answer = Answer(query=query, text=text, sources=chunks, verdict=verdict, rewrite=rewrite)
+    answer = Answer(
+        query=query,
+        text=text,
+        sources=chunks,
+        verdict=verdict,
+        rewrite=rewrite,
+        # **답변을 안 바꾼다.** 틀린 인용을 지우지 않고 흔적만 싣는다 —
+        # `verdict` 와 같은 계약이다 (`generation/citations.py` docstring)
+        citation=check_citations(text, chunks),
+    )
 
     # 저장 실패는 답변을 막지 않는다 — put() 이 아무것도 안 던지는 것이 그 계약이다
     if cache is not None:

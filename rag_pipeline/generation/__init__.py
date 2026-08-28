@@ -1,8 +1,12 @@
 """생성 단계. 검색된 근거로 답변 문장을 만든다.
 
-여기 있는 것은 **생성 한 번과 판정 한 번이다.** Evaluator(근거가 충분한가)는 2026-08-26 에
-들어왔고 **꺼진 채 커밋된다**(`EVALUATOR_MODEL` 이 비면 `get_evaluator()` 가 `None`).
-Rewriter(질의를 고쳐 다시 검색)는 여전히 없다 — `plan_log/검색-생성.md` 7회차가 물렸다.
+여기 있는 것은 **생성 한 번과 판정 한 번, 그리고 그 답변에 대한 검사 하나다.**
+Evaluator(근거가 충분한가)는 2026-08-26 에 들어왔고 **꺼진 채 커밋된다**
+(`EVALUATOR_MODEL` 이 비면 `get_evaluator()` 가 `None`). 인용 검사는 2026-08-28 에
+들어왔고 **스위치가 없다** — LLM 을 안 부르고 문자열만 보므로 끌 이유가 없다.
+
+**Rewriter 는 여기 없지만 이제 있다** — 2026-08-27 에 `retrieval/rewrite.py` 로 들어왔다.
+`retrieve()` **안**에서 도는 PRF 라 생성 단계가 아니다(`rag_pipeline/query.py` docstring).
 
 **판정은 답변을 안 바꾼다.** *불충분* 이어도 생성은 그대로 돌고 판정은 `Answer.verdict` 에
 실리기만 한다. 재시도할 곳이 없기도 하고, 생성을 막으면 *판정이 맞았나* 와 *답이 좋아졌나* 가
@@ -26,11 +30,14 @@ Rewriter(질의를 고쳐 다시 검색)는 여전히 없다 — `plan_log/검�
   — `evaluate.py` docstring
 - 판정 프롬프트가 왜 답을 안 쓰게 하나 / 하위 규칙을 왜 안 넣나 — `prompts.py` docstring
 - 판정을 무엇으로 재나 — `evaluation/verdicts.py`(혼동행렬 + 실패 열)
+- 인용 검사가 왜 답변을 안 바꾸나 / 건너뛰는 자리가 왜 둘인가 / 대괄호를 왜 숫자로만
+  무나 — `citations.py` docstring
 """
 
 from __future__ import annotations
 
 from rag_pipeline.generation.answer import generate_answer
+from rag_pipeline.generation.citations import check_citations
 from rag_pipeline.generation.evaluate import (
     EvaluatorUsage,
     OpenAIEvaluator,
@@ -42,6 +49,7 @@ __all__ = [
     "NO_EVIDENCE_ANSWER",
     "EvaluatorUsage",
     "OpenAIEvaluator",
+    "check_citations",
     "generate_answer",
     "get_evaluator",
 ]

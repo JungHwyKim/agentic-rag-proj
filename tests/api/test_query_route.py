@@ -16,7 +16,13 @@ from fastapi.testclient import TestClient
 from backend.app.main import create_app
 from rag_pipeline.config import EvaluatorConfig, GenerationConfig, IngestConfig, RewriteConfig
 from rag_pipeline.exceptions import GenerationError, IndexingError
-from rag_pipeline.schemas.answer import Answer, CacheOrigin, EvaluatorVerdict, RewriteTrace
+from rag_pipeline.schemas.answer import (
+    Answer,
+    CacheOrigin,
+    CitationTrace,
+    EvaluatorVerdict,
+    RewriteTrace,
+)
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
 
@@ -708,3 +714,70 @@ def test_disabled_reranker_is_not_rebuilt_every_query(mocker):
 
     assert made.call_count == 1
     assert asked.call_args.kwargs["reranker"] is None
+
+
+# --- 인용 배지 ------------------------------------------------------------------
+
+
+# 배지 조각 하나를 꺼낸다. 캐시·판정 배지도 같은 `badge-row` 라 클래스로 갈라야 한다
+def _citation_badge(body: str) -> str:
+    marker = 'class="badge-row citation-row"'
+    assert marker in body
+    return body[body.index(marker) :].split("</div>", 1)[0]
+
+
+# 범위 밖 번호면 배지가 뜨고 **근거 개수와 그 번호가 함께 읽힌다** — 둘 중 하나만으로는
+# 사용자가 무엇이 어긋났는지 못 본다
+def test_out_of_range_citation_renders_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="위약금",
+            text="20% 입니다 [3]",
+            sources=[_chunk()],
+            citation=CitationTrace(problem="out_of_range", numbers=[3], source_count=2),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "위약금"}).text
+
+    badge = _citation_badge(body)
+    assert "2개인데" in badge
+    assert "[3]" in badge
+    # **답변은 그대로다** — 검사가 본문을 안 고친다(query.py). 배지만 보면 눌렸다고 읽힌다
+    assert "그대로 생성된 것입니다" in badge
+    assert "20% 입니다 [3]" in body
+
+
+# 인용이 아예 없으면 문구가 갈린다. 한 문구로 뭉치면 «없는 근거를 가리킨다» 가 거짓이 된다
+def test_missing_citation_renders_a_different_sentence(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="위약금",
+            text="20% 입니다",
+            sources=[_chunk()],
+            citation=CitationTrace(problem="missing", numbers=[], source_count=1),
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "위약금"}).text
+
+    badge = _citation_badge(body)
+    assert "출처 표시가 없습니다" in badge
+    assert "없는 근거를 가리킵니다" not in badge
+
+
+# **맞게 인용하면 줄 자체를 안 그린다.** 늘 그리면 정상이 소음이 되고, 사용자는
+# 배지를 읽지 않게 된다 — 판정 배지가 *충분* 을 안 그리는 것과 같은 규칙이다
+def test_valid_citation_draws_no_badge(mocker):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(
+            query="위약금", text="20% 입니다 [1]", sources=[_chunk()], citation=None
+        ),
+    )
+
+    body = _client().post("/api/v1/query", data={"query": "위약금"}).text
+
+    assert "citation-row" not in body

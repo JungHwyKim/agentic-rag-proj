@@ -50,6 +50,22 @@
 화면이 셋에 대해 **같은 것**을 해야 하기 때문이다 — 줄을 안 그린다. 사유를 갈라야 하는 날은
 `rewriter.warnings` 가 이미 그 자리에 있다.
 
+## 왜 `citation` 이 문제 있을 때만 채워지나
+
+`SYSTEM_PROMPT` 규칙 3이 시킨 `[1]`·`[2]` 를 모델이 지켰는지의 관측이다. **맞게 인용했을
+때는 `None`** 이라 화면이 줄을 안 그린다 — `cached_from`·`verdict`·`rewrite` 셋이 이미
+쓰는 규칙이고 이유도 같다. 늘 채우면 모든 답변에 줄이 하나 늘어 정상이 소음이 된다.
+
+덩어리인 이유도 저 셋과 같다. `ok: bool` + 번호 목록으로 쪼개면 *`ok=True` 인데 목록이
+찬* 못 쓰는 조합이 생기고, 화면이 그 조합을 매번 방어해야 한다.
+
+**`verdict` 와 캐시 대우가 일부러 다르다.** `verdict` 는 캐시 히트면 `None` 인데 이쪽은
+값이 실린다 — 저쪽이 답하는 것은 *이번 실행에서 판정을 돌렸나* 라 **실행의 속성**이고,
+이쪽은 *이 답변의 인용이 맞나* 라 **답변의 속성**이다. 답변 본문과 `sources` 는 캐시에
+그대로 실려 있어(`answer_cache/qdrant_cache.py:_to_payload`) 조회 때 **공짜로 다시
+계산된다**(`generation/citations.py`). 그래서 캐시 payload 에도 안 싣는다 — 실으면 칸이
+늘고 낡을 수 있는데 얻는 것이 없다.
+
 ## 왜 `sources` 가 비어 있을 수 있나
 
 **근거를 못 찾은 것은 실패가 아니다.** 관련 청크가 없으면 생성 쪽은 "문서에서 찾지
@@ -67,7 +83,7 @@ from pydantic import BaseModel, Field
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["Answer", "CacheOrigin", "EvaluatorVerdict", "RewriteTrace"]
+__all__ = ["Answer", "CacheOrigin", "CitationTrace", "EvaluatorVerdict", "RewriteTrace"]
 
 
 # 이 답변이 캐시에서 왔을 때 그 출처. **셋이 늘 함께 있거나 통째로 없다** (모듈 docstring 참고)
@@ -98,6 +114,19 @@ class RewriteTrace(BaseModel):
     mode: Literal["fuse", "replace"]
 
 
+# 답변이 쓴 출처 번호가 근거와 어긋났을 때 그 흔적. **맞으면 통째로 None 이다**
+# (모듈 docstring 참고)
+class CitationTrace(BaseModel):
+    # 무엇이 어긋났나. **둘은 동시에 못 난다** — 번호가 하나도 없어야 "missing" 이고
+    # 그러면 범위 밖일 번호 자체가 없다 (`generation/citations.py`)
+    problem: Literal["out_of_range", "missing"]
+    # 근거 범위 밖을 가리킨 번호들. "missing" 이면 빈 목록이다
+    numbers: list[int] = Field(default_factory=list)
+    # 실제 근거 개수. 화면이 «근거는 2개인데» 를 말하려면 이 값이 있어야 한다 —
+    # `sources` 를 세도 같지만, 그러면 흔적 하나를 읽는 데 두 필드를 맞춰 봐야 한다
+    source_count: int
+
+
 # 질문 하나에 대한 답변과 그 근거
 class Answer(BaseModel):
     query: str
@@ -113,3 +142,7 @@ class Answer(BaseModel):
     # **재작성이 답변을 바꾸는 것은 맞지만 그 사실이 여기 실리는 것은 관측이다** —
     # `verdict` 와 같은 자리이고, 화면과 `query_log` 가 둘 다 이 하나를 읽는다
     rewrite: RewriteTrace | None = None
+    # 인용이 근거와 어긋났으면 그 흔적, 맞으면 None. **검사가 답변을 바꾸지 않는다** —
+    # `verdict` 와 같은 계약이고, 틀린 번호를 지우지 않는 이유는
+    # `generation/citations.py` docstring 에 있다. 캐시 히트에도 값이 실린다(위 참고)
+    citation: CitationTrace | None = None

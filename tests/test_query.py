@@ -488,3 +488,69 @@ def test_fingerprint_follows_the_effective_top_k(mocker, config):
     )
 
     assert default.fingerprints[0] != explicit.fingerprints[0]
+
+
+# --- 인용 검사 ----------------------------------------------------------------
+
+
+# 인용이 근거와 어긋나면 흔적이 답변에 실린다. **답변 본문은 그대로다** —
+# `verdict` 와 같은 계약이라, 고치기 시작하면 *검사가 맞았나* 와 *답이 좋아졌나* 가
+# 한 실행에 섞인다
+def test_citation_trace_rides_along_on_the_answer(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답은 [2] 입니다.")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert answer.citation is not None
+    assert answer.citation.problem == "out_of_range"
+    assert answer.citation.numbers == [2]
+    assert answer.text == "답은 [2] 입니다."
+
+
+# 맞게 인용하면 흔적이 없다 — 늘 채우면 화면에 줄이 하나 늘어 정상이 소음이 된다
+def test_valid_citation_leaves_no_trace_on_the_answer(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="답은 [1] 입니다.")
+
+    answer = answer_question("질문", store=object(), embedder=object(), config=config)
+
+    assert answer.citation is None
+
+
+# **캐시가 돌려준 답에도 같은 검사를 먹인다.** 캐시는 이 값을 안 싣는데(payload 가 필드를
+# 하나씩 나열한다) 검사가 (text, sources) 만 보는 순수 함수라 다시 계산이 공짜다.
+# 안 먹이면 글자가 똑같은 답변이 캐시냐 아니냐로 배지가 갈리고 그것을 사용자가 본다 —
+# `verdict` 가 캐시 히트에서 None 인 것과 **일부러 다르다**(저쪽은 실행의 속성이다)
+def test_cache_hit_is_checked_again(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[_chunk()])
+    mocker.patch.object(query_module, "generate_answer", return_value="새 답변")
+    cached = Answer(
+        query="옛 질문",
+        text="옛 답은 [9] 입니다.",
+        sources=[_chunk()],
+        cached_from=CacheOrigin(query="옛 질문", created_at=datetime.now(UTC), score=0.97),
+    )
+
+    answer = answer_question(
+        "질문", store=object(), embedder=object(), config=config, cache=_FakeCache(cached)
+    )
+
+    assert answer.text == "옛 답은 [9] 입니다."
+    assert answer.citation is not None
+    assert answer.citation.numbers == [9]
+    # 캐시 배지는 그대로 산다 — 검사가 캐시 흔적을 덮어쓰면 안 된다
+    assert answer.cached_from is not None
+
+
+# 근거를 못 찾은 답변에는 흔적이 없다. **검색 0건은 실패가 아니라 정상 경로**이고,
+# 여기가 안 갈리면 그 답변마다 인용 경고가 뜬다
+def test_no_evidence_answer_leaves_no_trace(mocker, config):
+    mocker.patch.object(query_module, "retrieve", return_value=[])
+    mocker.patch.object(
+        query_module, "generate_answer", return_value="문서에서 찾지 못했습니다."
+    )
+
+    answer = answer_question("아무거나", store=object(), embedder=object(), config=config)
+
+    assert answer.citation is None

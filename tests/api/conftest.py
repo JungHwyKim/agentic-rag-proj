@@ -41,6 +41,27 @@ def originals_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # 켤지 정하는 근거가 조용히 오염된다(테스트 질의는 늘 같은 문자열이라 반복률을 위로 민다).
 #
 # autouse 인 이유는 위와 같다: 손으로 덮는 규약이면 새 테스트가 잊는 순간 다시 샌다
+# 기동 워밍업도 같은 이유로 끈다. **`Settings.warmup_on_startup` 기본값은 꺼짐인데
+# 개발자의 `.env` 가 그것을 덮는다** — 그러면 `with TestClient(create_app())` 를 쓰는
+# 테스트마다 배경 스레드가 KURE 가중치를 올린다(2026-08-28 실측: 스레드를 기다려 보니
+# `Loading weights 391/391` · **13.61초** · `.cache/embedding` +1).
+#
+# **짧은 실행에서는 안 보이는 것이 이 구멍의 성질이다.** 워밍업 스레드는 `daemon` 이라
+# 프로세스가 먼저 끝나면 조용히 죽는다 — `tests/api` 만 돌리면 2.45초에 끝나 캐시 델타가
+# 0이고, 전체 pytest(150초대)에서만 완주해 `Loading weights` 가 출력에 섞인다. 그래서
+# **재현이 들쭉날쭉하고 원인이 pytest 쪽으로 잘못 보인다**(실제로 한 번 잘못 짚었다).
+#
+# CLAUDE.md 는 이 자리를 *"설정 기본값이 유일한 방어"* 라고 적었는데, `.env` 가 덮을 수
+# 있으므로 그 방어는 개발자 머신에서 안 선다. 임베딩 provider 를 `offline_config` 에
+# 못 박은 것과 **같은 판단**이다 — 기본값에 기대지 않고 테스트가 직접 박는다.
+#
+# **`test_warmup.py` 는 이 핀을 덮어쓴다.** 픽스처가 먼저 돌고 테스트 본문의
+# `monkeypatch.setenv` 가 나중이라 켜는 쪽 검사가 그대로 산다
+@pytest.fixture(autouse=True)
+def warmup_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WARMUP_ON_STARTUP", "false")
+
+
 @pytest.fixture(autouse=True)
 def query_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "data" / "queries.jsonl"

@@ -228,6 +228,17 @@ body {
 .rewrite-query { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rewrite-tail { flex: none; white-space: nowrap; }
 
+/* 인용 어긋남. **불충분 배지와 같은 무게다** — 둘 다 «곁의 사실 하나가 어긋났는데
+   답변은 그대로다» 를 말한다. danger 는 안 쓴다: 이 검사는 거짓 경고를 낼 수 있고
+   (근거를 그대로 옮긴 답변이 원문의 [3] 을 품는 경우 — generation/citations.py)
+   빨강으로 말하면 멀쩡한 답변이 고장 난 것으로 읽힌다. 라벤더도 안 쓴다 — 그건
+   캐시의 뜻이다 */
+.badge-row.citation-row {
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
 /* ============ 소스 태그 ============
    실데이터 대응이 여기 몰린다 — 태그가 5개이고 이름이 길다. */
 .sources { margin-top: 11px; }
