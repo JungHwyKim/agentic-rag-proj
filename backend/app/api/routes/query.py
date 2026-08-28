@@ -186,7 +186,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
     text = query.strip()
     if not text:
         return templates.TemplateResponse(
-            request, "_answer.html", {"answer": None, "query": ""}
+            request, "_answer.html", {"answer": None, "echo": ""}
         )
 
     # 검색·생성은 동기·네트워크 바운드라 이벤트 루프 밖으로 뺀다 (업로드가 로더를 넘기는 것과 같다)
@@ -236,7 +236,51 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
             append_query_log, settings.query_log_path, text, answer, elapsed_ms=elapsed_ms
         )
 
-    return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "query": text})
+    # **`query` 가 아니라 `echo` 로 넘긴다.** 질문 말풍선은 이제 화면이 그린다 — 보내는 즉시
+    # 올라가야 하는데 이 응답은 3~6초 뒤에 오기 때문이다 (`chat.html` 의 `#composer-js`).
+    #
+    # **그런데 서버가 질문을 아예 안 실으면 진단 하나가 죽는다.** 한국어 질의를 셸에서 보내면
+    # cp949 로 깨진 채 도착하는데 에러가 안 나고 답도 그럴듯해서, 가르는 방법이 *"응답이
+    # 되돌려준 질문 문구를 보낸 문자열과 대조하는 것"* 하나다 (CLAUDE.md 함정 절). 그 대조가
+    # 성립한 이유는 화면이 **서버가 준 글자**를 말풍선에 실었기 때문이다. 화면이 자기 입력값으로
+    # 그리기 시작하면 **깨진 질의도 화면엔 멀쩡해 보여** 진단이 사라지는 것이 아니라 거짓말을 한다.
+    #
+    # 그래서 숨은 한 줄로 계속 실어 보내고 화면이 자기가 그린 글자와 대조한다 — 눈으로 하던
+    # 것이 자동 검사가 된다 (`_answer.html` 의 `.echo`)
+    return templates.TemplateResponse(request, "_answer.html", {"answer": answer, "echo": text})
+
+
+# 서버 상태등 조각. 사이드바 맨 아래에서 10초마다 다시 불린다 (`chat.html`).
+#
+# **`app.state` 를 읽기만 한다 — `embedder_for(app)` 를 부르면 안 된다.** 그러면 등이 상태를
+# 재는 대신 **만들고**, 키가 없는 환경에서는 상태 조회가 그 자리에서 예외로 죽는다
+# (`get_embedder()` 의 실패 계약). 등이 서버를 무겁게 만들거나 죽이면 등이 아니라 부하다.
+#
+# **색이 셋인 것이 요점이다.** `warmup_on_startup` 기본값이 꺼짐이라 (`core/config.py`)
+# 첫 질의 전에는 `embedder is None` 이 **정상**이다. 초록/빨강 둘로 접으면 평소가 빨강이 되어
+# 등이 경고를 잃는다. 셋째 색(회색 = 서버가 응답을 안 한다)은 **여기서 못 만든다** — 응답이
+# 없는 상태라 화면이 `htmx:sendError` 에서 칠한다.
+#
+# `warmup_errors` 는 워밍업이 **끝났을 때만** 생기는 속성이라(`warm_up()` 마지막 줄) `getattr`
+# 의 기본값이 *"안 돌았거나 도는 중"* 을 뜻한다 — 빈 리스트(성공)와 갈라야 한다.
+#
+# **JSON 이 아니라 HTML 조각인 것**은 화면 규약이다. `GET /health` 와 나란한 것이 아니라 다른
+# 물건이다 — 저쪽은 기계용 liveness 이고 상수를 돌려준다. 같은 상태를 두 곳에서 파생하면
+# 두 번째 진실이 생긴다
+@router.get("/status", response_class=HTMLResponse)
+async def server_status(request: Request) -> HTMLResponse:
+    state = request.app.state
+    warmup_errors = getattr(state, "warmup_errors", None)
+    return templates.TemplateResponse(
+        request,
+        "_status.html",
+        {
+            "state": "ready" if getattr(state, "embedder", None) is not None else "idle",
+            # 워밍업이 실패한 채로도 임베더가 서 있을 수 있다(리랭커만 실패한 경우).
+            # 그때도 사유는 보여준다 — 사유가 있는데 안 보이면 등이 절반만 말한다
+            "reason": " / ".join(warmup_errors) if warmup_errors else "",
+        },
+    )
 
 
 # 사이드바의 색인된 문서 목록 조각

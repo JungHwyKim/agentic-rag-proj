@@ -135,6 +135,14 @@ def build() -> Path:
         '<p class="sidebar-foot muted small" id="doc-count">'
         f"{len(SAMPLE_DOCUMENTS)}개 문서 · 인덱싱 완료</p>",
     )
+    # 상태등도 htmx 가 채우는 자리다. **초록으로 그린다** — 이 파일이 보여주는 것은
+    # «제대로 도는 화면» 이고, 노랑(임베더 대기)·회색(응답 없음)은 그 모습이 아니다.
+    # 안 채우면 사이드바 맨 아래가 조용히 비어 배치를 확인하려던 것을 정확히 못 본다
+    page = _fill(
+        page,
+        '<div id="server-status"',
+        env.get_template("_status.html").render(state="ready", reason=""),
+    )
 
     # CSS 를 인라인한다. 이것이 file:// 에서 404 가 안 나게 하는 유일한 방법이다
     page = page.replace(

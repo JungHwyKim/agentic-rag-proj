@@ -54,6 +54,9 @@ body {
 .sidebar-foot:empty { display: none; }
 
 .panel-title { font-size: 12px; font-weight: 700; margin: 0 0 9px; letter-spacing: -.2px; }
+/* 제목과 상태등을 한 줄에 놓는다. 아래 margin 을 이 줄이 가져가므로 안쪽 제목은 0 이다 */
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 9px; }
+.panel-head .panel-title { margin: 0; }
 
 /* button 이 아니라 file input 을 여는 label 이다 — 그래서 display·text-align 을 직접 준다
    (button 은 기본이 inline-block + 가운데 정렬이라 안 적어도 됐다) */
@@ -319,11 +322,40 @@ body {
   cursor: pointer;
 }
 .composer button:hover { border-color: var(--accent); color: var(--accent); }
-.composer input:disabled, .composer button:disabled { opacity: .5; cursor: not-allowed; }
+/* **입력칸이 잠기는 자리는 이제 하나뿐이다 — 예약 중**이다. 전송 중에는 안 잠근다
+   (chat.html 에서 hx-disabled-elt 를 뺐다). 그 속성이 켜던 3~6초 동안 커서가 not-allowed 로
+   바뀌고 캐럿이 사라지고 :focus 테두리까지 풀려서, 그것이 그 구간의 **유일한 피드백**이었다.
 
-/* htmx 가 요청 중에만 보여준다 */
-.pending { display: none; font-size: 11.5px; color: var(--muted); }
-.htmx-request.pending, .htmx-request .pending { display: block; }
+   **cursor 를 text 로 못 박는 것이 요점이다.** 브라우저는 disabled 입력에 화살표 커서를 주므로
+   안 적으면 예약 상태에서 모양이 다시 바뀐다 — 없애려던 것이 자리만 옮겨 살아남는다.
+   흐림(opacity)은 남긴다: 잠겼다는 것을 알리는 신호가 스탑 버튼 하나만 남으면 왜 안 써지는지
+   알 수 없다 */
+.composer input:disabled { opacity: .5; cursor: text; }
+
+/* 답변을 만드는 중임을 알리는 자리. **질문마다 하나씩 #messages 안에서 태어난다**
+   (chat.html 의 #composer-js).
+
+   **한때 입력줄 아래의 #pending 한 줄이었는데 한 번도 뜬 적이 없다.** htmx 는 hx-indicator 가
+   없으면 htmx-request 클래스를 **요청을 낸 엘리먼트 자신**(여기서는 form.composer)에 붙이는데,
+   그 줄은 form 의 **형제**였다 — .htmx-request.pending 도 .htmx-request .pending 도 안 맞는다.
+   테스트는 그 문자열이 응답에 있는지만 재고 있어 못 잡았다.
+
+   자리를 옮긴 것은 요청이 *"질문 아래"* 였기 때문이고, 그러면 hx-indicator 로는 못 만든다 —
+   답변마다 새로 생겨야 하는 요소다. 치수는 .bubble.assistant 를 따르되 글자는 흐리다 */
+.bubble.assistant.generating { color: var(--muted); font-size: 12px; }
+
+/* 보낸 질문과 서버가 받은 질문이 다를 때만 뜬다. **danger 를 안 쓴다** — 답변은 나왔고
+   틀린 것은 전달 계층이라, 빨강으로 말하면 답변이 고장 난 것으로 읽힌다. 불충분 배지·인용
+   배지와 같은 무게다 (_answer.html) */
+.echo-mismatch {
+  align-self: stretch;
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 11.5px;
+}
 
 /* 업로드·색인 진행 바. **앞 구간만 실제 수치다** — 업로드 바이트는 xhr 이 알려주지만
    그 뒤 파싱·임베딩·저장은 서버가 신호를 안 내보내 무한 애니메이션으로 둔다.
@@ -373,6 +405,21 @@ body {
   border-radius: var(--r);
   font-size: 13px;
 }
+
+/* 서버 상태등. **색이 셋이다** — 초록(임베더가 서 있다) · 노랑(서버는 살아 있는데 임베더를
+   아직 안 올렸다) · 회색(응답이 없다). 가운데가 없으면 WARMUP_ON_STARTUP 기본값이 꺼짐이라
+   **평소가 경고색**이 되어 등이 뜻을 잃는다 (_status.html · routes/query.py).
+
+   회색은 서버가 못 만든다(응답이 없는 상태다) — 화면이 htmx:sendError 에서 칠한다 (chat.html).
+
+   새 토큰을 넷 만드는 대신 초록만 더한다: 노랑은 경고색이 아직 없어 danger 와 갈리는 톤을
+   하나 두고, 회색은 이미 있는 --muted 다 */
+#server-status { display: flex; align-items: center; gap: 5px; }
+.status-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
+.status-ready { background: #2e9c5a; }
+.status-idle { background: #d99b1a; }
+#server-status.is-offline .status-dot { background: var(--muted); }
+.status-text { font-size: 10.5px; color: var(--muted); }
 
 .muted { color: var(--muted); }
 .small { font-size: 10.5px; }

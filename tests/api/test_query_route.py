@@ -109,8 +109,12 @@ def test_answer_fragment_has_text_and_source(mocker):
     assert "20% 입니다 [1]" in body
     assert "계약서_v2.pdf" in body
     assert "p.4" in body
-    # 질문도 함께 그린다 — 화면이 말풍선 한 쌍을 덧붙이는 구조다
-    assert "위약금" in body
+    # **질문 말풍선은 이 조각에 없다** — 화면이 보내는 즉시 그리므로(이 응답은 3~6초 뒤다)
+    # 서버가 또 그리면 두 벌이 된다 (routes/query.py · chat.html 의 #composer-js)
+    assert '<div class="bubble user">' not in body
+    # 대신 서버가 받은 질문이 숨은 채로 실려 온다. cp949 로 깨져 도착한 질의를 가르는
+    # 유일한 방법이라(CLAUDE.md 함정 절), 이것이 없으면 화면이 깨진 질의를 멀쩡하게 보여준다
+    assert 'data-echo="위약금"' in body
 
 
 # 발췌가 조각 안에 함께 실려 온다. 서버 왕복 없이 펴려면 여기 있어야 한다
@@ -533,8 +537,9 @@ def test_rewrite_row_shows_the_rewritten_query(mocker):
     assert rewritten in body
     # **fuse 는 원 질의 갈래가 살아 있다** — "바꿔 검색했다"고 쓰면 거짓이다
     assert "도 함께 검색했습니다" in _rewrite_row(body)
-    # 원 질의는 말풍선에 그대로 남아야 둘을 나란히 볼 수 있다
-    assert "지원 방식 알려줘" in body
+    # 원 질의는 화면이 그린 말풍선에 그대로 남아 둘을 나란히 볼 수 있다.
+    # 여기서 확인할 수 있는 것은 서버가 받은 질문이 그대로 되돌아온다는 것이다
+    assert 'data-echo="지원 방식 알려줘"' in body
     # 긴 문장은 CSS 가 자르므로 전문은 title 에 담는다 (캐시 배지·소스 태그와 같은 규칙)
     assert f'title="{rewritten}"' in body
 
@@ -781,3 +786,40 @@ def test_valid_citation_draws_no_badge(mocker):
     body = _client().post("/api/v1/query", data={"query": "위약금"}).text
 
     assert "citation-row" not in body
+# ── 서버 상태등 ────────────────────────────────────────────────────────────────
+#
+# **등이 상태를 재는 대신 만들면 안 된다.** `embedder_for()` 를 부르는 순간 키가 없는 환경에서
+# 상태 조회가 예외로 죽고, 있는 환경에서는 등이 KURE 2.27GB 를 올린다 — 등이 아니라 부하다
+def test_status_says_idle_before_the_first_query():
+    client = _client()
+    # lifespan 이 심는 첫 질의 전 상태. `_client()` 는 편의로 임베더를 세워 두므로 되돌린다
+    client.app.state.embedder = None
+
+    body = client.get("/api/v1/status").text
+
+    assert "status-idle" in body
+    assert "status-ready" not in body
+    # 조회가 임베더를 만들지 않았다
+    assert client.app.state.embedder is None
+
+
+# 임베더가 서 있으면 초록이다. 색이 셋인 이유는 워밍업 기본값이 꺼짐이어서, 첫 질의 전
+# `embedder is None` 이 **정상**이기 때문이다 — 둘로 접으면 평소가 경고색이 된다
+def test_status_says_ready_once_the_embedder_stands():
+    client = _client()
+
+    body = client.get("/api/v1/status").text
+
+    assert "status-ready" in body
+    assert "status-idle" not in body
+
+
+# 워밍업이 실패한 채로도 임베더가 설 수 있다(리랭커만 죽은 경우). 그때도 사유는 보여준다 —
+# 사유가 있는데 안 보이면 등이 절반만 말한다. 다만 **title 에만** 담는다(길이가 예외 마음대로다)
+def test_status_carries_the_warmup_reason_in_the_title():
+    client = _client()
+    client.app.state.warmup_errors = ["reranker: boom"]
+
+    body = client.get("/api/v1/status").text
+
+    assert 'title="reranker: boom"' in body
