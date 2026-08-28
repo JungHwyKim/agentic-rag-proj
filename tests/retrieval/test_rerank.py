@@ -482,6 +482,64 @@ def test_ties_keep_the_fused_order(mocker, tmp_path):
     assert [c.chunk_id for c in ranked] == ["a", "b"]
 
 
+# **회계 게이트 식은 등식이 아니라 하한이다** — `reranked` 는 상한이 아니라 *실제로 채점한
+# 후보 수*라, 후보가 `rerank_candidates` 에 못 미치면 `reranked / rerank_candidates` 가 질의
+# 수보다 작게 나온다. 실코퍼스는 후보가 늘 상한을 채워(60질의 x 50 = 3,000) 이 경계를 못
+# 만들므로 합성으로만 잰다. **틀리는 방향은 안전한 쪽이다** — 낮게 나와 들여다보게 된다
+def test_gate_undercounts_when_the_pool_is_short(mocker, tmp_path):
+    candidates = [_chunk(f"c{i}", 1.0 - i / 10) for i in range(7)]
+    scores = [float(i) for i in range(7)]
+    mocker.patch.object(local_ce, "_load_model", return_value=_FakeCrossEncoder(scores))
+    config = _local_config(tmp_path)
+
+    reranker = local_ce.LocalCrossEncoderReranker(config)
+    reranker.rerank("질의", candidates)
+
+    # 상한 50 이 아니라 실제로 채점한 7 이다
+    assert config.rerank_candidates == 50
+    assert reranker.usage.reranked == 7
+    # 질의는 1건인데 게이트는 0.14 를 낸다
+    gate = reranker.usage.reranked / config.rerank_candidates + reranker.usage.cache_hits
+    assert gate == pytest.approx(0.14)
+    assert gate < 1
+
+
+# **후보가 1개 이하면 두 칸 다 안 오르고 경고도 안 남는다** — 회계만 보면 리랭커가 죽은
+# 실행과 구분이 안 된다(모델을 올리지도 않는다). `test_openai_skips_when_nothing_to_order`
+# 의 로컬 짝이고, 이쪽이 게이트의 두 번째 구멍이다
+def test_nothing_to_order_leaves_no_trace(mocker, tmp_path):
+    load = mocker.patch.object(local_ce, "_load_model")
+
+    reranker = local_ce.LocalCrossEncoderReranker(_local_config(tmp_path))
+    ranked = reranker.rerank("질의", [_chunk("a", 0.9)])
+
+    assert [c.chunk_id for c in ranked] == ["a"]
+    assert load.call_count == 0
+    assert reranker.usage.reranked == 0
+    assert reranker.usage.cache_hits == 0
+    assert reranker.warnings == []
+
+
+# **정상 경로에서는 딱 맞는다** — 질의마다 `reranked` 나 `cache_hits` 중 **하나만** 오르므로
+# 두 질의의 게이트 합이 정확히 2다. 위 둘을 이것과 **같이** 읽어야 «게이트가 낮게 나오는
+# 자리는 저 둘뿐이고 정상 경로는 정확하다» 가 성립한다 — 대조군 없이 구멍만 보면 게이트
+# 자체를 못 믿을 것으로 읽게 된다
+def test_gate_is_exact_on_the_normal_path(mocker, tmp_path):
+    mocker.patch.object(local_ce, "_load_model", return_value=_FakeCrossEncoder([1.0, 9.0]))
+    config = _local_config(tmp_path)
+    object.__setattr__(config, "rerank_cache_enabled", True)
+    object.__setattr__(config, "rerank_candidates", 2)
+
+    reranker = local_ce.LocalCrossEncoderReranker(config)
+    reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+    reranker.rerank("질의", [_chunk("a", 0.9), _chunk("b", 0.1)])
+
+    assert reranker.usage.reranked == 2
+    assert reranker.usage.cache_hits == 1
+    gate = reranker.usage.reranked / config.rerank_candidates + reranker.usage.cache_hits
+    assert gate == 2
+
+
 # ------------------------------------------------------------- Cohere 갈래
 
 
