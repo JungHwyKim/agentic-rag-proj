@@ -550,7 +550,15 @@ def test_abstained_rows_are_not_in_the_ledger() -> None:
 # 더 돌린 회차가 본판 리포트를 **에러 없이 덮는다** — `verdicts.py` 가 13회차에 실제로 잃은
 # 사고와 같은 모양이고, 재작성 판을 재는 회차는 그것을 반드시 밟는다
 def test_the_rewrite_profile_splits_the_report() -> None:
-    common = {"label": "L", "judge": "mini", "rerank": "cohere", "top_k": 5, "fmt": "pdf"}
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "judge": "mini",
+        "rerank": "cohere",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
 
     assert answer_eval.report_name(rewrite="off", **common) != answer_eval.report_name(
         rewrite="fuse", **common
@@ -559,7 +567,15 @@ def test_the_rewrite_profile_splits_the_report() -> None:
 
 # 채점자도 이름을 가른다 — 라벨이 같은 두 채점자의 표가 같은 자리를 다투면 안 된다
 def test_the_judge_profile_splits_the_report() -> None:
-    common = {"label": "L", "rewrite": "off", "rerank": "cohere", "top_k": 5, "fmt": "pdf"}
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "rewrite": "off",
+        "rerank": "cohere",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
 
     assert answer_eval.report_name(judge="mini", **common) != answer_eval.report_name(
         judge="luna", **common
@@ -569,17 +585,91 @@ def test_the_judge_profile_splits_the_report() -> None:
 # **리랭커 프로필도 가른다.** 기본값이 `off` 라 `--rerank` 를 빠뜨린 실행이 조용히 다른
 # 실험이 되는데, 이름까지 같으면 그 실행이 제대로 돌린 판을 **에러 없이 덮는다**
 def test_the_rerank_profile_splits_the_report() -> None:
-    common = {"label": "L", "judge": "mini", "rewrite": "off", "top_k": 5, "fmt": "pdf"}
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "judge": "mini",
+        "rewrite": "off",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
 
     assert answer_eval.report_name(rerank="off", **common) != answer_eval.report_name(
         rerank="cohere", **common
     )
 
 
+# **생성 프로필도 가른다 — 이 축만 44회차에 생기고 이름이 안 따라왔다.** `--generation luna`
+# 로 한 판 돌리면 짝으로 쓸 `prod` 판을 **에러 없이 덮는데**, 두 모델을 견주는 회차에서
+# 그 짝이 판의 전부다. `generation` 을 기본값 없는 필수 인자로 둔 것도 같은 이유다 —
+# 새 호출부가 빠뜨리면 조용히 같은 자리를 다투는 대신 `TypeError` 로 터진다
+def test_the_generation_profile_splits_the_report() -> None:
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "judge": "mini",
+        "rerank": "cohere",
+        "rewrite": "off",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
+
+    assert answer_eval.report_name(generation="prod", **common) != answer_eval.report_name(
+        generation="luna", **common
+    )
+
+
+# **세트도 가른다 — `--qa-set` 은 기본이 사람 세트라 인자를 빠뜨린 실행이 다른 세트의 판을
+# 같은 이름으로 낸다.** 43회차의 판 넷은 `qa_set.jsonl`(60건)을 명시해 돌린 것이라, 이름이
+# 안 갈리면 43건 판과 60건 판이 **에러 없이 한 자리를 다툰다**. 값이 `Path(...).stem` 인 것은
+# 새 세트가 생겨도 저절로 갈리게 하려는 것이다 — 별명표는 거기 없는 세트를 조용히 합친다
+def test_the_qa_set_splits_the_report() -> None:
+    common = {
+        "label": "L",
+        "judge": "mini",
+        "rerank": "cohere",
+        "rewrite": "off",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
+
+    assert answer_eval.report_name(
+        qa_set="evaluation/qa_set.jsonl", **common
+    ) != answer_eval.report_name(qa_set="evaluation/qa_set_human.jsonl", **common)
+
+
+# **경로가 달라도 같은 세트면 같은 이름이다** — meta 는 파일명만, CLI 는 경로를 넘길 수 있어
+# 둘이 다른 이름을 내면 같은 판이 두 자리에 앉는다
+def test_the_qa_set_path_does_not_change_the_name() -> None:
+    common = {
+        "label": "L",
+        "judge": "mini",
+        "rerank": "cohere",
+        "rewrite": "off",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
+
+    assert answer_eval.report_name(
+        qa_set="qa_set.jsonl", **common
+    ) == answer_eval.report_name(qa_set="evaluation/qa_set.jsonl", **common)
+
+
 # **`top_k` 는 프로필이 아닌데도 실행을 가른다** — 생성이 보는 근거 수가 곧 그 값이라
 # 5와 10은 다른 답변을 낳는다. 43회차가 같은 라벨로 두 짝을 돌리며 이 자리를 밟았다
 def test_the_top_k_splits_the_report() -> None:
-    common = {"label": "L", "judge": "mini", "rerank": "cohere", "rewrite": "off", "fmt": "pdf"}
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "judge": "mini",
+        "rerank": "cohere",
+        "rewrite": "off",
+        "generation": "prod",
+        "fmt": "pdf",
+    }
 
     assert answer_eval.report_name(top_k=5, **common) != answer_eval.report_name(
         top_k=10, **common
@@ -591,9 +681,11 @@ def test_the_top_k_splits_the_report() -> None:
 def test_a_tag_splits_a_rerun_of_the_same_condition() -> None:
     common = {
         "label": "L",
+        "qa_set": "qa_set.jsonl",
         "judge": "mini",
         "rewrite": "off",
         "rerank": "cohere",
+        "generation": "prod",
         "top_k": 5,
         "fmt": "pdf",
     }
@@ -604,7 +696,14 @@ def test_a_tag_splits_a_rerun_of_the_same_condition() -> None:
 # 꼬리표가 없으면 안 붙는다 — 이름에 빈 마디가 생기면 옛 실행과 대조하기 어려워진다
 def test_an_empty_tag_leaves_no_trace() -> None:
     name = answer_eval.report_name(
-        label="L", judge="mini", rerank="cohere", rewrite="off", top_k=5, fmt="pdf"
+        label="L",
+        qa_set="qa_set.jsonl",
+        judge="mini",
+        rerank="cohere",
+        rewrite="off",
+        generation="prod",
+        top_k=5,
+        fmt="pdf",
     )
 
-    assert name == "L-answers-mini-cohere-off-k5-pdf.json"
+    assert name == "L-answers-qa_set-mini-cohere-off-prod-k5-pdf.json"

@@ -717,14 +717,38 @@ def score_answers(
 # `--top-k` 만 5→10 으로 바꿔 두 짝을 돌리는데, 안 담으면 **뒤 짝이 앞 짝을 에러 없이 덮는다**.
 # `--tag k5` 로 손으로 막을 수도 있었지만, 그것을 기각하는 문장이 바로 아래에 이미 있었다.
 #
+# **`qa_set` 도 2026-08-29 에 들어왔다 — 같은 규칙의 두 번째 얼굴이다.** `--qa-set` 은 기본이
+# **사람 세트**인데 43회차의 판 넷은 `qa_set.jsonl`(60건)을 명시해 돌린 것이라, 인자를 빠뜨린
+# 실행이 **다른 세트의 판을 같은 이름으로 낸다**. 실제로 그 자리를 밟아 43건짜리 판이 나왔고,
+# 그것을 살린 뒤 60건으로 다시 돌렸으면 **방금 유료로 산 판을 스스로 덮을 뻔했다.**
+# 값은 `Path(qa_set).stem` 이라 새 세트가 생겨도 저절로 갈린다 — 짧은 별명표를 두면
+# 그 표에 없는 세트가 조용히 같은 자리를 다툰다
+#
+# **`generation` 은 2026-08-29 에 같은 이유로 들어왔다.** 축은 44회차에 생겼는데 이 자리가
+# 안 따라와, `--generation luna` 로 한 판 돌리면 짝으로 쓸 `prod` 판을 **에러 없이 덮었다**
+# — 그 짝이 이 판의 전부인데 덮이면 견줄 것이 사라진다. **기본값일 때 빼는 안은 기각했다**:
+# 이름만 보고 *어느 모델이 낸 답변인가* 를 알 수 있어야 하고, `tag` 가 조건부인 것은
+# 그것이 **프로필로 안 갈리는 회차**를 위한 것이라 뜻이 다르다. 옛 이름의 판 넷은
+# 그대로 두고 새 이름으로만 쌓는다 — 소급해 고치면 43회차 수치의 출처가 흐려진다
+#
 # **`tag` 는 프로필로도 안 갈리는 회차를 위한 것이다** — 같은 조건을 두 번 돌려 온도 잡음을
 # 재는 회차가 그렇다(생성에 캐시가 없어 두 실행의 답변이 다르다). 손으로 지키는 규약은
 # 잊는 순간 근거가 사라지므로 이름으로 옮긴다
 def report_name(
-    *, label: str, judge: str, rerank: str, rewrite: str, top_k: int, fmt: str, tag: str = ""
+    *,
+    label: str,
+    qa_set: str,
+    judge: str,
+    rerank: str,
+    rewrite: str,
+    generation: str,
+    top_k: int,
+    fmt: str,
+    tag: str = "",
 ) -> str:
     suffix = f"-{tag}" if tag else ""
-    return f"{label}-answers-{judge}-{rerank}-{rewrite}-k{top_k}{suffix}-{fmt}.json"
+    stem = Path(qa_set).stem
+    return f"{label}-answers-{stem}-{judge}-{rerank}-{rewrite}-{generation}-k{top_k}{suffix}-{fmt}.json"
 
 
 # 회계를 먼저, 지표를 나중에 찍는다 (모듈 docstring 참고)
@@ -815,9 +839,11 @@ def main() -> int:
         # 이름을 만드는 자리는 `report_name()` 하나다 (거기 주석에 이유가 있다)
         out = RESULTS_DIR / report_name(
             label=meta["label"],
+            qa_set=meta["qa_set"],
             judge=args.judge,
             rerank=args.rerank,
             rewrite=args.rewrite,
+            generation=args.generation,
             top_k=args.top_k,
             fmt=args.fmt,
             tag=args.tag,
