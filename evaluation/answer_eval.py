@@ -126,6 +126,7 @@ __all__ = [
     "build_support_prompt",
     "control_partner",
     "is_abstention",
+    "report_name",
     "score_citations",
     "summarize",
 ]
@@ -696,6 +697,18 @@ def score_answers(
     return rows, meta
 
 
+# 리포트가 저장될 이름. **실행을 가르는 축이 전부 들어가야 한다** — 채점자만 넣고 재작성을
+# 빼 두었더니, 같은 라벨에 `--rewrite fuse` 로 한 번 더 돌리면 본판을 **에러 없이 덮었다**.
+# `verdicts.py` 가 13회차에 실제로 잃은 사고(luna v1 이 v3 표를 덮었다)와 같은 모양이다.
+#
+# **`tag` 는 프로필로도 안 갈리는 회차를 위한 것이다** — 같은 조건을 두 번 돌려 온도 잡음을
+# 재는 회차가 그렇다(생성에 캐시가 없어 두 실행의 답변이 다르다). 손으로 지키는 규약은
+# 잊는 순간 근거가 사라지므로 이름으로 옮긴다
+def report_name(*, label: str, judge: str, rewrite: str, fmt: str, tag: str = "") -> str:
+    suffix = f"-{tag}" if tag else ""
+    return f"{label}-answers-{judge}-{rewrite}{suffix}-{fmt}.json"
+
+
 # 회계를 먼저, 지표를 나중에 찍는다 (모듈 docstring 참고)
 def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> None:
     usage = JudgeUsage(**meta["judge_usage"])
@@ -764,6 +777,8 @@ def main() -> int:
     parser.add_argument("--judge", default=DEFAULT_JUDGE_PROFILE)
     parser.add_argument("--wrong", action="store_true", help="미지지 판정을 하나씩 보여준다")
     parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
+    # 프로필로도 안 갈리는 회차를 가른다 — 같은 조건을 두 번 돌려 온도 잡음을 재는 자리다
+    parser.add_argument("--tag", default="", help="리포트 이름에 붙일 꼬리표 (같은 조건 재실행)")
     args = parser.parse_args()
 
     rows, meta = score_answers(
@@ -779,9 +794,14 @@ def main() -> int:
     _print(rows, meta, show_wrong=args.wrong)
 
     if args.json:
-        # **이름에 채점자 프로필이 들어간다** — 안 넣으면 라벨이 같은 두 채점자의 표가
-        # 같은 자리를 다퉈 에러 없이 덮인다 (`verdicts.py` 가 손으로 막은 그 사고다)
-        out = RESULTS_DIR / f"{meta['label']}-answers-{args.judge}-{args.fmt}.json"
+        # 이름을 만드는 자리는 `report_name()` 하나다 (거기 주석에 이유가 있다)
+        out = RESULTS_DIR / report_name(
+            label=meta["label"],
+            judge=args.judge,
+            rewrite=args.rewrite,
+            fmt=args.fmt,
+            tag=args.tag,
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {"meta": meta, "summary": summarize(rows), "rows": [asdict(r) for r in rows]}
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -503,3 +503,43 @@ def test_abstained_rows_are_not_in_the_ledger() -> None:
         ),
     ]
     assert accounting_problems(rows, JudgeUsage(api_calls=2), expected_generations=2) == []
+
+
+# ---------------------------------------------------------------------------
+# 리포트 이름 — 같은 라벨의 두 실행이 같은 자리를 다투면 에러 없이 덮인다
+# ---------------------------------------------------------------------------
+
+
+# **재작성 프로필이 이름에 들어가야 한다.** 안 들어가면 같은 라벨에 `--rewrite fuse` 로 한 번
+# 더 돌린 회차가 본판 리포트를 **에러 없이 덮는다** — `verdicts.py` 가 13회차에 실제로 잃은
+# 사고와 같은 모양이고, 재작성 판을 재는 회차는 그것을 반드시 밟는다
+def test_the_rewrite_profile_splits_the_report() -> None:
+    common = {"label": "L", "judge": "mini", "fmt": "pdf"}
+
+    assert answer_eval.report_name(rewrite="off", **common) != answer_eval.report_name(
+        rewrite="fuse", **common
+    )
+
+
+# 채점자도 이름을 가른다 — 라벨이 같은 두 채점자의 표가 같은 자리를 다투면 안 된다
+def test_the_judge_profile_splits_the_report() -> None:
+    common = {"label": "L", "rewrite": "off", "fmt": "pdf"}
+
+    assert answer_eval.report_name(judge="mini", **common) != answer_eval.report_name(
+        judge="luna", **common
+    )
+
+
+# **프로필로도 안 갈리는 회차가 있다** — 같은 조건을 두 번 돌려 온도 잡음을 재는 자리다.
+# 생성에 캐시가 없어 두 실행의 답변이 실제로 다른데, 이름이 같으면 뒤엣것이 앞엣것을 덮는다
+def test_a_tag_splits_a_rerun_of_the_same_condition() -> None:
+    common = {"label": "L", "judge": "mini", "rewrite": "off", "fmt": "pdf"}
+
+    assert answer_eval.report_name(**common) != answer_eval.report_name(tag="noise", **common)
+
+
+# 꼬리표가 없으면 안 붙는다 — 이름에 빈 마디가 생기면 옛 실행과 대조하기 어려워진다
+def test_an_empty_tag_leaves_no_trace() -> None:
+    name = answer_eval.report_name(label="L", judge="mini", rewrite="off", fmt="pdf")
+
+    assert name == "L-answers-mini-off-pdf.json"
