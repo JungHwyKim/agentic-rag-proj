@@ -37,6 +37,23 @@
 섞으면 죽은 Evaluator 가 만점을 받는다는 것이고, 이쪽은 **실패가 0이어도 분포만으로** 같은
 일이 난다는 것이다.
 
+## 검색 조건이 바뀌면 **기대 열이 함께 움직인다**
+
+바로 위 문단의 레버가 `top_k` 하나가 아니다. 기대 verdict 를 **그 실행의 순위**로 만들기
+때문에, 리랭커든 재작성이든 검색을 좋게 하면 행이 *불충분* 에서 *충분* 으로 옮겨가고
+**죽은 판정자 기준선도 함께 움직인다.** 실측(사람 18건, 2026-08-28) — `off × local-gpu` 가
+`hit@5` 0.6667 · `hit@10` 0.8333 인데 `off × cohere` 는 0.7222 · 0.8889 이다.
+
+그래서 **`--rerank`·`--rewrite` 가 다른 판끼리는 총점을 안 견주고 균형 정확도로 본다.**
+그 둘이 리포트 이름에 들어가는 이유도 같다(`report_name()`).
+
+## `--rewrite` 는 여기서 **꺼짐이 합법**이다 — `retry_diff` 와 갈리는 자리
+
+`retry_diff.py` 는 재작성이 꺼지면 `SystemExit` 로 멈춘다. 저쪽은 *재시도가 질의를 바꾼
+회차* 를 재므로 재작성이 곧 재는 대상이기 때문이다. **여기는 반대다** — `off` 가 기본값이고
+지금까지의 혼동행렬이 전부 그 위에서 나왔다. 그래서 `None` 을 그대로 `retrieve()` 에 넘기고,
+그것이 곧 재작성 없이 도는 경로다. 저쪽 가드를 베끼면 **기본 실행이 죽는다.**
+
 ## 실패는 칸이 아니라 **열**이다
 
 `verdict="failed"` 는 *충분* 도 *불충분* 도 아니라 판정을 못 한 것이다. 혼동행렬 칸에 섞으면
@@ -80,6 +97,7 @@ from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
     DEFAULT_EVALUATOR_PROFILE,
     DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
     eval_config,
 )
 from evaluation.inspect import load_report, require_fresh_store
@@ -88,7 +106,7 @@ from evaluation.run_eval import RESULTS_DIR
 from evaluation.scoring import hit_rank
 from rag_pipeline.generation.prompts import EVALUATOR_PROMPT_VERSION
 
-__all__ = ["VerdictRow", "confusion", "score_verdicts"]
+__all__ = ["VerdictRow", "confusion", "report_name", "score_verdicts"]
 
 # 기대와 실제가 가질 수 있는 값. `failed` 는 **실제 쪽에만** 나온다 — 기대는 검색 결과가
 # 만들고 검색은 실패라는 상태를 안 갖는다
@@ -135,12 +153,18 @@ def score_verdicts(
     top_k: int,
     qa_path: Path | None = None,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    rewrite: str = DEFAULT_REWRITE_PROFILE,
     evaluator_name: str = DEFAULT_EVALUATOR_PROFILE,
 ) -> tuple[list[VerdictRow], dict[str, Any]]:
     from rag_pipeline.generation import get_evaluator
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
-    from rag_pipeline.retrieval import build_bm25_index, get_reranker, retrieve
+    from rag_pipeline.retrieval import (
+        build_bm25_index,
+        get_reranker,
+        get_rewriter,
+        retrieve,
+    )
 
     qa = load_qa_set(qa_path)
     if not qa.items:
@@ -152,6 +176,7 @@ def score_verdicts(
         qdrant_path=RESULTS_DIR / f"qdrant-{report['label']}-{fmt}",
         embedding=embedding,
         rerank=rerank,
+        rewrite=rewrite,
         evaluator=evaluator_name,
     )
 
@@ -165,6 +190,9 @@ def score_verdicts(
     embedder = get_embedder(config.embedding)
     store = get_store(config.indexing, config.embedding)
     reranker = get_reranker(config.rerank)
+    # **`None` 이어도 안 멈춘다** — 이 도구에서는 꺼짐이 기본값이자 계단의 첫 칸이다
+    # (모듈 docstring 의 「`retry_diff` 와 갈리는 자리」)
+    rewriter = get_rewriter(config.rewrite)
 
     rows: list[VerdictRow] = []
     try:
@@ -175,7 +203,8 @@ def score_verdicts(
         bm25 = build_bm25_index(store)
         print(
             f"컬렉션 {total}건 · 세트 {len(qa.items)}건 · top_k {top_k} · "
-            f"리랭커 {rerank} · 판정 {evaluator_name}({config.evaluator.evaluator_model})"
+            f"리랭커 {rerank} · 재작성 {rewrite} · "
+            f"판정 {evaluator_name}({config.evaluator.evaluator_model})"
         )
 
         for item in qa.items:
@@ -186,6 +215,7 @@ def score_verdicts(
                 top_k=top_k,
                 bm25=bm25,
                 reranker=reranker,
+                rewriter=rewriter,
                 config=config.retrieval,
             )
             # 기대는 **이 실행의 결과**로 만든다. 세트에 박힌 정답표를 안 쓴다
@@ -216,12 +246,14 @@ def score_verdicts(
         # 안 닫으면 다음 실행이 배타 잠금으로 통째로 죽는다
         store.close()
 
+    rerank_usage = getattr(reranker, "usage", None)
     meta = {
         "label": report["label"],
         "format": fmt,
         "top_k": top_k,
         "embedding_profile": embedding,
         "rerank_profile": rerank,
+        "rewrite_profile": rewrite,
         "evaluator_profile": evaluator_name,
         # **프로필과 함께 프롬프트 판도 싣는다** — 판을 손으로 되돌려 재는 것이 이 축의 방식
         # 이라(`plan_log/검색-생성.md` 13회차) 프로필 이름만으로는 어느 프롬프트로 잰 표인지
@@ -230,6 +262,17 @@ def score_verdicts(
         "queries": len(rows),
         "bm25_warnings": list(bm25.warnings),
         "rerank_warnings": list(getattr(reranker, "warnings", []) or []),
+        "rewrite_warnings": list(rewriter.warnings) if rewriter else [],
+        # **회계 게이트를 리포트에서 바로 읽을 수 있어야 한다.** 유료 갈래는
+        # `rerank_calls + rerank_cache_hits == 질의 수` 인데 로컬 갈래는 그 둘이 **늘 0** 이라
+        # `rerank_reranked / rerank_candidates + rerank_cache_hits` 를 봐야 하고, 그것도
+        # **등식이 아니라 하한**이다 (CLAUDE.md · verify_log/2026-08-28-…-localgpu.md 3-1)
+        "rerank_calls": rerank_usage.api_calls if rerank_usage else None,
+        "rerank_cache_hits": rerank_usage.cache_hits if rerank_usage else None,
+        "rerank_reranked": rerank_usage.reranked if rerank_usage else None,
+        "rerank_candidates": config.rerank.rerank_candidates if reranker else None,
+        "rewrite_calls": rewriter.usage.api_calls if rewriter else None,
+        "rewrite_cache_hits": rewriter.usage.cache_hits if rewriter else None,
     }
     return rows, meta
 
@@ -287,7 +330,7 @@ def _print(rows: list[VerdictRow], meta: dict[str, Any], *, show_wrong: bool) ->
     else:
         print("실패 버킷: (없음)")
 
-    for key in ("bm25_warnings", "rerank_warnings"):
+    for key in ("bm25_warnings", "rerank_warnings", "rewrite_warnings"):
         if meta[key]:
             print(f"  경고 {key}: {meta[key]}")
 
@@ -302,6 +345,17 @@ def _print(rows: list[VerdictRow], meta: dict[str, Any], *, show_wrong: bool) ->
         print(f"\n  [{row.query_id}] {mark} · {place}\n    {row.query}\n    {row.reasoning}")
 
 
+# 결과 JSON 이름. **판정 프로필·프롬프트 판에 더해 리랭커·재작성까지 들어간다** — 셋을 갈아
+# 가며 계단으로 재는 것이 이 도구의 쓰임인데, 이름이 안 갈리면 뒤엣것이 앞엣것을 **에러 없이
+# 덮는다.** 13회차가 luna v1 로 v3 표를 실제로 잃어 프롬프트 판이 들어갔는데, 그때는 리랭커·
+# 재작성 축이 없었다. `answer_eval.report_name()` 이 43회차에 같은 이유로 넓힌 것과 같은 자리다.
+# **`top_k` 는 안 넣는다** — 한 실행이 `--top-k 5 10` 을 한 파일의 `runs` 로 담는다
+def report_name(
+    *, label: str, evaluator: str, rerank: str, rewrite: str, prompt_version: str
+) -> str:
+    return f"{label}-verdicts-{evaluator}-{rerank}-{rewrite}-{prompt_version}.json"
+
+
 # CLI 진입점
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluator 의 판정을 혼동행렬로 채점한다")
@@ -311,6 +365,8 @@ def main() -> int:
     # **둘 이상을 받는 것이 기본이다** (모듈 docstring 참고)
     parser.add_argument("--top-k", type=int, nargs="+", default=[5, 10])
     parser.add_argument("--rerank", default=DEFAULT_RERANK_PROFILE)
+    # 기본이 `off` 라 이쪽도 **안 주면 지금까지와 글자 그대로 같은 실행이다**
+    parser.add_argument("--rewrite", default=DEFAULT_REWRITE_PROFILE)
     # 기본이 `mini` 라 **안 주면 지금까지와 글자 그대로 같은 실행이다**
     parser.add_argument("--evaluator", default=DEFAULT_EVALUATOR_PROFILE)
     parser.add_argument("--wrong", action="store_true", help="틀린 것과 실패를 하나씩 보여준다")
@@ -325,6 +381,7 @@ def main() -> int:
             top_k=top_k,
             qa_path=Path(args.qa_set),
             rerank=args.rerank,
+            rewrite=args.rewrite,
             evaluator_name=args.evaluator,
         )
         _print(rows, meta, show_wrong=args.wrong)
@@ -333,12 +390,16 @@ def main() -> int:
         )
 
     if args.json:
-        # **판정 프로필과 프롬프트 판이 둘 다 파일 이름에 들어간다** — 안 넣으면 라벨이 같은
-        # 실행끼리 같은 자리를 다퉈 뒤엣것이 앞엣것을 **에러 없이** 덮는다. 그래서 지난 세션이
-        # `h-ce-gpu-verdicts-preflip.json` 을 손으로 남겼고, **13회차는 실제로 잃었다**(luna
-        # v1 이 v3 표를 덮었다 — 프로필만 넣고 프롬프트 판을 안 넣은 첫 판이었다).
-        # 손으로 지키는 규약은 잊는 순간 근거가 사라지므로 구조로 옮긴다
-        out = RESULTS_DIR / f"{args.label}-verdicts-{args.evaluator}-{EVALUATOR_PROMPT_VERSION}.json"
+        # 이름이 갈리는 축 넷은 `report_name()` 에 있다 — 손으로 지키는 규약은 잊는 순간
+        # 근거가 사라지므로 구조로 옮긴다(지난 세션의 `h-ce-gpu-verdicts-preflip.json` 이
+        # 손으로 지킨 흔적이고, **13회차는 실제로 잃었다**)
+        out = RESULTS_DIR / report_name(
+            label=args.label,
+            evaluator=args.evaluator,
+            rerank=args.rerank,
+            rewrite=args.rewrite,
+            prompt_version=EVALUATOR_PROMPT_VERSION,
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\n남김: {out}")

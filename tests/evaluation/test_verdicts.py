@@ -4,6 +4,9 @@
 **실패가 혼동행렬 칸이 아니라 열로 세어지는 것.** 앞을 놓치면 이 표가 Evaluator 가 아니라
 검색기를 재고, 뒤를 놓치면 죽은 Evaluator 가 부정 예시에서 만점을 받는다
 (plan_log/검색-생성.md 10·11회차).
+
+**셋째가 47회차에 붙었다** — 재작성 축이 실제로 검색에 닿는 것과, 리포트 이름이 리랭커·재작성으로
+갈리는 것. 뒤엣것을 놓치면 계단으로 잰 세 판이 **에러 없이 서로를 덮는다.**
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from evaluation.verdicts import (
     _balanced,
     confusion,
     expected_verdict,
+    report_name,
     score_verdicts,
 )
 from rag_pipeline.schemas.answer import EvaluatorVerdict
@@ -88,6 +92,13 @@ class _FakeStore:
 
     def close(self) -> None:
         self.closed = True
+
+
+# 재작성기인 척하는 가짜. 이 도구가 읽는 것은 `warnings` 와 `usage` 두 칸뿐이다
+class _FakeRewriter:
+    def __init__(self, *, api_calls: int = 0, cache_hits: int = 0) -> None:
+        self.warnings: list[str] = []
+        self.usage = type("Usage", (), {"api_calls": api_calls, "cache_hits": cache_hits})()
 
 
 # 검색·저장소·판정을 전부 갈아끼운다. `hits` 가 그 질의로 올라올 청크 텍스트다
@@ -266,3 +277,54 @@ def test_failures_stay_out_of_the_recall_denominator() -> None:
 # 한쪽 클래스가 통째로 비면 균형을 못 낸다 — 지어내지 않고 None 을 돌려준다
 def test_balanced_is_none_when_a_class_is_empty() -> None:
     assert _balanced([_row("insufficient", "insufficient")])[1] is None
+
+
+# **`--rewrite` 가 실제로 검색에 닿아야 한다** — 인자만 받고 안 쓰면 계단 세 판이 같은 실행이
+# 되는데 표는 멀쩡해 보인다 (plan_log/검색-생성.md 47회차)
+def test_rewrite_profile_reaches_retrieve(mocker, qa_path) -> None:
+    _wire(mocker, _FakeEvaluator({}), {})
+    rewriter = _FakeRewriter(api_calls=2, cache_hits=1)
+    mocker.patch("rag_pipeline.retrieval.get_rewriter", return_value=rewriter)
+    seen: list[object] = []
+    mocker.patch(
+        "rag_pipeline.retrieval.retrieve",
+        side_effect=lambda query, **kw: seen.append(kw.get("rewriter", "안 넘김")) or [],
+    )
+
+    _, meta = score_verdicts(label="run", fmt="pdf", top_k=5, qa_path=qa_path, rewrite="fuse")
+
+    assert seen == [rewriter, rewriter]
+    assert meta["rewrite_profile"] == "fuse"
+    assert (meta["rewrite_calls"], meta["rewrite_cache_hits"]) == (2, 1)
+
+
+# **꺼짐이 합법이다.** `retry_diff` 는 재작성이 꺼지면 SystemExit 인데 여기는 `off` 가
+# 기본값이자 계단의 첫 칸이라, 저쪽 가드를 베끼면 **기본 실행이 죽는다**.
+# `get_rewriter` 를 일부러 안 갈아끼운다 — 진짜 `off` 프로필이 None 을 내는 것까지가 계약이다
+def test_rewrite_off_passes_none_instead_of_stopping(mocker, qa_path) -> None:
+    _wire(mocker, _FakeEvaluator({}), {})
+    seen: list[object] = []
+    mocker.patch(
+        "rag_pipeline.retrieval.retrieve",
+        side_effect=lambda query, **kw: seen.append(kw.get("rewriter", "안 넘김")) or [],
+    )
+
+    _, meta = score_verdicts(label="run", fmt="pdf", top_k=5, qa_path=qa_path)
+
+    assert seen == [None, None]
+    assert meta["rewrite_profile"] == "off"
+    assert meta["rewrite_calls"] is None
+    assert meta["rewrite_warnings"] == []
+
+
+# **이름이 안 갈리면 계단 세 판이 서로를 에러 없이 덮는다** — 13회차가 그렇게 표를 잃었다
+def test_report_name_splits_on_rerank_and_rewrite() -> None:
+    base = {"label": "h", "evaluator": "mini", "prompt_version": "v3"}
+    ladder = (("local-gpu", "off"), ("cohere", "off"), ("cohere", "fuse"))
+    names = {report_name(**base, rerank=r, rewrite=w) for r, w in ladder}
+
+    assert len(names) == len(ladder)
+    assert (
+        report_name(**base, rerank="cohere", rewrite="fuse")
+        == "h-verdicts-mini-cohere-fuse-v3.json"
+    )
