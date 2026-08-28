@@ -1,40 +1,149 @@
-"""웹 검색 도구 — **계약만 있고 구현이 없다.**
+"""웹 검색 도구 — Tavily.
 
-## 왜 비워 두나
+한때 이 파일은 **계약만 있고 구현이 없었다.** 그때 적어 둔 「다시 볼 조건」이
+*"사용자가 코퍼스 밖 질문에 답하기를 원할 때. 그때 정할 것은 제공자(Tavily·Serper) 와
+기본 pytest 가 키 없이 통과하도록 만들 모킹 이음새"* 였고, 2026-08-29 에 그 조건이 왔다.
 
-`requirements.txt` 에 검색 라이브러리가 **0개**다. 실제로 붙이려면 외부 서비스 가입 · 키 ·
-과금이 함께 오는데, 지금 필요한 것은 *Router 가 도구를 둘 이상 다룰 수 있는가* 하나다.
-그 질문에는 이 계약만으로 답이 된다.
+## 「미구성」이 여전히 예외가 아니라 값이다
 
-**빈 클래스 대신 「구성되지 않았다」를 값으로 돌려주는 것이 요점이다.** 그러면 Router 도
-`AgentState` 도 이 도구를 다른 도구와 똑같이 다루고, 나중에 진짜 구현이 들어와도 **호출부가
-한 줄도 안 바뀐다.** `NotImplementedError` 를 던지는 안은 기각했다 — `BaseTool.run()` 이
-그것을 `success=False` 로 바꾸긴 하지만, 사유 문자열이 `NotImplementedError:` 로 시작해
-*아직 안 만들었다* 와 *부르다 죽었다* 가 사람 눈에 안 갈린다.
+키가 없거나 SDK 가 안 깔려 있으면 `_make_client()` 가 `None` 을 돌려주고 이 도구는
+`NOT_CONFIGURED` 를 **값으로** 내려보낸다. 구현이 들어와도 그 계약이 안 바뀌는 것이 요점이다
+— 빈 계약 시절의 테스트 둘이 그대로 살아 있고, 그 둘이 *아직 안 만들었다* 와 *부르다 죽었다*
+를 사람 눈에 갈라 준다. 그래서 사유 문자열이 **예외 이름으로 시작하지 않는다.**
 
-## 다시 볼 조건
+## 결과를 `RetrievedChunk` 로 맞춘다
 
-사용자가 코퍼스 밖 질문에 답하기를 원할 때. 그때 정할 것은 제공자(Tavily·Serper 등) 와
-**기본 pytest 가 키 없이 통과하도록 만들 모킹 이음새**이고, 이음새는 이 저장소의 관례대로
-모듈 레벨 `_make_client()` 다.
+전용 스키마(`WebResult`)를 안 만들었다. 이 모양이면 `agent/context.py:build_context()` ·
+`generation/prompts.py:build_evidence_block()` · `generation/citations.py` 가 **한 줄도 안
+바뀐 채** 웹 근거를 먹는다. 전용 스키마로 가면 근거 블록 모양이 두 벌이 되는데, `context.py`
+가 *"세 번째 모양이 끼면 한 곳만 고쳐져도 에러가 안 난다"* 로 막아 둔 자리가 바로 거기다.
+
+대가는 웹 결과에 뜻이 없는 칸이 생긴다는 것이고, 그것을 `metadata["origin"] == "web"` 하나가
+가른다.
+
+**점수 칸(`dense_score`·`rewrite_dense_score`·`fused_score`·`rerank_score`)은 안 채운다.**
+그 넷은 전부 코퍼스 검색 경로의 산물이라, Tavily 의 relevance 를 거기 담으면
+`evaluation/` 의 지표와 `rerank_diff.py` 가 **두 척도를 한 칸에서 읽는데 에러가 안 난다.**
+Tavily 점수는 `metadata["web_score"]` 로 간다. 순서를 다시 매길 필요도 없다 —
+`context.py` 가 *"다시 정렬하지 않는다"* 이고, 여기서는 Tavily 가 준 순서가 그 순서다.
+
+## SDK 응답 모양은 **소스로 확인했다** (tavily-python 0.8.0, 2026-08-29)
+
+`TavilyClient.search()` 는 `dict` 를 돌려주고 **`results` 키가 반드시 있다**
+(`response_dict.setdefault("results", [])`). 그 dict 는 `response.json()` 이라 항목도 평범한
+dict 다. 200 이 아니면 SDK 가 **예외를 던지고**, 그것은 `BaseTool.run()` 이 값으로 바꾼다.
+
+이것을 짐작하지 않고 판 이유는 적재 쪽 선례다 — LlamaParse 응답의 `markdown` 을 문자열로
+알고 `.strip()` 을 부르다 **적재 전체가 멈춘 적이 있다**(2026-08-18). 가짜 응답을 문자열로
+지어냈으면 테스트가 그 오해를 그대로 검증했을 것이다.
+
+**감수 사항**: 0.8.0 의 `search_depth` 는 합법값이 넷(`basic`·`advanced`·`fast`·
+`ultra-fast`)인데 `WebSearchConfig` 는 둘만 연다. 뒤 둘의 크레딧·품질을 안 재 봐서이고,
+**합법값을 못 적을 설정은 안 만든다**는 쪽을 골랐다.
+
+## 호출 캐시가 없다
+
+이유는 `rag_pipeline/config.py` 의 `WebSearchConfig` 주석에 있다 — 이 저장소의 캐시 셋은
+*같은 입력이면 같은 출력* 을 전제하는데 웹 검색은 그것이 거짓이다.
 """
 
 from __future__ import annotations
 
-from rag_pipeline.agent.tools.base import BaseTool
-from rag_pipeline.schemas.agent import ToolInput, ToolOutput
+from typing import Any
 
-__all__ = ["WebSearchTool"]
+from rag_pipeline.agent.tools.base import BaseTool
+from rag_pipeline.config import WebSearchConfig
+from rag_pipeline.schemas.agent import ToolInput, ToolOutput
+from rag_pipeline.schemas.retrieval import RetrievedChunk
+
+__all__ = ["NOT_CONFIGURED", "WebSearchTool"]
 
 # 사람이 읽을 사유. **예외 이름으로 시작하지 않는다** (모듈 docstring 참고)
 NOT_CONFIGURED = "웹 검색 도구가 아직 구성되지 않았습니다 (제공자·키 미설정)"
 
 
-# 코퍼스 밖을 찾는 도구. 지금은 늘 실패를 값으로 돌려준다
+# 모킹 이음새. **모듈 레벨 함수여야 한다** — 테스트가
+# `mocker.patch.object(web_search, "_make_client", ...)` 로 갈아끼운다. 인라인화하거나
+# 메서드로 옮기면 그 테스트가 전부 깨진다(`generation/evaluate.py` 와 같은 자리).
+# **키 없음과 SDK 없음이 같은 None 인 것이 결정이다** — 둘 다 사용자가 할 일은
+# 「구성해라」 하나라 갈라 봐야 화면에 쓸 데가 없다
+def _make_client(api_key: str | None) -> Any | None:
+    if not api_key:
+        return None
+    try:
+        from tavily import TavilyClient
+    except ImportError:  # 선택 갈래다 — 안 깔려 있어도 기본 pytest 가 통과해야 한다
+        return None
+    return TavilyClient(api_key=api_key)
+
+
+# 코퍼스 밖을 찾는 도구. 키가 없으면 미구성을 값으로 돌려준다
 class WebSearchTool(BaseTool):
     name = "web_search"
-    description = "색인된 문서 밖의 정보를 웹에서 찾는다 (미구성)"
+    description = "색인된 문서 밖의 정보를 웹에서 찾는다"
 
-    # 구현이 없다는 것을 실패가 아니라 **구성 없음**으로 알린다
+    # 설정을 안 넘기면 호출 시점에 만든다 — `RetrieverTool` 의 `config` 인자와 같은 모양이다
+    def __init__(self, *, config: WebSearchConfig | None = None) -> None:
+        self._config = config
+
+    # 한 번 검색한다. **0건은 실패가 아니다** — 못 찾은 것과 도구가 죽은 것은 다르다
     def _run(self, tool_input: ToolInput) -> ToolOutput:
-        return ToolOutput(success=False, error=NOT_CONFIGURED)
+        config = self._config or WebSearchConfig()
+        # 클라이언트를 __init__ 에서 안 만든다. 호출 시점에 부르는 것이 모킹 이음새를
+        # 살려 두는 자리다 (`ingestion/embedding/openai_api.py` 와 같은 이유)
+        client = _make_client(config.tavily_api_key)
+        if client is None:
+            return ToolOutput(success=False, error=NOT_CONFIGURED)
+
+        response = client.search(
+            query=tool_input.query,
+            max_results=_resolve_max_results(tool_input, config),
+            search_depth=config.web_search_depth,
+        )
+        return ToolOutput(success=True, data=_to_chunks(response))
+
+
+# metadata 의 max_results 를 쓰되 정수가 아니면 설정값으로 돌아간다.
+# **`RetrieverTool._resolve_top_k()` 와 같은 모양이다** — Router 가 같은 도구를 상황에 따라
+# 다른 폭으로 부를 수 있어야 하는데, `ToolInput` 에 필드를 더하면 **모든 도구가 웹 전용
+# 칸을 갖게 된다**
+def _resolve_max_results(tool_input: ToolInput, config: WebSearchConfig) -> int:
+    value = tool_input.metadata.get("max_results")
+    if isinstance(value, int) and value > 0:
+        return value
+    return config.web_search_max_results
+
+
+# 응답을 근거 청크로 옮긴다. **URL 이나 본문이 없는 항목은 버린다** — 신원이 없으면 인용
+# 번호가 가리킬 곳이 없고, 본문이 없으면 근거가 아니라 제목 한 줄이다
+def _to_chunks(response: Any) -> list[RetrievedChunk]:
+    # `search()` 가 setdefault 로 보장하지만, 그 보장은 **이 SDK 버전의 것**이다.
+    # 값을 못 얻었을 때 죽는 대신 0건으로 내려가는 쪽을 고른다
+    results = response.get("results") or [] if isinstance(response, dict) else []
+
+    chunks: list[RetrievedChunk] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        text = str(item.get("content") or "")
+        if not url or not text:
+            continue
+        chunks.append(
+            RetrievedChunk(
+                # 코퍼스 청크와 신원이 안 겹치게 접두어를 단다 — `chunk_id` 는
+                # `evidence_unchanged_at` 의 앞뒤 대조가 읽는 값이다
+                chunk_id=f"web:{url}",
+                document_id=url,
+                text=text,
+                metadata={
+                    # `build_evidence_block()` 이 이 값을 `[1] (…)` 로 그린다
+                    "source_name": str(item.get("title") or url),
+                    # 코퍼스 근거와 가르는 **유일한** 칸이다 (모듈 docstring 참고)
+                    "origin": "web",
+                    "url": url,
+                    "web_score": item.get("score"),
+                },
+            )
+        )
+    return chunks

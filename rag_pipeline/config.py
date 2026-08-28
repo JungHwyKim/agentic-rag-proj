@@ -642,6 +642,43 @@ class RuntimeConfig(BaseSettings):
     torch_num_threads: int | None = None
 
 
+# 에이전트 도구 계층이 쓰는 웹 검색 설정. **`IngestConfig` 에 안 붙는다** — 소비자가
+# `agent/tools/web_search.py` 하나이고, `RetrievalConfig` 을 `RetrieverTool` 이 직접 받는
+# 것과 같은 자리다. 그래서 `offline_config` 가 이 객체를 못 덮고, **개발자 `.env` 의 실키를
+# 막는 것은 `tests/agent/conftest.py` 의 autouse 픽스처다**(그쪽 docstring 에 이유가 있다).
+#
+# **자리가 파일 끝인 것은 설계가 아니라 조율이다** — 2026-08-29 에 다른 세션이
+# `EvaluatorConfig` 뒤에 `AgentConfig` 를 넣는 중이어서 비켰다. 묶음으로는 `AgentConfig`
+# 옆이 맞다
+class WebSearchConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 켜는 축은 이 키 하나다. **비면 `_make_client()` 가 None 을 돌려줘 도구가 통째로 꺼진다**
+    # — `rerank_model`·`evaluator_model`·`rewrite_model` 이 빈 값으로 꺼지는 것과 글자 그대로
+    # 같은 모양이고, **저장소 커밋본은 꺼진 채다.** 여기서 켜는 순간 질의당 크레딧이 나간다
+    tavily_api_key: str | None = None
+
+    # 몇 건을 받아오나. `generation_top_k`(5)와 나란한 수로 뒀다 — **임시값이고 실측 전이다.**
+    # 웹 근거가 답변에 실리는 경로가 아직 없어(Router 가 이 도구를 안 고른다) 잴 자[尺]가 없다
+    web_search_max_results: int = 5
+
+    # 검색 깊이. **합법값 둘이 크레딧을 갈라 죽은 설정이 아니다** — `rerank_provider`·
+    # `rewrite_mode` 와 같은 잣대이고, 구현체가 Tavily 하나뿐이라 `WEB_SEARCH_PROVIDER` 를
+    # **안 만든 것**이 그 잣대의 반대쪽 사례다. `advanced` 는 같은 질의에 크레딧을 더 쓴다
+    web_search_depth: Literal["basic", "advanced"] = "basic"
+
+    # **호출 캐시 설정이 없는 것이 결정이다.** 이 저장소의 캐시 셋(embedding·rerank·rewrite)은
+    # 전부 *같은 입력이면 같은 출력* 이 참이라 내용 해시만으로 키가 서는데, 웹 검색은 그것이
+    # **거짓**이다 — 결과가 시간에 따라 변하는 것이 이 도구의 존재 이유다. TTL 없이 붙이면
+    # «최신을 찾는 도구가 옛 답을 준다» 가 에러 없이 생기고, TTL 값은 재야 정해지는데 잴
+    # 자[尺]가 없다(이 저장소의 임계값은 전부 분포의 틈에서 나왔다).
+    # 대가는 **테스트·탐색을 되풀이하면 크레딧이 그만큼 나간다**는 것이다
+
+
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다
 def default_config() -> IngestConfig:
     return IngestConfig()
