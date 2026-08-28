@@ -77,7 +77,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.app.api.routes.documents import original_exists
 from backend.app.core.config import get_settings
-from backend.app.core.query_log import append_query_log
+from backend.app.core.query_log import QUERY_SOURCE_HEADER, append_query_log
 from backend.app.core.singletons import BUILD_LOCK, embedder_for
 from backend.app.core.templates import templates
 from rag_pipeline.generation.evaluate import get_evaluator
@@ -233,7 +233,15 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
     settings = get_settings()
     if settings.query_log_enabled:
         await run_in_threadpool(
-            append_query_log, settings.query_log_path, text, answer, elapsed_ms=elapsed_ms
+            append_query_log,
+            settings.query_log_path,
+            text,
+            answer,
+            elapsed_ms=elapsed_ms,
+            # **다듬는 것은 여기가 아니라 `core/query_log.py` 다** — 헤더를 그대로 넘기고
+            # 정규화(빈 값 → `user` · 길이 자르기)를 한 곳에 둔다. 화면에서 온 질의는
+            # 이 헤더가 없어 실사용으로 세어진다
+            source=request.headers.get(QUERY_SOURCE_HEADER),
         )
 
     # **`query` 가 아니라 `echo` 로 넘긴다.** 질문 말풍선은 이제 화면이 그린다 — 보내는 즉시

@@ -66,6 +66,30 @@
 
 **두 칸 다 키를 늘 쓴다** — `verdict` 와 같은 규칙이고 이유도 같다.
 
+## 출처(`source`)는 왜 헤더에서 오나 — 그리고 왜 화이트리스트가 없나
+
+**이 로그의 갈래가 넷인데 셋이 오염이다**(2026-08-28 실측, 53줄) — uuid 꼬리 프로브 28 ·
+cp949 깨짐 4 · 서버 E2E 4 이고 **실사용은 17줄뿐**이다. 오염의 방향이 서로 반대라
+(앞 둘은 서로 다른 문자열이라 반복률을 아래로, E2E 는 같은 질의를 되풀이해 위로) **합계
+하나만 보면 못 읽고, 한 갈래만 빼면 오히려 더 틀린다.**
+
+구멍은 계층에 있다. `run_eval` 은 이 로그가 backend 에 있다는 것이, `tests/api` 는 autouse
+픽스처가 막는데 **사람이 HTTP 로 넣는 측정 트래픽은 실사용과 같은 문으로 들어와 아무것도
+안 막는다.** 그래서 요청이 스스로 밝히게 한다.
+
+**헤더인 이유는 미들웨어를 기각한 이유의 거울상이다** — 저쪽은 `Answer` 를 못 봐 분자가
+사라지지만, 라우트는 `Request` 를 이미 들고 있어 새 축이 안 생긴다.
+
+**합법값을 화이트리스트로 좁히지 않는다.** 모르는 값을 거부해 `user` 로 떨어뜨리면 오타 하나가
+측정 트래픽을 **실사용으로 세게** 만드는데, 그것이 이 칸이 막으려던 바로 그 일이다. 값이
+무엇이든 *"실사용이 아니다"* 는 확실하고, 새 측정 갈래가 생길 때마다 코드를 고칠 일도 없다.
+대신 길이는 자른다 — 헤더는 외부 입력이라 상한이 없으면 임의 길이 문자열이 줄마다 박힌다.
+
+**기본값이 `user` 인 것은 안전한 쪽이 아니라 정직한 쪽이다.** 헤더를 안 붙인 측정은 다시
+실사용으로 세어진다 — 이 칸은 그 사고를 **막는** 것이 아니라 갈래를 **데이터에 남기는**
+것이다. 옛 줄에는 키가 아예 없어 *"옛 형식"* 과 *"이번 형식의 실사용"* 이 집계에서 갈린다
+(`verdict` 가 `null` 로 갈리는 것과 같은 모양).
+
 **상한도 자동 정리도 없다.** `Settings.originals_dir` 이 같은 판단을 이미 했다 —
 지금 값을 정하면 관측 없는 숫자가 된다. 대신 경로와 on/off 를 밖으로 연다.
 """
@@ -80,22 +104,45 @@ from pathlib import Path
 from rag_pipeline.answer_cache import cache_point_id_for
 from rag_pipeline.schemas.answer import Answer
 
-__all__ = ["append_query_log"]
+__all__ = ["QUERY_SOURCE_HEADER", "append_query_log", "normalize_source"]
 
 # 한 줄 쓰기를 직렬화한다. 프로세스가 하나라는 전제 위에 있다 (모듈 docstring 참고)
 _LOCK = threading.Lock()
+
+# 요청이 자기 출처를 밝히는 헤더. **이름이 여기 사는 이유는 뜻이 여기 있어서다** —
+# 라우트가 자기 문자열을 따로 들면 두 철자가 생기고, 어긋나도 아무 에러가 안 난다
+QUERY_SOURCE_HEADER = "X-Query-Source"
+
+# 출처 문자열의 길이 상한. **고른 값이 아니라 상한일 뿐이다** (모듈 docstring 참고)
+_MAX_SOURCE_CHARS = 32
+
+# 안 밝힌 요청의 출처. 화면에서 온 질의가 이것이다 (모듈 docstring 참고)
+_DEFAULT_SOURCE = "user"
+
+
+# 출처 문자열을 다듬는다. **거르지 않고 자르기만 한다** — 모르는 값을 실사용으로 떨어뜨리면
+# 오타 하나가 측정 트래픽을 실사용으로 세게 만든다 (모듈 docstring 참고)
+def normalize_source(raw: str | None) -> str:
+    text = (raw or "").strip()
+    return text[:_MAX_SOURCE_CHARS] if text else _DEFAULT_SOURCE
 
 
 # 질의 하나를 로그에 한 줄 붙인다. **실패해도 아무것도 안 던진다** (모듈 docstring 참고).
 #
 # 라우트에 인라인하지 않은 이유는 테스트 이음새를 남기기 위해서다 — 외부 API 핸들러의
 # `_make_client()` 가 모듈 레벨 함수인 것과 같은 잣대다.
-def append_query_log(path: Path, query: str, answer: Answer, *, elapsed_ms: int) -> bool:
+def append_query_log(
+    path: Path, query: str, answer: Answer, *, elapsed_ms: int, source: str | None
+) -> bool:
     record = {
         "at": datetime.now(UTC).isoformat(),
         "query": query,
         # 캐시와 **같은 파생**이다. 다른 정규화를 만들면 두 반복률이 갈린다
         "key": cache_point_id_for(query),
+        # 누가 넣은 질의인가. 안 밝히면 `user` 다 — **키를 늘 쓴다** (모듈 docstring 참고).
+        # `source=` 에 기본값을 안 둔 것은 새 호출부가 빠뜨렸을 때 조용히 실사용으로 세는
+        # 대신 `TypeError` 로 터지게 하기 위해서다
+        "source": normalize_source(source),
         # 화면 배지의 판정 근거와 같은 하나다 (`Answer.cached_from`)
         "cached": answer.cached_from is not None,
         "elapsed_ms": elapsed_ms,

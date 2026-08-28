@@ -66,10 +66,11 @@ def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-# 질의 하나에 한 줄. **필드 아홉이 곧 계약이다** — 넷은 분자·분모를 만들고(`key`·`cached`),
+# 질의 하나에 한 줄. **필드 열이 곧 계약이다** — 넷은 분자·분모를 만들고(`key`·`cached`),
 # 둘은 켰을 때 얼마를 아끼는지를 만들고(`elapsed_ms`·`sources`), `verdict` 는 실사용 판정
-# 분포를, `rewritten`·`rewrite_mode` 는 **무엇으로 검색했나**를 만든다.
-# **셋 다 그 갈래가 꺼져 있어도 키가 있다** — 없을 때 키를 빼면
+# 분포를, `rewritten`·`rewrite_mode` 는 **무엇으로 검색했나**를, `source` 는 **그 분모가
+# 실사용인가**를 만든다.
+# **넷 다 그 갈래가 꺼져 있어도 키가 있다** — 없을 때 키를 빼면
 # "꺼져 있었다"와 "옛 형식이라 칸이 없다"가 집계에서 안 갈린다
 def test_one_query_writes_one_line(mocker, query_log_path: Path):
     mocker.patch(
@@ -90,12 +91,15 @@ def test_one_query_writes_one_line(mocker, query_log_path: Path):
         "verdict",
         "rewritten",
         "rewrite_mode",
+        "source",
     }
     # 판정도 재작성도 꺼진 상태다. 칸은 있고 값이 None 이다
     assert row["verdict"] is None
     assert row["rewritten"] is None
     assert row["rewrite_mode"] is None
     assert row["query"] == "위약금은?"
+    # 헤더를 안 붙인 요청은 실사용이다 — 화면에서 오는 질의가 이 경로다
+    assert row["source"] == "user"
     assert row["cached"] is False
     assert row["sources"] == 1
     assert isinstance(row["elapsed_ms"], int)
@@ -232,6 +236,59 @@ def test_fallback_records_null(mocker, query_log_path: Path):
     (row,) = _lines(query_log_path)
     assert row["rewritten"] is None
     assert row["rewrite_mode"] is None
+
+
+# 측정 트래픽은 헤더로 자기를 밝힌다. **헤더 이름을 리터럴로 쓰는 것이 일부러다** —
+# 코드의 상수를 import 하면 그 상수를 잘못 고쳐도 테스트가 따라가서, 선이 어디로 갔는지를
+# 아무도 안 잡는다. 여기서만 두 번째 철자를 둔다
+def test_source_header_is_recorded(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "q"}, headers={"X-Query-Source": "probe"})
+
+    assert _lines(query_log_path)[0]["source"] == "probe"
+
+
+# **모르는 값을 `user` 로 접지 않는다.** 화이트리스트를 두면 오타 하나가 측정 트래픽을
+# 실사용으로 세게 만드는데, 그것이 이 칸이 막으려던 바로 그 일이다 — 값이 무엇이든
+# *"실사용이 아니다"* 는 확실하다
+def test_unknown_source_is_kept_as_is(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "q"}, headers={"X-Query-Source": "prboe"})
+
+    assert _lines(query_log_path)[0]["source"] == "prboe"
+
+
+# 공백만 있는 헤더는 안 밝힌 것과 같다. 빈 문자열을 갈래로 세면 집계에 뜻 없는 칸이 하나 는다
+def test_blank_source_falls_back_to_user(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "q"}, headers={"X-Query-Source": "   "})
+
+    assert _lines(query_log_path)[0]["source"] == "user"
+
+
+# 헤더는 외부 입력이라 길이를 자른다. **상한이 없으면 임의 길이 문자열이 줄마다 박힌다** —
+# 이 파일에는 상한도 자동 정리도 없다
+def test_long_source_is_truncated(mocker, query_log_path: Path):
+    mocker.patch(
+        "backend.app.api.routes.query.answer_question",
+        return_value=Answer(query="q", text="답", sources=[]),
+    )
+
+    _client().post("/api/v1/query", data={"query": "q"}, headers={"X-Query-Source": "p" * 200})
+
+    assert _lines(query_log_path)[0]["source"] == "p" * 32
 
 
 # **분모의 뜻은 "답이 나온 질의" 하나다.** 예외로 끝난 질의를 섞으면 같은 분모가 두 뜻을 갖고,

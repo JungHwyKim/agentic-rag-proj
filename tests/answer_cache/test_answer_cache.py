@@ -430,17 +430,31 @@ def test_invalidation_failure_does_not_raise():
 # --- 팩토리 -------------------------------------------------------------------
 
 
-# **임계값이 없으면 캐시가 통째로 꺼진다.** 근거 없는 수가 코드에 존재할 수 없는 모양이다
+# **임계값이 없으면 캐시가 통째로 꺼진다.** 근거 없는 수가 코드에 존재할 수 없는 모양이다.
+#
+# **`answer_cache_mode` 를 함께 못 박는 것이 이 단언의 뜻을 지킨다** — 꺼짐 조건이 갈래마다
+# 달라(`exact` 는 임계값을 아예 안 본다) 모드를 안 박으면 이 테스트가 재는 것이 개발자 `.env`
+# 에 딸린다. **실제로 밟았다**(2026-08-28): `.env` 에 `ANSWER_CACHE_MODE=exact` 를 적은
+# 순간 이 파일이 빨개졌고, 그때까지 통과하던 근거는 코드가 아니라 `.env` 의 침묵이었다
 def test_get_answer_cache_returns_none_without_threshold():
     config = IngestConfig()
-    object.__setattr__(config, "_answer_cache", AnswerCacheConfig(answer_cache_threshold=None))
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_mode="semantic", answer_cache_threshold=None),
+    )
 
     assert get_answer_cache(_FakeStore(_FakeClient()), config) is None
 
 
+# 모드를 박는 이유는 위와 같다 — 재는 것이 **semantic 갈래의 진리표**다
 def test_get_answer_cache_builds_cache_when_threshold_is_set():
     config = IngestConfig()
-    object.__setattr__(config, "_answer_cache", AnswerCacheConfig(answer_cache_threshold=0.93))
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_mode="semantic", answer_cache_threshold=0.93),
+    )
 
     cache = get_answer_cache(_FakeStore(_FakeClient()), config)
 
@@ -640,10 +654,15 @@ def test_exact_mode_still_stores_a_real_vector() -> None:
 # --- 켜짐 진리표 -------------------------------------------------------------
 
 
-# 기본 조합. **`.env` 를 안 건드리면 지금까지와 글자 그대로 같다**
+# 저장소 커밋본의 조합이다. **모드를 박지 않으면 이 테스트가 `.env` 를 잰다** — 이름은
+# `semantic` 이라고 말하는데 실제로 무엇을 쟀는지는 그 머신의 `.env` 가 정하게 된다
 def test_semantic_without_threshold_stays_off() -> None:
     config = IngestConfig()
-    object.__setattr__(config, "_answer_cache", AnswerCacheConfig(answer_cache_threshold=None))
+    object.__setattr__(
+        config,
+        "_answer_cache",
+        AnswerCacheConfig(answer_cache_mode="semantic", answer_cache_threshold=None),
+    )
 
     assert get_answer_cache(_FakeStore(_FakeClient()), config) is None
 
