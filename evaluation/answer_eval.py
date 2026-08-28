@@ -262,10 +262,16 @@ def control_partner(index: int, rows: list[AnswerRow]) -> AnswerRow | None:
     if total < 2:
         return None
     me = rows[index]
+    mine = set(me.chunk_ids)
     fallback: AnswerRow | None = None
     for step in range(1, total):
         other = rows[(index + step) % total]
-        if not other.chunk_ids or other.chunk_ids == me.chunk_ids:
+        # **완전 일치가 아니라 겹침 하나로 막는다.** 41회차가 실측으로 밟았다 — `ai-01` 의
+        # 대조군이 `sch-01` 의 근거를 빌렸는데 그 다섯 중 하나가 **답변의 이메일 주소를 담은
+        # 바로 그 청크**였다. 채점자는 옳게 «뒷받침된다» 고 했고 게이트만 무효를 외쳤다.
+        # 검색은 문서를 안 가려 오므로 «질의의 `source_doc` 이 다르다» 가 근거의 출처를 전혀
+        # 보장하지 않는다 — 60건 중 3건이 이 상태였다
+        if not other.chunk_ids or mine & set(other.chunk_ids):
             continue
         if other.source_doc != me.source_doc:
             return other
@@ -551,6 +557,12 @@ def summarize(rows: list[AnswerRow]) -> dict[str, Any]:
         "positive": bucket([row for row in rows if row.answerable]),
         "shuffled_control": {
             "judged": len(controls),
+            # **짝을 못 찾아 대조군이 아예 없는 행. 제3의 상태다** — 41회차가 짝 거르기를
+            # «완전 일치» 에서 «하나라도 겹치면» 으로 넓히면서 이 자리가 실재하게 됐다.
+            # 안 세면 대조군이 줄어든 것이 «supported 0» 으로 보여 **표본 부족이 실력으로
+            # 읽힌다** — Cohere 한도 초과가 품질로 읽힌 그 사고와 같은 모양이다.
+            # **무효화가 아니라 분모 주석이다**(40회차) — 게이트에 섞으면 헛경보가 된다
+            "unpaired": sum(1 for row in rows if not row.abstained and row.control_from is None),
             # **여기가 0이어야 지지 수치를 읽는다**
             "supported": sum(1 for row in controls if row.control == "supported"),
             "unsupported": sum(1 for row in controls if row.control == "unsupported"),
@@ -701,12 +713,18 @@ def score_answers(
 # 빼 두었더니, 같은 라벨에 `--rewrite fuse` 로 한 번 더 돌리면 본판을 **에러 없이 덮었다**.
 # `verdicts.py` 가 13회차에 실제로 잃은 사고(luna v1 이 v3 표를 덮었다)와 같은 모양이다.
 #
+# **`rerank` 와 `top_k` 는 41회차에 같은 이유로 들어왔다.** 그 판이 같은 라벨·같은 채점자로
+# `--top-k` 만 5→10 으로 바꿔 두 짝을 돌리는데, 안 담으면 **뒤 짝이 앞 짝을 에러 없이 덮는다**.
+# `--tag k5` 로 손으로 막을 수도 있었지만, 그것을 기각하는 문장이 바로 아래에 이미 있었다.
+#
 # **`tag` 는 프로필로도 안 갈리는 회차를 위한 것이다** — 같은 조건을 두 번 돌려 온도 잡음을
 # 재는 회차가 그렇다(생성에 캐시가 없어 두 실행의 답변이 다르다). 손으로 지키는 규약은
 # 잊는 순간 근거가 사라지므로 이름으로 옮긴다
-def report_name(*, label: str, judge: str, rewrite: str, fmt: str, tag: str = "") -> str:
+def report_name(
+    *, label: str, judge: str, rerank: str, rewrite: str, top_k: int, fmt: str, tag: str = ""
+) -> str:
     suffix = f"-{tag}" if tag else ""
-    return f"{label}-answers-{judge}-{rewrite}{suffix}-{fmt}.json"
+    return f"{label}-answers-{judge}-{rerank}-{rewrite}-k{top_k}{suffix}-{fmt}.json"
 
 
 # 회계를 먼저, 지표를 나중에 찍는다 (모듈 docstring 참고)
@@ -745,7 +763,7 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
             )
 
     control = summary["shuffled_control"]
-    print(f"\n[음성 대조군] 판정 {control['judged']}건")
+    print(f"\n[음성 대조군] 판정 {control['judged']}건 · 짝 없음 {control['unpaired']}건")
     print(
         f"  supported {control['supported']} (0이어야 한다) · "
         f"unsupported {control['unsupported']} · 실패 {control['failed']}"
@@ -798,7 +816,9 @@ def main() -> int:
         out = RESULTS_DIR / report_name(
             label=meta["label"],
             judge=args.judge,
+            rerank=args.rerank,
             rewrite=args.rewrite,
+            top_k=args.top_k,
             fmt=args.fmt,
             tag=args.tag,
         )

@@ -217,10 +217,46 @@ def test_control_needs_different_evidence() -> None:
     assert control_partner(0, rows) is None, "같은 청크를 물어온 짝은 대조군이 못 된다"
 
 
-# 순서만 달라도 다른 근거다 — 프롬프트의 번호가 순서에서 나와 모델이 다른 것을 본다
-def test_control_accepts_the_same_chunks_in_a_different_order() -> None:
+# **순서만 다른 같은 근거도 대조군이 못 된다.** 한때 이 테스트는 반대를 못 박고 있었고
+# 이유는 *"프롬프트의 번호가 순서에서 나와 모델이 다른 것을 본다"* 였다 — 그 문장은 맞지만
+# 이 자리의 계약이 아니다. 대조군은 **빌린 근거로는 뒷받침될 수 없어야** 성립하는데,
+# 순서를 바꾼 같은 근거는 여전히 답변을 뒷받침한다. 41회차 실측에서 뒤집었다
+def test_control_rejects_the_same_chunks_in_a_different_order() -> None:
     rows = [row("a", "문서1", ["c1", "c2"]), row("b", "문서2", ["c2", "c1"])]
-    assert control_partner(0, rows).query_id == "b"
+    assert control_partner(0, rows) is None
+
+
+# **짝을 못 찾은 행은 셋째 상태로 센다.** 거르는 축을 넓힌 대가라, 안 세면 대조군이 줄어든
+# 것이 «supported 0» 으로 보여 **표본 부족이 실력으로 읽힌다**. `judged` 만 보면 그 둘이
+# 안 갈린다 — Cohere 한도 초과가 품질로 읽힌 사고와 같은 모양이다
+def test_rows_without_a_control_partner_are_counted_separately() -> None:
+    rows = [row("a", "문서1", ["c1"]), row("b", "문서2", ["c1"])]
+    control = summarize(rows)["shuffled_control"]
+
+    assert control["judged"] == 0
+    assert control["unpaired"] == 2
+
+
+# **기권한 행은 짝 없음으로 안 센다** — 거기는 대조군이 원래 안 도는 정상 경로다
+def test_an_abstained_row_is_not_counted_as_unpaired() -> None:
+    abstained = row("a", "문서1", ["c1"])
+    abstained.abstained = True
+
+    assert summarize([abstained])["shuffled_control"]["unpaired"] == 0
+
+
+# **겹침 하나로 막는다 — 이것이 41회차가 실제로 밟은 자리다.** `ai-01` 의 대조군이 빌린 다섯
+# 청크 중 하나가 답변의 이메일 주소를 담은 바로 그 청크였고, 채점자는 옳게 «뒷받침된다» 고
+# 했는데 게이트만 무효를 외쳤다. 검색은 문서를 안 가려 오므로 **질의의 `source_doc` 이 다르다는
+# 것이 근거의 출처를 전혀 보장하지 않는다** — 실측 60건 중 3건이 이 상태였다
+def test_control_rejects_a_partner_that_shares_even_one_chunk() -> None:
+    rows = [
+        row("a", "문서1", ["c1", "c2"]),
+        row("b", "문서2", ["c2", "c9"]),
+        row("c", "문서3", ["c7", "c8"]),
+    ]
+
+    assert control_partner(0, rows).query_id == "c"
 
 
 # **다른 문서를 먼저 찾는다** — 같은 문서 근거는 우연히 답변을 뒷받침할 수 있어
@@ -514,7 +550,7 @@ def test_abstained_rows_are_not_in_the_ledger() -> None:
 # 더 돌린 회차가 본판 리포트를 **에러 없이 덮는다** — `verdicts.py` 가 13회차에 실제로 잃은
 # 사고와 같은 모양이고, 재작성 판을 재는 회차는 그것을 반드시 밟는다
 def test_the_rewrite_profile_splits_the_report() -> None:
-    common = {"label": "L", "judge": "mini", "fmt": "pdf"}
+    common = {"label": "L", "judge": "mini", "rerank": "cohere", "top_k": 5, "fmt": "pdf"}
 
     assert answer_eval.report_name(rewrite="off", **common) != answer_eval.report_name(
         rewrite="fuse", **common
@@ -523,23 +559,52 @@ def test_the_rewrite_profile_splits_the_report() -> None:
 
 # 채점자도 이름을 가른다 — 라벨이 같은 두 채점자의 표가 같은 자리를 다투면 안 된다
 def test_the_judge_profile_splits_the_report() -> None:
-    common = {"label": "L", "rewrite": "off", "fmt": "pdf"}
+    common = {"label": "L", "rewrite": "off", "rerank": "cohere", "top_k": 5, "fmt": "pdf"}
 
     assert answer_eval.report_name(judge="mini", **common) != answer_eval.report_name(
         judge="luna", **common
     )
 
 
+# **리랭커 프로필도 가른다.** 기본값이 `off` 라 `--rerank` 를 빠뜨린 실행이 조용히 다른
+# 실험이 되는데, 이름까지 같으면 그 실행이 제대로 돌린 판을 **에러 없이 덮는다**
+def test_the_rerank_profile_splits_the_report() -> None:
+    common = {"label": "L", "judge": "mini", "rewrite": "off", "top_k": 5, "fmt": "pdf"}
+
+    assert answer_eval.report_name(rerank="off", **common) != answer_eval.report_name(
+        rerank="cohere", **common
+    )
+
+
+# **`top_k` 는 프로필이 아닌데도 실행을 가른다** — 생성이 보는 근거 수가 곧 그 값이라
+# 5와 10은 다른 답변을 낳는다. 41회차가 같은 라벨로 두 짝을 돌리며 이 자리를 밟았다
+def test_the_top_k_splits_the_report() -> None:
+    common = {"label": "L", "judge": "mini", "rerank": "cohere", "rewrite": "off", "fmt": "pdf"}
+
+    assert answer_eval.report_name(top_k=5, **common) != answer_eval.report_name(
+        top_k=10, **common
+    )
+
+
 # **프로필로도 안 갈리는 회차가 있다** — 같은 조건을 두 번 돌려 온도 잡음을 재는 자리다.
 # 생성에 캐시가 없어 두 실행의 답변이 실제로 다른데, 이름이 같으면 뒤엣것이 앞엣것을 덮는다
 def test_a_tag_splits_a_rerun_of_the_same_condition() -> None:
-    common = {"label": "L", "judge": "mini", "rewrite": "off", "fmt": "pdf"}
+    common = {
+        "label": "L",
+        "judge": "mini",
+        "rewrite": "off",
+        "rerank": "cohere",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
 
     assert answer_eval.report_name(**common) != answer_eval.report_name(tag="noise", **common)
 
 
 # 꼬리표가 없으면 안 붙는다 — 이름에 빈 마디가 생기면 옛 실행과 대조하기 어려워진다
 def test_an_empty_tag_leaves_no_trace() -> None:
-    name = answer_eval.report_name(label="L", judge="mini", rewrite="off", fmt="pdf")
+    name = answer_eval.report_name(
+        label="L", judge="mini", rerank="cohere", rewrite="off", top_k=5, fmt="pdf"
+    )
 
-    assert name == "L-answers-mini-off-pdf.json"
+    assert name == "L-answers-mini-cohere-off-k5-pdf.json"
