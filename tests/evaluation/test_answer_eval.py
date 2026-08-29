@@ -24,6 +24,7 @@ from evaluation.answer_eval import (
     get_judge,
     is_abstention,
     score_citations,
+    score_must,
     summarize,
 )
 from evaluation.config import EVAL_JUDGES
@@ -1184,3 +1185,111 @@ def test_backfill_refuses_when_an_old_summary_cell_moves(tmp_path, mocker) -> No
     _wire(mocker, [stored("c1", "정답 문장"), stored("c2", "무관")], [item("q1")])
 
     assert answer_eval.backfill_baseline(path, write=True) is False
+# 필수 사실 라벨이 없는 질의는 네 칸이 **`None` 이지 `0` 이 아니다.** `0` 으로 적으면
+# «다 틀렸다» 로 읽히는데 그것은 «아직 라벨을 안 달았다» 와 전혀 다른 뜻이다
+def test_must_columns_stay_none_without_labels() -> None:
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="아무 답",
+    )
+    score_must(scored, _item())
+
+    assert scored.must_values_total is None
+    assert scored.must_values_hit is None
+    assert scored.must_point_tokens_total is None
+
+
+# 값은 답변 본문과 대조한다. 공백은 `squash()` 가 지운다 — PDF 가 한국어 낱말 사이 공백을
+# 잃는 것과 같은 이유이고, 덤으로 `2020. 10. 1.` 이 `2020.10.1.` 과 같아진다
+def test_must_values_are_matched_against_the_answer() -> None:
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True,
+        answer="제3조제12호에 따른 행정정보시스템을 말합니다.",
+    )
+    score_must(scored, _item(must_values=["제3조제12호", "별표1"]))
+
+    assert (scored.must_values_hit, scored.must_values_total) == (1, 2)
+
+
+# **이 테스트는 실측이 만들었다.** 날짜 정규화 없이 저장된 답변 두 판을 소급했더니 값 6개 중
+# `2020.10.1.` 하나가 **두 판 모두** 거짓 음성이었다 — 두 답변 다 `2020년 10월 1일` 로
+# 그 날짜를 정확히 말한다. 되돌리면 그 거짓 음성이 그대로 돌아온다
+def test_a_date_written_the_other_way_still_counts() -> None:
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True,
+        answer="공포 후 6개월의 유예기간을 거쳐 2020년 10월 1일부터 적용됩니다.",
+    )
+    score_must(scored, _item(must_values=["2020.10.1.", "6개월"]))
+
+    assert (scored.must_values_hit, scored.must_values_total) == (2, 2)
+
+
+# **단위 변형은 일부러 안 맞춘다.** 단위는 열거가 안 끝나(교·명·건·부…) «어디까지 같은 값으로
+# 볼까» 가 곧 임계값이 된다 — 날짜와 성질이 다르다. 「비대칭이니 통일하자」로 지우면
+# 근거 없는 정규화가 생긴다
+def test_a_unit_variant_is_deliberately_not_normalized() -> None:
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True,
+        answer="전체 중학교 206개가 대상입니다.",
+    )
+    score_must(scored, _item(must_values=["206개교"]))
+
+    assert (scored.must_values_hit, scored.must_values_total) == (0, 1)
+
+
+# 어휘 겹침은 **조사를 벗기고** 센다. 안 벗기면 `학교장은` 이 `학교장이` 를 못 물어
+# 탐침이 재는 것이 사실이 아니라 활용형이 된다
+def test_point_tokens_ignore_the_particle() -> None:
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True,
+        answer="학교장이 업무분장으로 기록물관리책임자를 정합니다.",
+    )
+    score_must(scored, _item(must_points=["학교장은 기록물관리책임자를 지정한다"]))
+
+    assert scored.must_point_tokens_hit >= 2
+
+
+# 라벨이 하나도 없으면 블록이 통째로 `None` 이다 — `judge_on=False` 가 지지 칸을 `None` 로
+# 내는 것과 같은 규약이고, 빈 dict 로 내면 «전건 미달» 로 읽힌다
+def test_must_block_is_none_when_nothing_is_labeled() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a"], cited_count=1, cited_gold_hits=1, evidence_gold_chunks=1,
+        )
+    ]
+
+    assert summarize(rows, judge_on=False)["positive"]["must"] is None
+
+
+# **조건부 칸이 이 블록의 요점이다.** 근거에 정답 청크가 안 왔으면 답변이 그 사실을 담을
+# 방법이 없어, 조건 없이 세면 «생성이 담았나» 가 아니라 «검색이 물어왔나 × 생성이 담았나» 가
+# 된다. 그 행을 빼면 남는 것이 생성 쪽이다
+def test_the_conditioned_ratio_drops_rows_whose_evidence_missed_the_gold() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a"], evidence_gold_chunks=1,
+            must_values_total=1, must_values_hit=1,
+            must_point_tokens_total=2, must_point_tokens_hit=2,
+        ),
+        AnswerRow(
+            query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["b"], evidence_gold_chunks=0,
+            must_values_total=1, must_values_hit=0,
+            must_point_tokens_total=2, must_point_tokens_hit=0,
+        ),
+    ]
+    block = summarize(rows, judge_on=False)["positive"]["must"]
+
+    assert block["labeled"] == 2
+    assert block["values_recall"] == pytest.approx(0.5)
+    assert block["evidence_had_gold"] == 1
+    assert block["values_recall_given_evidence"] == pytest.approx(1.0)
+
+
+# 위 테스트들이 쓰는 최소 질의. 라벨만 갈아 끼운다
+def _item(*, must_values: list[str] | None = None, must_points: list[str] | None = None) -> QAItem:
+    return QAItem(
+        query_id="q1", query="질문", source_doc="안내서", gold_spans=["어떤 정답"],
+        must_values=list(must_values or []), must_points=list(must_points or []),
+    )

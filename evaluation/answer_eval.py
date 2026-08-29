@@ -122,6 +122,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -166,6 +167,7 @@ __all__ = [
     "is_abstention",
     "report_name",
     "score_citations",
+    "score_must",
     "summarize",
 ]
 
@@ -268,6 +270,16 @@ class AnswerRow:
     # **`k` 를 따로 안 싣는다** — `len(chunk_ids)` 가 이미 그 수라 실으면 두 번째 진실이 생긴다.
     # 부정 예시는 `cited_gold_hits` 와 **같은 규칙으로** None (아래 `score_citations` 주석)
     evidence_gold_chunks: int | None = None
+
+    # --- 필수 사실 (무료·결정적 + 어휘 탐침) ---
+    # **라벨이 없으면 전부 None 이다** — 0 으로 적으면 «다 틀렸다» 로 읽히는데
+    # 그것은 «아직 라벨을 안 달았다» 와 전혀 다른 뜻이다(`cited_gold_hits` 와 같은 규약).
+    # `must_values` 는 값 문자열이 답변에 있나로 **결정적**이고,
+    # `must_point_tokens_*` 는 어휘 겹침이라 **점수가 아니라 탐침이다**(`score_must` 참고)
+    must_values_total: int | None = None
+    must_values_hit: int | None = None
+    must_point_tokens_total: int | None = None
+    must_point_tokens_hit: int | None = None
 
     # --- 근거 지지 (유료·LLM) ---
     support: str | None = None
@@ -372,6 +384,83 @@ def score_citations(row: AnswerRow, item: QAItem, chunks: list[RetrievedChunk]) 
     row.evidence_gold_chunks = sum(
         1 for chunk in chunks if any(needle in squash(chunk.text) for needle in needles)
     )
+
+
+# 어절 끝에 붙는 조사·어미. **긴 것부터 벗긴다** — `에서` 를 `에` 로 먼저 자르면 `서` 가 남는다.
+# 열거하는 방식은 `judge_probe` 가 낱말 경계를 한국어에서 다룬 것과 같다 — `(?![가-힣])` 로는
+# 못 막는다(명사에 조사가 붙어 `기록관이` 까지 막힌다)
+_PARTICLES = (
+    "으로서", "으로써", "에서는", "에게서", "이라고", "으로는", "에서도", "라고는",
+    "에서", "에게", "으로", "라고", "부터", "까지", "처럼", "보다", "한테", "이나",
+    "와의", "과의", "의", "은", "는", "이", "가", "을", "를", "에", "로", "와", "과",
+    "도", "만", "나", "며", "고", "요",
+)
+
+
+# 어절에서 조사를 벗겨 2글자 이상 토막만 남긴다. **어미 활용은 안 건드린다** —
+# `지정해야` 와 `지정한다` 를 잇는 규칙은 이 저장소에 근거가 없다
+def _content_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for word in text.split():
+        stem = "".join(ch for ch in word if ch.isalnum())
+        for particle in _PARTICLES:
+            if len(stem) > len(particle) + 1 and stem.endswith(particle):
+                stem = stem[: -len(particle)]
+                break
+        if len(stem) >= 2:
+            tokens.append(stem)
+    return tokens
+
+
+# 날짜 표기를 한 모양으로 모은다. `squash()` 뒤에 먹인다(공백이 이미 없다).
+#
+# **이것은 임계값이 아니라 표기 변환이다** — `2020.10.1.` 과 `2020년 10월 1일` 은 **같은 날**이라
+# 고를 여지가 없다(인용 범위 검사가 *"의미의 경계이지 관측값이 아니다"* 로 간 것과 같다).
+# **넣은 이유는 실측이다** — 안 넣었더니 값 6개 중 1개(`hsih-07` 의 `2020.10.1.`)가 두 판
+# **모두** 거짓 음성이었다. 두 답변 다 `2020년 10월 1일` 로 그 날짜를 정확히 말한다.
+#
+# **단위 변형(`206개교` ↔ `206개`)은 일부러 안 한다** — 단위는 열거가 안 끝나고
+# «어디까지 같은 값으로 볼까» 가 곧 임계값이 된다. 날짜와 성질이 다르다.
+# 연·월만 적은 표기(`2020년 10월`)도 안 다룬다 — 이 세트에 없어 근거가 없다
+def _normalize_dates(text: str) -> str:
+    def canon(match: re.Match[str]) -> str:
+        year, month, day = (int(g) for g in match.groups())
+        return f"\x1f{year}-{month}-{day}\x1f"
+
+    text = re.sub(r"(\d{4})\.(\d{1,2})\.(\d{1,2})\.?", canon, text)
+    return re.sub(r"(\d{4})년(\d{1,2})월(\d{1,2})일", canon, text)
+
+
+# 필수 사실을 잰다. **유료가 0이고, 두 축의 성질이 다르다.**
+#
+# `must_values` 는 값·날짜·법령 인용 식별자라 **답변에 그 문자열이 있나** 로 결정적이다.
+# 대조는 `squash()` 로 한다 — 인용 정합성과 같은 이유이고, 덤으로 `2020.10.1.` 과
+# `2020. 10. 1.` 이 같아진다. **표기 정규화는 안 한다** — `2020년 10월 1일` 로 쓴 답변은
+# 미검출이고, 정규화를 넣으면 «어디까지 같은 표기로 볼까» 라는 임계값이 생긴다
+# (`plan_log/평가-세트.md` 14회차 미결).
+#
+# **`must_point_tokens_*` 는 점수가 아니라 탐침이다.** 서술을 어휘로 재는 것이라 양쪽으로
+# 틀린다 — 낱말이 다 있어도 뜻이 다를 수 있고, 바꿔 쓴 답변은 낱말이 없어도 사실을 담는다.
+# **그래서 상한도 하한도 아니다.** 재려는 것은 «이 자[尺]가 조건 사이에서 갈리나» 하나이고,
+# 갈리면 그때 LLM 판정을 붙일지 정한다(52회차의 «무료 탐침이 가격을 먼저 셌다» 와 같은 순서).
+#
+# 라벨이 없으면 **네 칸이 전부 `None`** 이다 — 0 은 «다 틀렸다» 라는 다른 뜻이다.
+def score_must(row: AnswerRow, item: QAItem) -> None:
+    if not item.must_values and not item.must_points:
+        return
+
+    hay = squash(row.answer)
+    dated = _normalize_dates(hay)
+    row.must_values_total = len(item.must_values)
+    row.must_values_hit = sum(
+        1 for value in item.must_values if _normalize_dates(squash(value)) in dated
+    )
+
+    # **토막에는 날짜 정규화를 안 먹인다** — 서술은 날짜를 통째로 담는 일이 없고,
+    # 먹이면 `\x1f` 울타리가 부분 문자열 검사를 깨뜨린다
+    tokens = [token for point in item.must_points for token in _content_tokens(point)]
+    row.must_point_tokens_total = len(tokens)
+    row.must_point_tokens_hit = sum(1 for token in tokens if squash(token) in hay)
 
 
 # 캐시 키. 질의·답변 본문·근거 신원(순서까지)·모델·프롬프트 버전이 전부 들어간다.
@@ -690,6 +779,52 @@ def _citation_baseline(rows: list[AnswerRow]) -> tuple[float, int, int]:
     return chance, ceiling, basis
 
 
+# 필수 사실 블록. **라벨이 없으면 통째로 `None` 이다** — `judge_on=False` 가 지지 칸을
+# `None` 으로 내는 것과 같은 규약이고, `0` 으로 내면 «전건 미달» 과 «라벨이 없다» 가 안 갈린다.
+#
+# **`given_evidence` 가 이 블록의 요점이다.** 근거에 정답 청크가 안 왔으면 답변이 그 사실을
+# 담을 방법이 없어, 조건 없이 세면 «생성이 담았나» 가 아니라 **«검색이 물어왔나 × 생성이
+# 담았나»** 가 된다. 그 교락은 `plan_log/평가-세트.md` 14회차가 별표1 내용을 라벨에서
+# 뺀 것과 **같은 미끄러짐**이라, 여기서는 빼는 대신 조건부 칸을 따로 낸다.
+#
+# **비[比]는 행 평균이 아니라 합의 비다** — 질의마다 필수 사실 수가 달라(1~2개) 행 평균을
+# 내면 사실이 하나인 질의가 둘인 질의와 같은 무게를 갖는다
+def _must_block(rows: list[AnswerRow]) -> dict[str, Any] | None:
+    labeled = [row for row in rows if row.must_values_total is not None]
+    if not labeled:
+        return None
+
+    def ratio(subset: list[AnswerRow], hit: str, total: str) -> tuple[int, int, float | None]:
+        got = sum(getattr(row, hit) or 0 for row in subset)
+        out_of = sum(getattr(row, total) or 0 for row in subset)
+        return got, out_of, (got / out_of) if out_of else None
+
+    # 근거에 정답 청크가 실제로 온 행. `evidence_gold_chunks` 는 인용 대조군의 분자와 같은 값이다
+    with_gold = [row for row in labeled if (row.evidence_gold_chunks or 0) > 0]
+    v_hit, v_total, v_recall = ratio(labeled, "must_values_hit", "must_values_total")
+    t_hit, t_total, t_cover = ratio(labeled, "must_point_tokens_hit", "must_point_tokens_total")
+    gv_hit, gv_total, gv_recall = ratio(with_gold, "must_values_hit", "must_values_total")
+    gt_hit, gt_total, gt_cover = ratio(
+        with_gold, "must_point_tokens_hit", "must_point_tokens_total"
+    )
+    return {
+        "labeled": len(labeled),
+        "values_hit": v_hit,
+        "values_total": v_total,
+        "values_recall": v_recall,
+        "point_tokens_hit": t_hit,
+        "point_tokens_total": t_total,
+        "points_token_coverage": t_cover,
+        "evidence_had_gold": len(with_gold),
+        "values_hit_given_evidence": gv_hit,
+        "values_total_given_evidence": gv_total,
+        "values_recall_given_evidence": gv_recall,
+        "point_tokens_hit_given_evidence": gt_hit,
+        "point_tokens_total_given_evidence": gt_total,
+        "points_token_coverage_given_evidence": gt_cover,
+    }
+
+
 # 채점표. **갈래별로 따로 낸다** — 부정 예시는 기권이 정답이고 긍정은 아니라, 합치면
 # 두 정답표가 한 수에 섞여 무엇이 그 수를 만들었는지 못 읽는다.
 #
@@ -756,6 +891,7 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
             "citation_out_of_range": sum(
                 1 for row in judged if row.citation_problem == "out_of_range"
             ),
+            "must": _must_block(judged),
         }
 
     controls = [row for row in rows if row.control is not None]
@@ -847,6 +983,9 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
         ]
         before = (raw["citation_problem"], raw["cited"], raw["cited_count"], raw["cited_gold_hits"])
         score_citations(row, item, chunks)
+        # **소급도 함께 한다** — 저장된 답변 원문만 있으면 되는 계산이라 생성이 0원이다.
+        # 자기 검증 대상은 아니다(저장된 값이 아예 없어 견줄 것이 없다)
+        score_must(row, item)
         after = (row.citation_problem, row.cited, row.cited_count, row.cited_gold_hits)
         # **네 칸을 다 견준다** — 전부 같은 함수·같은 근거에서 나와야 하는 값이라,
         # 하나라도 어긋나면 되살린 근거가 그때의 근거가 아니라는 뜻이다
@@ -881,6 +1020,13 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
     for raw, row in zip(payload["rows"], rows, strict=True):
         # **키를 더하기만 한다** — 유료로 산 원자료다
         raw["evidence_gold_chunks"] = row.evidence_gold_chunks
+        # **필수 사실은 행까지 싣는다** — 요약만 넣으면 그 수의 근거가 파일에 없어,
+        # 저장된 행으로 다시 요약하면 `must` 가 `None` 이 된다. 요약과 행이 어긋난 채
+        # 그럴듯해 보이는 것이 이 함수의 자기 검증이 원래 잡던 그 모양이다
+        raw["must_values_hit"] = row.must_values_hit
+        raw["must_values_total"] = row.must_values_total
+        raw["must_point_tokens_hit"] = row.must_point_tokens_hit
+        raw["must_point_tokens_total"] = row.must_point_tokens_total
     payload["summary"] = summary
 
     block = summary["positive"]
@@ -900,12 +1046,46 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
             f"  인용 정합성 {ground:.3f} · 무작위 {chance:.3f} · 최대 {ceiling:.3f} · "
             f"최대 대비 {vs_shown}"
         )
+    # **필수 사실도 여기서 찍는다** — 소급이 계산한 값을 바로 읽는 자리라,
+    # 빠지면 무료로 소급하고도 그 수를 못 본다(바로 위 대조군과 같은 이유)
+    _print_must(block["must"])
     if write:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  남김: {path}")
     else:
         print("  (찍기만 했습니다. 리포트에 넣으려면 --write)")
     return True
+
+
+# 필수 사실 블록을 찍는다. **`None` 이면 «라벨이 없다» 이지 «0점» 이 아니다.**
+#
+# **어휘 겹침은 «탐침» 이라고 화면에 못 박는다** — 숫자가 3자리로 나오면 지표로 읽히는데,
+# 이것은 상한도 하한도 아니라 «이 자[尺]가 갈리나» 를 보려고 낸 수다(`score_must` 참고)
+def _print_must(block: dict[str, Any] | None) -> None:
+    if block is None:
+        print("    필수 사실 — 라벨 없음")
+        return
+    values = block["values_recall"]
+    shown = "—" if values is None else f"{values:.3f}"
+    line = (
+        f"    필수 사실 {block['labeled']}건 · "
+        f"값 {shown} ({block['values_hit']}/{block['values_total']})"
+    )
+    cover = block["points_token_coverage"]
+    if cover is not None:
+        line += f" · 어휘 겹침 {cover:.3f} (탐침 · 통과선 아님)"
+    print(line)
+    # **근거가 정답을 물어온 행만 따로 낸다** — 안 물어왔으면 담을 방법이 없어,
+    # 조건 없는 수는 검색과 생성이 섞인다
+    given = block["values_recall_given_evidence"]
+    if block["evidence_had_gold"] and given is not None:
+        cover = block["points_token_coverage_given_evidence"]
+        tail = "" if cover is None else f" · 어휘 겹침 {cover:.3f}"
+        print(
+            f"      근거에 정답이 온 {block['evidence_had_gold']}건만: 값 {given:.3f} "
+            f"({block['values_hit_given_evidence']}/"
+            f"{block['values_total_given_evidence']}){tail}"
+        )
 
 
 # 두 요약에서 **양쪽에 다 있는** 칸만 견준다. 새로 생긴 칸은 어긋남이 아니다
@@ -1024,6 +1204,8 @@ def score_answers(
                 # **인용 정합성은 채점자와 무관하게 돈다** — 무료·결정적이라 축이 다르고,
                 # 판정을 끈 회차에서 실제로 변별하는 것이 이것 하나다
                 score_citations(row, item, chunks)
+                # **필수 사실도 채점자와 무관하게 돈다** — 인용 정합성과 같은 자리다
+                score_must(row, item)
                 if judge is not None:
                     verdict = judge.judge(item.query, text, chunks)
                     row.support = verdict.verdict
@@ -1179,6 +1361,7 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
                 print("    대조군 — 못 잼 (대조군 칸이 없는 행이 섞였다. --backfill 참고)")
             else:
                 print(f"    무작위 {chance:.3f} · 최대 {ceiling:.3f} (통과선 아님)")
+            _print_must(b["must"])
 
     control = summary["shuffled_control"]
     if control is None:
