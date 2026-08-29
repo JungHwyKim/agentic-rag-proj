@@ -554,3 +554,21 @@ def test_without_a_key_everything_is_failed(report, wired, mocker) -> None:
         rows, JudgeUsage(**meta["judge_usage"]), missing_evidence=meta["missing_evidence"]
     )
     assert any("못 쟀다" in line for line in problems)
+
+# **채점자 없는 프로필로는 못 돈다.** `DEFAULT_JUDGE_PROFILE` 이 2026-08-29 에 `off` 로
+# 내려가면서 실재하게 된 자리다 — 그냥 두면 이 도구가 «채점자를 재는 도구인데 채점자를 안
+# 부르는» 상태로 돌고, 표는 전건 `failed` 로 나온다. 그것은 *«죽은 채점자가 만점»* 의
+# 거울상이라 수치가 아니라 **멈춤**으로 답한다
+def test_a_judgeless_profile_is_refused(report) -> None:
+    with pytest.raises(SystemExit) as err:
+        probe(report_path=report, judge_name="off", cache_enabled=False)
+
+    assert "채점자 프로필" in str(err.value)
+
+
+# **이 도구의 기본은 `answer_eval` 과 달라야 한다** — 같은 상수를 쓰면 저쪽 기본이 바뀌는
+# 순간 이쪽이 조용히 안 돈다. 그 커플링이 실제로 있었고 위 거부가 그 뒤에 서 있다
+def test_the_probe_default_judge_is_a_real_judge() -> None:
+    from evaluation.config import DEFAULT_PROBE_JUDGE_PROFILE, judge_profile
+
+    assert judge_profile(DEFAULT_PROBE_JUDGE_PROFILE)["judge_model"]

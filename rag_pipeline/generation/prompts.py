@@ -77,6 +77,7 @@ from rag_pipeline.schemas.retrieval import RetrievedChunk
 __all__ = [
     "EVALUATOR_PROMPT_VERSION",
     "EVALUATOR_SYSTEM_PROMPT",
+    "GENERATION_PROMPT_VERSION",
     "NO_EVIDENCE_ANSWER",
     "SYSTEM_PROMPT",
     "build_evaluator_prompt",
@@ -87,6 +88,21 @@ __all__ = [
 # 근거를 못 찾았을 때 쓸 문장. 모델이 이 문장을 그대로 쓰도록 프롬프트가 지시하고,
 # 검색이 0건이면 모델을 부르지 않고 코드가 이 값을 그대로 돌려준다
 NO_EVIDENCE_ANSWER = "문서에서 찾지 못했습니다."
+
+# 생성 프롬프트를 고치면 **반드시 올린다.** `EVALUATOR_PROMPT_VERSION` 과 자리는 같은데
+# **막는 것이 다르다** — 저쪽은 캐시 salt 라 안 올리면 옛 응답이 새 프롬프트의 답인 척
+# 돌아오고, 이쪽은 **캐시가 아예 없어**(`generate_answer()` 는 `ResultCache` 를 안 거친다)
+# 그런 사고가 원리적으로 없다. 대신 막는 것은 **리포트가 자기 조건을 못 말하는 것**이다:
+# 이 문자열을 고쳐도 `generation_profile` 은 `prod` 그대로라, 두 리포트를 나중에 견줄 때
+# *생성 프롬프트가 달랐다* 를 되짚을 방법이 없다(`evaluation/answer_eval.py` 의 meta 가 싣는다).
+#
+# **소급 적용이 아니다** — 옛 리포트에는 이 칸이 아예 없다. `"v1"` 은 *여기서부터 센다* 는
+# 뜻이지 *지금까지 안 바뀌었다* 는 주장이 아니다.
+#
+# **캐시 지문(`answer_cache/fingerprint.py`)에는 일부러 안 넣었다** — 넣으면 `qa_cache_*` 가
+# 전량 미스가 되는데, 지금 `exact` 캐시는 *"적중률 5% 미만이면 끈다"* 의 표본을 모으는 중이다
+# (`evaluation/README.md` 8절). 별개 결정이라 `plan_log/검색-생성.md` 미결에 있다
+GENERATION_PROMPT_VERSION = "v1"
 
 SYSTEM_PROMPT = f"""당신은 한국어 공문서를 읽고 질문에 답하는 도우미입니다.
 

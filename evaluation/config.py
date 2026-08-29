@@ -36,7 +36,8 @@
 이유는 나머지와 같다: **저장소에 커밋된 닫힌 집합**이어야 리포트 이름만 보고 무엇으로 잰
 수치인지 안다.
 
-**다섯의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.**
+**여섯의 기본값 규칙이 서로 다르고, 그 차이가 뜻을 갖는다.** 여섯째(`EVAL_JUDGES`)는
+`eval_config()` 가 안 쓰지만 기본값 규칙은 같은 자리에서 읽어야 한다.
 
 | 축 | 기본 | 왜 |
 |---|---|---|
@@ -45,6 +46,7 @@
 | `EVAL_REWRITERS` | `off` | 같은 이유다. 리랭커와 **함께 켜면 질의당 3회**가 된다 |
 | `EVAL_EVALUATORS` | `mini` | **꺼짐이 기본이 아니다.** 채점 도구는 판정이 반드시 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다 |
 | `EVAL_GENERATORS` | `prod` | **꺼짐 프로필이 없다.** 생성을 끄면 잴 대상 자체가 사라진다. 기본이 운영값 그대로인 것은 재는 것이 *운영이 내는 답변* 이어야 해서다 |
+| `EVAL_JUDGES` | **`off`** | **2026-08-29 에 `mini` 에서 내렸다.** 지지 판정이 다섯 판 연속 포화라 조건을 견주는 판에서 아무것도 안 가르는데 호출은 판정 대상의 2배가 나간다 — `EVAL_RERANKERS` 와 같은 «기본값이 곧 과금 여부» 다. 뒤집은 근거는 `EVAL_JUDGES` 위 주석에 있다 |
 
 **재작성 축만 가르는 것이 모델이 아니라 「합류 방식」이다**(`fuse` vs `replace`). 그렇게
 만든 것은 21회차 상한 프로브가 `replace` 를 쟀는데 7회차 로드맵이 `fuse` 였기 때문이다 —
@@ -95,6 +97,7 @@ __all__ = [
     "DEFAULT_EVALUATOR_PROFILE",
     "DEFAULT_GENERATOR_PROFILE",
     "DEFAULT_JUDGE_PROFILE",
+    "DEFAULT_PROBE_JUDGE_PROFILE",
     "DEFAULT_RERANK_PROFILE",
     "DEFAULT_REWRITE_PROFILE",
     "EVAL_EMBEDDINGS",
@@ -423,12 +426,34 @@ DEFAULT_GENERATOR_PROFILE = "prod"
 # 테스트가 따로 필요한데, 이쪽은 `answer_eval.JudgeConfig` 가 **dataclass** 라 모르는 키가
 # 오면 `TypeError` 로 그 자리에서 죽는다 — 조용히 안 먹는 실패 모양이 원리적으로 없다.
 #
-# **기본이 꺼짐이 아닌 것은 `EVAL_EVALUATORS` 와 같은 이유다** — 채점 도구는 판정이 반드시
-# 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다.
+# **기본이 2026-08-29 에 `mini` 에서 `off` 로 내려왔다.** 그전 이유는
+# *"채점 도구는 판정이 반드시 돌아야 하는 자리라, 안 돌면 전건 실패인데 표는 멀쩡해 보인다"*
+# (`EVAL_EVALUATORS` 와 같은 자리)였고 **그때는 그 말이 옳았다.** 뒤집은 것은 둘이다.
+#
+# ① **지지 축이 다섯 판 연속 포화다** — 사람 43건 28/28 · LLM 60건 네 판 240/240 ·
+#    생성모델 짝 16/16 · 58/59 이고, 그 58/59 의 한 건마저 **채점자의 거짓 음성**이었다
+#    (2026-08-29, 근거 전수 확인). 실제로 갈린 것이 **0건**이라 조건을 견주는 판에서는
+#    아무것도 안 가르는데 호출은 **판정 대상의 2배**(본판 + 음성 대조군)가 나간다.
+# ② **그 옛 우려를 `answer_eval` 이 대신 막는다** — `summarize(judge_on=False)` 가 지지 칸을
+#    숫자 `0` 이 아니라 **`None`**(안 돌림)으로 내고, 회계 게이트가 **뒤집혀** *정말 호출이
+#    0이었나* 를 검사한다. 즉 **꺼진 표는 더 이상 «멀쩡해 보이지» 않는다.** 저 문장이 쓰일
+#    때는 그 표시가 없었다.
+#
+# **되돌리는 것은 이 한 줄이다.** 다시 볼 조건: 이 축이 실제로 무언가를 가르기 시작할 때.
+#
+# **`off` 의 모양은 `EVAL_RERANKERS["off"]` 와 같다** — *모델 이름이 비면 꺼진다* 가 리랭커·
+# 재작성기·Evaluator 가 이미 쓰는 규약이고, `answer_eval.get_judge()` 가 그것을 읽어 `None` 을 낸다.
 #
 # **gpt-5 계열을 기본에 두지 않는다** — `temperature` 를 못 고정해 잰 수치가 재현되지
 # 않는다(2026-08-27 실측). 더할 때는 `judge_temperature: None` 을 함께 적는다
 EVAL_JUDGES: dict[str, dict[str, Any]] = {
+    # 채점자 없음. **`judge_max_tokens` 가 0인 것은 값이 아니라 «쓸 일이 없다» 는 표시다** —
+    # 이 프로필로는 `SupportJudge` 가 아예 안 만들어진다
+    "off": {
+        "judge_model": None,
+        "judge_temperature": None,
+        "judge_max_tokens": 0,
+    },
     "mini": {
         "judge_model": "gpt-4.1-mini",
         "judge_temperature": 0.0,
@@ -436,8 +461,13 @@ EVAL_JUDGES: dict[str, dict[str, Any]] = {
     },
 }
 
-# 아무것도 안 주면 이것
-DEFAULT_JUDGE_PROFILE = "mini"
+# 아무것도 안 주면 이것. **위 주석이 뒤집은 그 값이다**
+DEFAULT_JUDGE_PROFILE = "off"
+
+# **`judge_probe` 만 기본이 다르다.** 그 도구는 *채점자가 어느 세기의 오류부터 잡나* 를 재는
+# 자리라 «채점자 없음» 이 합법값이 아니다 — `DEFAULT_JUDGE_PROFILE` 을 그대로 쓰게 두면
+# **채점자를 재는 도구가 기본으로 채점자를 안 부르는** 상태가 에러 없이 생긴다
+DEFAULT_PROBE_JUDGE_PROFILE = "mini"
 
 # 평가가 고정하는 값 전부. **`baseline.json` 의 `_meta` 가 이것을 그대로 싣는다** —
 # 기준선 파일만 보고도 어떤 설정으로 잰 값인지 알 수 있어야 하고, 두 곳에 손으로 적으면

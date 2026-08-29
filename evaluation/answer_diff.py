@@ -188,14 +188,21 @@ def _as_rows(raw: list[dict[str, Any]]) -> list[AnswerRow]:
     return [AnswerRow(**row) for row in raw]
 
 
-# 한 갈래의 채점표를 한 줄로 줄인다. **`summarize()` 를 다시 부른 것이지 새로 세지 않는다**
+# 한 갈래의 채점표를 한 줄로 줄인다. **`summarize()` 를 다시 부른 것이지 새로 세지 않는다**.
+#
+# **지지 칸은 `None` 일 수 있다** — 채점자를 끈 회차(`--judge off`)의 리포트가 그렇다.
+# `0` 으로 찍으면 «전건 미지지» 로 읽히므로 «—» 로 낸다(`summarize()` 주석과 같은 이유)
+def _cell(value: Any) -> str:
+    return "—" if value is None else str(value)
+
+
 def _line(bucket: dict[str, Any]) -> str:
     ground = bucket["citation_groundedness"]
     shown = "—" if ground is None else f"{ground:.3f}"
     return (
         f"질의 {bucket['queries']:>3} · 기권 {bucket['abstained']:>2} · "
-        f"지지 {bucket['supported']:>3} · 미지지 {bucket['unsupported']:>2} · "
-        f"실패 {bucket['failed']:>2} · 인용 정합성 {shown} "
+        f"지지 {_cell(bucket['supported']):>3} · 미지지 {_cell(bucket['unsupported']):>2} · "
+        f"실패 {_cell(bucket['failed']):>2} · 인용 정합성 {shown} "
         f"({bucket['cited_gold_hits']}/{bucket['cited_chunks']}) · "
         f"인용 없음 {bucket['citation_missing']} · 범위 밖 {bucket['citation_out_of_range']}"
     )
@@ -236,8 +243,13 @@ def _print(
             continue
         changed = sum(1 for pair in group if pair.cited_changed)
         print(f"  인용한 청크가 갈린 질의 {changed}/{len(group)}")
-        for name, side in ((a_name, "a"), (b_name, "b")):
-            summary = summarize(_as_rows([getattr(pair, side) for pair in group]))
+        for name, side, meta in ((a_name, "a", a_meta), (b_name, "b", b_meta)):
+            # **판정 여부는 쪽마다 따로 읽는다** — 한쪽만 `--judge off` 로 돌린 짝이 있을 수
+            # 있고, 그때 한 쪽의 «안 돌림» 을 다른 쪽 기준으로 세면 표가 거짓말을 한다
+            summary = summarize(
+                _as_rows([getattr(pair, side) for pair in group]),
+                judge_on=(meta.get("judge_profile") or "") != "off",
+            )
             for bucket_key, label in (("positive", "정답 있음"), ("negative", "부정 예시")):
                 bucket = summary[bucket_key]
                 if bucket["queries"]:

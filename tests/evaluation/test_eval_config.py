@@ -542,13 +542,20 @@ def test_generation_default_is_the_same_as_naming_it() -> None:
 
 
 # 대응하는 제품 설정 클래스가 없다. 그래서 오타 방어가 `model_fields` 대조가 아니라
-# **dataclass 가 모르는 키에 `TypeError` 를 내는 것**이고, 여기서 그것을 못 박는다
+# **dataclass 가 모르는 키에 `TypeError` 를 내는 것**이고, 여기서 그것을 못 박는다.
+#
+# **모델 이름 검사는 `off` 를 갈라서 한다** — 2026-08-29 에 꺼짐 프로필이 생기며 «모든
+# 프로필에 모델이 있다» 가 깨졌는데, 그 단언을 **그냥 빼면** 오타로 모델을 빠뜨린 새 프로필을
+# 아무도 안 잡는다. 그래서 없애지 않고 **양쪽 방향으로** 못 박는다
 @pytest.mark.parametrize("profile", sorted(EVAL_JUDGES))
 def test_every_judge_profile_builds_a_judge_config(profile: str) -> None:
     from evaluation.answer_eval import JudgeConfig
 
     config = JudgeConfig(**EVAL_JUDGES[profile])
-    assert config.judge_model
+    if profile == "off":
+        assert not config.judge_model, "꺼짐 프로필에 모델 이름이 있으면 채점자가 만들어진다"
+    else:
+        assert config.judge_model, f"채점자 프로필 '{profile}' 에 모델 이름이 없습니다"
 
 
 # **모든 프로필이 온도를 명시해야 한다** — `EVAL_EVALUATORS` 와 같은 함정이다.

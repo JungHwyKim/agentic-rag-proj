@@ -14,6 +14,36 @@
 | **근거 지지** — 답변 문장이 근거로 뒷받침되나 (LLM) | 판정당 1 | 골든 답변 |
 | **음성 대조군** — 같은 답변에 **남의 근거**를 물려 같은 판정 | 판정당 1 | — |
 
+## 언제 켜나 — **기본은 꺼짐이고, 그것이 2026-08-29 의 결정이다**
+
+`--judge` 기본값이 `off` 다. 지지 판정(②)이 **다섯 판 연속 포화**라 조건을 견주는 판에서
+아무것도 안 가르는데 호출은 **판정 대상의 2배**(본판 + 대조군)가 나가기 때문이다 —
+사람 43건 **28/28** · LLM 60건 네 판 **240/240** · 생성모델 짝 **16/16** · **58/59** 이고,
+그 58/59 의 한 건마저 **채점자의 거짓 음성**이었다(근거 전수 확인). 실제로 갈린 것은 **0건**.
+
+**켜는 자리는 셋이고, 전부 «답변 본문이 실제로 달라지는» 축이다.**
+
+- 생성 모델을 바꿨을 때 (`--generation`)
+- **생성 프롬프트를 고쳤을 때** — `GENERATION_PROMPT_VERSION` 이 그 판이고 meta 에 실린다.
+  `generation_profile` 은 프롬프트를 고쳐도 `prod` 그대로라 이름만으로는 안 잡힌다
+- `generation_top_k` 를 바꿨을 때
+
+**읽는 법은 통과선이 아니라 관측값이다.** «전건 `supported`» 를 통과선으로 박고 싶어지는데,
+박았으면 위 거짓 음성이 **실패로 기록됐을 것**이다. 그래서 `_print()` 는 미지지 수를 회계
+게이트와 **분리된 줄**로 찍고 *«근거를 열어 확인한 뒤에 기록한다»* 를 덧붙인다 —
+40회차가 못 박은 «무효화 vs 분모 주석» 구분의 이쪽 편이다.
+
+**그 방향은 `judge_probe` 가 원리적으로 못 잰다.** 그쪽은 답변을 **변조해** «틀린 것을
+잡나» 를 재지 «멀쩡한 것을 틀렸다 하나» 를 안 잰다. 재려면 정상 답변을 사람이 읽어야 한다.
+
+**끈 회차가 «멀쩡해 보이면» 안 된다.** `EVAL_JUDGES` 주석이 꺼짐 프로필을 오래 막아 둔
+이유가 그것이고(*"안 돌면 전건 실패인데 표는 멀쩡해 보인다"*), 여기서 둘로 갚는다 —
+`summarize(judge_on=False)` 가 지지 칸을 `0` 이 아니라 **`None`** 으로 내고,
+`accounting_problems(judge_on=False)` 가 **게이트를 뒤집어** *정말 호출이 0이었나* 를 묻는다.
+
+**되돌리는 것은 `DEFAULT_JUDGE_PROFILE` 한 줄이다.** 다시 볼 조건: 이 축이 실제로 무언가를
+가르기 시작할 때.
+
 ## 이름을 `faithfulness` 로 안 짓는다
 
 29회차가 *"Faithfulness 라 부르지 않고 잰 것의 이름으로 부른다"* 로 닫았다. 리포트 칸도
@@ -109,7 +139,11 @@ from evaluation.qa_set import QAItem, load_qa_set
 from evaluation.run_eval import RESULTS_DIR
 from evaluation.scoring import squash
 from rag_pipeline.generation.citations import CITATION_PATTERN, check_citations, cited_numbers
-from rag_pipeline.generation.prompts import NO_EVIDENCE_ANSWER, build_evidence_block
+from rag_pipeline.generation.prompts import (
+    GENERATION_PROMPT_VERSION,
+    NO_EVIDENCE_ANSWER,
+    build_evidence_block,
+)
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
@@ -125,6 +159,7 @@ __all__ = [
     "accounting_problems",
     "build_support_prompt",
     "control_partner",
+    "get_judge",
     "is_abstention",
     "report_name",
     "score_citations",
@@ -161,7 +196,10 @@ SUPPORT_SYSTEM_PROMPT = """당신은 한국어 공문서 답변을 검사하는 
 # `TypeError` 로 그 자리에서 죽는다. 조용히 안 먹는 실패 모양이 원리적으로 없다
 @dataclass(frozen=True)
 class JudgeConfig:
-    judge_model: str
+    # **`None` 이 «채점자 없음» 이다** — `EVAL_JUDGES["off"]` 가 그 값을 담고
+    # `get_judge()` 가 그것을 읽어 `None` 을 돌려준다. 리랭커·재작성기·Evaluator 가
+    # *모델 이름이 비면 꺼진다* 를 쓰는 것과 같은 규약이다
+    judge_model: str | None
     # **`None` 은 «보내지 않는다» 는 뜻이다** — gpt-5 계열이 0.0 을 400 으로 거부한다.
     # 1.0 을 대신 보내지 않는 이유는 `EvaluatorConfig` 주석에 있다
     judge_temperature: float | None
@@ -483,22 +521,55 @@ class SupportJudge:
         return content if isinstance(content, str) else None
 
 
+# 채점자를 만든다. **이름이 비면 `None` 이고, 그것이 이 축의 유일한 스위치다**
+# (`get_reranker()`·`get_rewriter()`·`get_evaluator()` 와 같은 모양).
+#
+# **불리언 인자를 따로 두지 않는다** — `AGENT_MAX_RETRIES` 가 *"불리언을 따로 두면
+# `enabled=true` 인데 `0` 인 조합이 에러 없이 생긴다"* 로 고른 그 자리와 같다
+def get_judge(
+    config: JudgeConfig,
+    *,
+    api_key: str | None = None,
+    cache_dir: Path | None = None,
+    cache_enabled: bool = True,
+) -> SupportJudge | None:
+    if not config.judge_model:
+        return None
+    return SupportJudge(
+        config, api_key=api_key, cache_dir=cache_dir, cache_enabled=cache_enabled
+    )
+
+
 # 회계가 맞나. **지표보다 먼저 읽는 것이 이 함수의 존재 이유다** (모듈 docstring 참고).
 # 빈 리스트면 통과이고, 그때만 아래 지표를 실력으로 읽는다
+# **`judge_on` 이 게이트의 방향을 가른다** — 켰으면 *«셀 만큼 셌나»* 이고 껐으면
+# *«정말 한 번도 안 불렀나»* 다. 기본값을 안 두는 것은 `append_query_log(source=)` 와 같은
+# 판단이다: 새 호출부가 빠뜨리면 조용히 틀린 게이트를 타는 대신 `TypeError` 로 터진다
 def accounting_problems(
-    rows: list[AnswerRow], usage: JudgeUsage, *, expected_generations: int
+    rows: list[AnswerRow], usage: JudgeUsage, *, expected_generations: int, judge_on: bool
 ) -> list[str]:
     problems: list[str] = []
 
     judged = [row for row in rows if not row.abstained]
     controls = [row for row in judged if row.control is not None]
-    want = len(judged) + len(controls)
-    got = usage.api_calls + usage.cache_hits
-    if got != want:
-        problems.append(
-            f"판정 회계가 안 맞습니다: 호출 {usage.api_calls} + 캐시 {usage.cache_hits} "
-            f"= {got} 인데 판정 대상은 {want}(본판 {len(judged)} + 대조군 {len(controls)})입니다"
-        )
+    if judge_on:
+        want = len(judged) + len(controls)
+        got = usage.api_calls + usage.cache_hits
+        if got != want:
+            problems.append(
+                f"판정 회계가 안 맞습니다: 호출 {usage.api_calls} + 캐시 {usage.cache_hits} "
+                f"= {got} 인데 판정 대상은 {want}(본판 {len(judged)} + 대조군 {len(controls)})입니다"
+            )
+    else:
+        # **껐을 때의 게이트는 뒤집힌다.** 「끈 줄 알았는데 절반 돌았다」가 조용히 성립하지
+        # 않게 하는 자리이고, `--judge off` 회차의 «유료 0» 은 이 줄이 증명한다.
+        # 캐시 히트도 센다 — 무료여도 **판정이 돌았다는 뜻**이라 그 회차는 꺼진 회차가 아니다
+        spent = usage.api_calls + usage.cache_hits
+        if spent:
+            problems.append(
+                f"판정을 껐는데 판정이 돌았습니다: 호출 {usage.api_calls} + 캐시 "
+                f"{usage.cache_hits} = {spent} (기대 0)"
+            )
 
     generated = sum(1 for row in rows if row.chunk_ids)
     if generated != expected_generations:
@@ -506,28 +577,38 @@ def accounting_problems(
             f"생성 회계가 안 맞습니다: 근거를 받은 질의 {generated} vs 생성 {expected_generations}"
         )
 
-    failed = sum(1 for row in judged if row.support == "failed")
-    if failed:
-        problems.append(f"지지 판정 실패 {failed}건 — 지표의 분모가 그만큼 줄었습니다")
+    # **아래 둘은 켰을 때만 뜻이 있다** — 껐으면 `support` 가 전건 `None` 이라 실패도 0이고
+    # 대조군도 없다. 조건 없이 두면 «검사가 돌았는데 깨끗하다» 와 «검사가 없었다» 가 섞인다
+    if judge_on:
+        failed = sum(1 for row in judged if row.support == "failed")
+        if failed:
+            problems.append(f"지지 판정 실패 {failed}건 — 지표의 분모가 그만큼 줄었습니다")
 
-    # **대조군이 통과하면 그 회차의 지지 수치는 못 쓴다** (모듈 docstring 참고)
-    leaked = [row.query_id for row in controls if row.control == "supported"]
-    if leaked:
-        problems.append(
-            f"음성 대조군이 {len(leaked)}건에서 supported 로 답했습니다 {leaked[:5]} — "
-            "채점자가 남의 근거로도 «뒷받침된다» 고 말하므로 이 회차의 지지 수치는 못 씁니다"
-        )
+        # **대조군이 통과하면 그 회차의 지지 수치는 못 쓴다** (모듈 docstring 참고)
+        leaked = [row.query_id for row in controls if row.control == "supported"]
+        if leaked:
+            problems.append(
+                f"음성 대조군이 {len(leaked)}건에서 supported 로 답했습니다 {leaked[:5]} — "
+                "채점자가 남의 근거로도 «뒷받침된다» 고 말하므로 이 회차의 지지 수치는 못 씁니다"
+            )
     return problems
 
 
 # 채점표. **갈래별로 따로 낸다** — 부정 예시는 기권이 정답이고 긍정은 아니라, 합치면
-# 두 정답표가 한 수에 섞여 무엇이 그 수를 만들었는지 못 읽는다
-def summarize(rows: list[AnswerRow]) -> dict[str, Any]:
+# 두 정답표가 한 수에 섞여 무엇이 그 수를 만들었는지 못 읽는다.
+#
+# **`judge_on=False` 면 지지 칸이 `0` 이 아니라 `None` 이다.** `0` 으로 내면 «전건 미지지» 와
+# «안 돌렸다» 가 안 갈리는데, 그것이 바로 `EVAL_JUDGES` 주석이 꺼짐 프로필을 오래 막아 둔
+# 이유(*"안 돌면 전건 실패인데 표는 멀쩡해 보인다"*)다 — 그 우려를 여기서 갚는다.
+# **기본값을 안 둔다**: 새 호출부가 빠뜨리면 조용히 «켜짐» 으로 세는 대신 `TypeError` 다
+def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
     def bucket(subset: list[AnswerRow]) -> dict[str, Any]:
         judged = [row for row in subset if not row.abstained]
-        supported = sum(1 for row in judged if row.support == "supported")
-        unsupported = sum(1 for row in judged if row.support == "unsupported")
-        failed = sum(1 for row in judged if row.support == "failed")
+        supported = sum(1 for row in judged if row.support == "supported") if judge_on else None
+        unsupported = (
+            sum(1 for row in judged if row.support == "unsupported") if judge_on else None
+        )
+        failed = sum(1 for row in judged if row.support == "failed") if judge_on else None
         cited_rows = [row for row in judged if row.cited_gold_hits is not None]
         cited_total = sum(row.cited_count for row in cited_rows)
         cited_hits = sum(row.cited_gold_hits or 0 for row in cited_rows)
@@ -550,12 +631,11 @@ def summarize(rows: list[AnswerRow]) -> dict[str, Any]:
         }
 
     controls = [row for row in rows if row.control is not None]
-    return {
-        # **부정이 먼저다** — 이 도구의 첫 지표가 «기권이 정답인 질의에서 기권했나» 이고,
-        # 그것이 자[尺] 자신을 검사하는 판이다
-        "negative": bucket([row for row in rows if not row.answerable]),
-        "positive": bucket([row for row in rows if row.answerable]),
-        "shuffled_control": {
+    # **대조군 블록도 통째로 `None` 이다** — 그 검사는 «채점자가 살아 있나» 를 묻는 것이라,
+    # 채점자가 없으면 «0건 누출» 이 아니라 **«물은 적이 없다»** 가 맞다
+    control_block: dict[str, Any] | None = None
+    if judge_on:
+        control_block = {
             "judged": len(controls),
             # **짝을 못 찾아 대조군이 아예 없는 행. 제3의 상태다** — 43회차가 짝 거르기를
             # «완전 일치» 에서 «하나라도 겹치면» 으로 넓히면서 이 자리가 실재하게 됐다.
@@ -567,7 +647,13 @@ def summarize(rows: list[AnswerRow]) -> dict[str, Any]:
             "supported": sum(1 for row in controls if row.control == "supported"),
             "unsupported": sum(1 for row in controls if row.control == "unsupported"),
             "failed": sum(1 for row in controls if row.control == "failed"),
-        },
+        }
+    return {
+        # **부정이 먼저다** — 이 도구의 첫 지표가 «기권이 정답인 질의에서 기권했나» 이고,
+        # 그것이 자[尺] 자신을 검사하는 판이다
+        "negative": bucket([row for row in rows if not row.answerable]),
+        "positive": bucket([row for row in rows if row.answerable]),
+        "shuffled_control": control_block,
     }
 
 
@@ -602,7 +688,8 @@ def score_answers(
         rewrite=rewrite,
         generation=generation,
     )
-    judge = SupportJudge(
+    # **`None` 이면 이 회차는 판정을 안 돈다** (모듈 docstring 「언제 켜나」 참고)
+    judge = get_judge(
         JudgeConfig(**judge_profile(judge_name)),
         api_key=config.generation.openai_api_key,
     )
@@ -614,6 +701,8 @@ def score_answers(
 
     rows: list[AnswerRow] = []
     chunks_by_id: dict[str, list[RetrievedChunk]] = {}
+    # **채점자와 따로 둔다** — 생성 실패는 판정 축의 사건이 아니라, 채점자를 껐어도 남아야 한다
+    generation_warnings: list[str] = []
     generations = 0
     try:
         total = store.count()
@@ -624,7 +713,7 @@ def score_answers(
         print(
             f"컬렉션 {total}건 · 세트 {len(qa.items)}건 · top_k {top_k} · "
             f"리랭커 {rerank} · 재작성 {rewrite} · 생성 {generation} · "
-            f"채점자 {judge_name}({judge.model})"
+            f"채점자 {judge_name}" + (f"({judge.model})" if judge else " — 안 돌림")
         )
 
         for item in qa.items:
@@ -641,15 +730,16 @@ def score_answers(
             # **`retrieve()` 뒤에 읽어야 값이 있다** — 재작성은 그 안에서 돈다 (`query.py`)
             rewritten = getattr(rewriter, "last_rewritten", None) if rewriter else None
 
-            seen = len(judge.warnings)
+            seen = len(judge.warnings) if judge else 0
             try:
                 text = generate_answer(item.query, chunks, config.generation)
                 if chunks:
                     generations += 1
             except GenerationError as exc:
-                # **생성 실패는 기권이 아니다.** 빈 답변으로 적으면 «못 찾았다» 와 섞인다
+                # **생성 실패는 기권이 아니다.** 빈 답변으로 적으면 «못 찾았다» 와 섞인다.
+                # **경고는 채점자를 껐어도 남겨야 한다** — 생성 실패는 판정 축의 일이 아니다
                 text = ""
-                judge.warnings.append(f"{item.query_id}: 생성 실패 — {exc}")
+                generation_warnings.append(f"{item.query_id}: 생성 실패 — {exc}")
 
             row = AnswerRow(
                 query_id=item.query_id,
@@ -663,16 +753,21 @@ def score_answers(
             )
             chunks_by_id[item.query_id] = chunks
             if not row.abstained:
+                # **인용 정합성은 채점자와 무관하게 돈다** — 무료·결정적이라 축이 다르고,
+                # 판정을 끈 회차에서 실제로 변별하는 것이 이것 하나다
                 score_citations(row, item, chunks)
-                verdict = judge.judge(item.query, text, chunks)
-                row.support = verdict.verdict
-                row.support_reasoning = verdict.reasoning
-                row.unsupported_sentences = list(verdict.unsupported_sentences)
-            row.warnings = list(judge.warnings[seen:])
+                if judge is not None:
+                    verdict = judge.judge(item.query, text, chunks)
+                    row.support = verdict.verdict
+                    row.support_reasoning = verdict.reasoning
+                    row.unsupported_sentences = list(verdict.unsupported_sentences)
+            row.warnings = list(judge.warnings[seen:]) if judge else []
             rows.append(row)
 
-        # **대조군은 본판이 다 끝난 뒤에 돈다** — 짝을 고르려면 모든 행의 근거가 있어야 한다
-        for index, row in enumerate(rows):
+        # **대조군은 본판이 다 끝난 뒤에 돈다** — 짝을 고르려면 모든 행의 근거가 있어야 한다.
+        # **채점자를 껐으면 통째로 안 돈다** — 이 검사는 «채점자가 살아 있나» 를 묻는 것이라
+        # 채점자가 없으면 물음 자체가 성립하지 않는다(`summarize()` 도 그 칸을 `None` 로 낸다)
+        for index, row in enumerate(rows if judge is not None else []):
             if row.abstained:
                 continue
             partner = control_partner(index, rows)
@@ -698,10 +793,16 @@ def score_answers(
         # **프로필과 함께 프롬프트 판도 싣는다** — 캐시 salt 가 이미 이 값으로 갈리므로
         # 표도 같이 갈려야 앞뒤가 맞는다 (`verdicts.py` 와 같은 규칙)
         "support_prompt_version": SUPPORT_PROMPT_VERSION,
+        # **생성 프롬프트 판도 싣는다** — 이 문자열을 고쳐도 `generation_profile` 은 `prod`
+        # 그대로라, 안 실으면 두 리포트를 견줄 때 *생성 프롬프트가 달랐다* 를 못 되짚는다.
+        # `rewritten` 을 `query_log` 에 실은 이유(*"여기가 유일한 기록"*)와 같은 자리다
+        "generation_prompt_version": GENERATION_PROMPT_VERSION,
         "queries": len(rows),
         "generations": generations,
-        "judge_usage": asdict(judge.usage),
-        "judge_warnings": list(judge.warnings),
+        # **채점자가 없어도 칸은 늘 쓴다** — 빼면 *껐다* 와 *옛 형식이라 칸이 없다* 가
+        # 집계에서 안 갈린다(`query_log` 의 «키를 늘 쓴다» 규칙과 같다)
+        "judge_usage": asdict(judge.usage if judge else JudgeUsage()),
+        "judge_warnings": [*(judge.warnings if judge else []), *generation_warnings],
         "bm25_warnings": list(bm25.warnings),
         "rerank_warnings": list(getattr(reranker, "warnings", []) or []),
         "rewrite_warnings": list(getattr(rewriter, "warnings", []) or []),
@@ -754,12 +855,17 @@ def report_name(
 # 회계를 먼저, 지표를 나중에 찍는다 (모듈 docstring 참고)
 def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> None:
     usage = JudgeUsage(**meta["judge_usage"])
-    problems = accounting_problems(rows, usage, expected_generations=meta["generations"])
+    # **리포트만 보고도 어느 게이트를 탔는지 알아야 한다** — 프로필 이름이 그 유일한 근거다
+    judge_name = meta.get("judge_profile") or ""
+    judge_on = judge_name != "off"
+    problems = accounting_problems(
+        rows, usage, expected_generations=meta["generations"], judge_on=judge_on
+    )
 
     print("\n[회계 게이트]")
     print(
-        f"  판정 호출 {usage.api_calls} · 캐시 {usage.cache_hits} · 토큰 {usage.total_tokens} · "
-        f"생성 {meta['generations']}"
+        f"  채점자 {judge_name or '?'} · 판정 호출 {usage.api_calls} · 캐시 {usage.cache_hits} · "
+        f"토큰 {usage.total_tokens} · 생성 {meta['generations']}"
     )
     if problems:
         for line in problems:
@@ -768,17 +874,18 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
     else:
         print("  ✓ 통과")
 
-    summary = summarize(rows)
+    summary = summarize(rows, judge_on=judge_on)
     for name, korean in (("negative", "부정 예시"), ("positive", "정답 있음")):
         b = summary[name]
         if not b["queries"]:
             continue
         print(f"\n[{korean}] {b['queries']}건")
-        print(f"  기권 {b['abstained']} · 판정 {b['judged']}")
+        print(f"  기권 {b['abstained']} · 판정 대상 {b['judged']}")
         if b["judged"]:
-            print(
-                f"  지지 {b['supported']} · 미지지 {b['unsupported']} · 실패 {b['failed']}"
-            )
+            if judge_on:
+                print(
+                    f"  지지 {b['supported']} · 미지지 {b['unsupported']} · 실패 {b['failed']}"
+                )
             ground = b["citation_groundedness"]
             shown = "—" if ground is None else f"{ground:.3f}"
             print(
@@ -787,11 +894,25 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
             )
 
     control = summary["shuffled_control"]
+    if control is None:
+        # **«0» 이 아니라 «안 돌림» 이다** — 숫자로 내면 *물었는데 깨끗했다* 로 읽힌다
+        print("\n[지지 판정] 안 돌림 — 이 회차가 재는 것은 인용 정합성과 기권율이다")
+        return
+
     print(f"\n[음성 대조군] 판정 {control['judged']}건 · 짝 없음 {control['unpaired']}건")
     print(
         f"  supported {control['supported']} (0이어야 한다) · "
         f"unsupported {control['unsupported']} · 실패 {control['failed']}"
     )
+
+    # **회계 게이트와 분리된 줄이다** — 미지지는 회차를 무효화하지 않는다(40회차의 «무효화 vs
+    # 분모 주석» 구분). 그리고 **«회귀» 라고 쓰지 않는다**: 2026-08-29 에 실물 거짓 음성이
+    # 하나 났고(멀쩡한 인용을 깎았다), 그때 «모델이 근거 없이 답했다» 를 적을 뻔한 것을 가른
+    # 것은 근거를 열어 읽은 것 하나였다. `judge_probe` 는 이 방향을 원리적으로 못 잰다
+    wrong = sum(1 for row in rows if row.support == "unsupported")
+    print(f"\n[지지] 미지지 {wrong}건")
+    if wrong:
+        print("  → 회귀로 기록하기 전에 근거를 열어 확인한다 (--wrong · 거짓 음성 선례 있음)")
 
     if show_wrong:
         print("\n[미지지로 판정된 답변]")
@@ -849,7 +970,11 @@ def main() -> int:
             tag=args.tag,
         )
         out.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"meta": meta, "summary": summarize(rows), "rows": [asdict(r) for r in rows]}
+        payload = {
+            "meta": meta,
+            "summary": summarize(rows, judge_on=args.judge != "off"),
+            "rows": [asdict(r) for r in rows],
+        }
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n남김: {out}")
     return 0

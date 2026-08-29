@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+from evaluation import answer_diff
 from evaluation.answer_diff import (
     PairedRow,
     axis_problems,
@@ -235,3 +236,31 @@ def test_a_missing_report_stops_with_its_name(tmp_path) -> None:
         load_answer_report(str(tmp_path / "없는것.json"))
 
     assert "리포트가 없습니다" in str(excinfo.value)
+
+# ---------------------------------------------------------------------------
+# 채점자를 끈 리포트 — **«안 돌림» 을 «0» 으로 찍으면 표가 거짓말을 한다**
+# ---------------------------------------------------------------------------
+
+
+# **판정 여부는 쪽마다 따로 읽는다.** 한쪽만 `--judge off` 로 돌린 짝이 있을 수 있고, 그때
+# 한 쪽의 «안 돌림» 을 다른 쪽 기준으로 세면 지지 칸이 «전건 미지지» 로 보인다.
+# 이 테스트는 **변이 표가 «안 잡힌다» 고 답해서** 생겼다 — 그전에는 이 자리를 아무도 안 봤다
+def test_a_judgeless_side_is_summarized_as_none(capsys) -> None:
+    rows_a = [row("q1", ["c1"], [1], support=None)]
+    rows_b = [row("q1", ["c1"], [1])]
+    pairs, _ = pair_rows(rows_a, rows_b)
+
+    answer_diff._print(
+        pairs,
+        split_by_evidence(pairs),
+        a_meta=meta(judge_profile="off"),
+        b_meta=meta(rewrite_profile="fuse"),
+        problems=[],
+        expect_same=None,
+        show=False,
+    )
+
+    printed = capsys.readouterr().out
+    # 껐던 쪽은 «—», 켰던 쪽은 숫자다. 둘이 같은 글자로 찍히면 이 표는 못 읽는다
+    assert "지지   —" in printed
+    assert "지지   1" in printed

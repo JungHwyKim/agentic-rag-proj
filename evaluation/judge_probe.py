@@ -71,7 +71,7 @@ from typing import Any
 from evaluation.answer_eval import JudgeConfig, JudgeUsage, SupportJudge, is_abstention
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
-    DEFAULT_JUDGE_PROFILE,
+    DEFAULT_PROBE_JUDGE_PROFILE,
     eval_config,
     judge_profile,
 )
@@ -399,10 +399,20 @@ def summarize(rows: list[ProbeRow]) -> dict[str, Any]:
 def probe(
     *,
     report_path: Path,
-    judge_name: str = DEFAULT_JUDGE_PROFILE,
+    judge_name: str = DEFAULT_PROBE_JUDGE_PROFILE,
     cache_enabled: bool = True,
 ) -> tuple[list[ProbeRow], dict[str, Any]]:
     from rag_pipeline.ingestion.indexing import get_store
+
+    # **«채점자 없음» 은 여기서 합법값이 아니다.** 이 도구가 재는 것이 채점자 자신이라,
+    # 꺼진 프로필로 들어오면 민감도 표가 **전건 `failed`** 로 나온다 — 그것은
+    # *«죽은 채점자가 만점»* 의 거울상이라 소리 내어 막는다(`DEFAULT_JUDGE_PROFILE` 이
+    # 2026-08-29 에 `off` 로 내려가면서 실재하게 된 자리다)
+    if not judge_profile(judge_name).get("judge_model"):
+        raise SystemExit(
+            f"채점자 프로필 '{judge_name}' 에는 모델이 없습니다 — 이 도구는 채점자를 재는 "
+            f"자리라 꺼진 프로필로는 돌 수 없습니다 (예: --judge {DEFAULT_PROBE_JUDGE_PROFILE})"
+        )
 
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     source_meta = payload.get("meta") or {}
@@ -490,6 +500,9 @@ def probe(
         "source_rerank_profile": source_meta.get("rerank_profile"),
         "source_rewrite_profile": source_meta.get("rewrite_profile"),
         "source_generation_profile": source_meta.get("generation_profile"),
+        # **프로필 이름만으로는 생성 조건이 안 잡힌다** — `SYSTEM_PROMPT` 를 고쳐도 이름은
+        # `prod` 그대로다. 옛 리포트에는 이 칸이 없어 `None` 이고 그것이 곧 «그전 판» 이다
+        "source_generation_prompt_version": source_meta.get("generation_prompt_version"),
         "probed_queries": len({row.query_id for row in rows}),
         "abstained": abstained,
         "unmutated": unmutated,
@@ -554,7 +567,8 @@ def main() -> int:
     )
     # **경로로 직접 받는다** — 이름 규칙으로 유추하면 리포트 이름이 바뀔 때 옛 판을 못 연다
     parser.add_argument("--report", required=True, help="answer_eval 이 남긴 리포트 JSON 경로")
-    parser.add_argument("--judge", default=DEFAULT_JUDGE_PROFILE)
+    # **기본이 `answer_eval` 과 다르다** — 저쪽은 `off` 가 기본이고 여기는 채점자가 있어야 한다
+    parser.add_argument("--judge", default=DEFAULT_PROBE_JUDGE_PROFILE)
     parser.add_argument("--wrong", action="store_true", help="놓친 변조를 하나씩 보여준다")
     parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
     args = parser.parse_args()

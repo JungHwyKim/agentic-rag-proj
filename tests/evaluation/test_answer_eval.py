@@ -19,10 +19,12 @@ from evaluation.answer_eval import (
     SupportJudge,
     accounting_problems,
     control_partner,
+    get_judge,
     is_abstention,
     score_citations,
     summarize,
 )
+from evaluation.config import EVAL_JUDGES
 from evaluation.qa_set import QAItem
 from rag_pipeline.generation.prompts import NO_EVIDENCE_ANSWER
 from rag_pipeline.schemas.retrieval import RetrievedChunk
@@ -188,7 +190,7 @@ def test_abstention_is_counted_apart_from_unsupported() -> None:
             answer="지어낸 답 [1]", chunk_ids=["c1"], support="unsupported",
         ),
     ]
-    negative = summarize(rows)["negative"]
+    negative = summarize(rows, judge_on=True)["negative"]
 
     assert negative["abstained"] == 1
     assert negative["judged"] == 1
@@ -231,7 +233,7 @@ def test_control_rejects_the_same_chunks_in_a_different_order() -> None:
 # 안 갈린다 — Cohere 한도 초과가 품질로 읽힌 사고와 같은 모양이다
 def test_rows_without_a_control_partner_are_counted_separately() -> None:
     rows = [row("a", "문서1", ["c1"]), row("b", "문서2", ["c1"])]
-    control = summarize(rows)["shuffled_control"]
+    control = summarize(rows, judge_on=True)["shuffled_control"]
 
     assert control["judged"] == 0
     assert control["unpaired"] == 2
@@ -242,7 +244,7 @@ def test_an_abstained_row_is_not_counted_as_unpaired() -> None:
     abstained = row("a", "문서1", ["c1"])
     abstained.abstained = True
 
-    assert summarize([abstained])["shuffled_control"]["unpaired"] == 0
+    assert summarize([abstained], judge_on=True)["shuffled_control"]["unpaired"] == 0
 
 
 # **겹침 하나로 막는다 — 이것이 43회차가 실제로 밟은 자리다.** `ai-01` 의 대조군이 빌린 다섯
@@ -487,27 +489,27 @@ def judged_row(query_id: str, *, control: str | None = "unsupported") -> AnswerR
 def test_a_matching_ledger_passes() -> None:
     rows = [judged_row("a"), judged_row("b")]
     usage = JudgeUsage(api_calls=4, cache_hits=0)
-    assert accounting_problems(rows, usage, expected_generations=2) == []
+    assert accounting_problems(rows, usage, judge_on=True, expected_generations=2) == []
 
 
 # **호출 수가 모자라면 지표를 못 읽는다** — Cohere 한도 초과가 품질 저하로 읽힌 그 선례다.
 # 지표 여덟 개가 전부 그럴듯하게 나빴고 가른 것은 호출 수 하나였다
 def test_a_short_ledger_is_reported() -> None:
     rows = [judged_row("a"), judged_row("b")]
-    problems = accounting_problems(rows, JudgeUsage(api_calls=2), expected_generations=2)
+    problems = accounting_problems(rows, JudgeUsage(api_calls=2), judge_on=True, expected_generations=2)
     assert any("판정 회계" in p for p in problems)
 
 
 # 캐시 히트도 회계의 한쪽 항이다. 히트만으로 채워도 통과여야 한다 — 실제로 그런 회차가 있었다
 def test_cache_hits_count_toward_the_ledger() -> None:
     rows = [judged_row("a"), judged_row("b")]
-    assert accounting_problems(rows, JudgeUsage(cache_hits=4), expected_generations=2) == []
+    assert accounting_problems(rows, JudgeUsage(cache_hits=4), judge_on=True, expected_generations=2) == []
 
 
 # **대조군이 통과하면 그 회차의 지지 수치는 못 쓴다.** 이것이 이 도구의 죽은 판정자 기준선이다
 def test_a_leaking_control_invalidates_the_run() -> None:
     rows = [judged_row("a", control="supported"), judged_row("b")]
-    problems = accounting_problems(rows, JudgeUsage(api_calls=4), expected_generations=2)
+    problems = accounting_problems(rows, JudgeUsage(api_calls=4), judge_on=True, expected_generations=2)
 
     assert any("음성 대조군" in p and "못 씁니다" in p for p in problems)
 
@@ -517,7 +519,7 @@ def test_a_leaking_control_invalidates_the_run() -> None:
 # 부정 예시에서는 그것이 곧 이 도구의 첫 지표라 제일 나쁜 자리다
 def test_a_generation_shortfall_is_reported() -> None:
     rows = [judged_row("a"), judged_row("b")]
-    problems = accounting_problems(rows, JudgeUsage(api_calls=4), expected_generations=1)
+    problems = accounting_problems(rows, JudgeUsage(api_calls=4), judge_on=True, expected_generations=1)
     assert any("생성 회계" in p for p in problems)
 
 
@@ -525,7 +527,7 @@ def test_a_generation_shortfall_is_reported() -> None:
 def test_failures_are_surfaced() -> None:
     rows = [judged_row("a")]
     rows[0].support = "failed"
-    problems = accounting_problems(rows, JudgeUsage(api_calls=2), expected_generations=1)
+    problems = accounting_problems(rows, JudgeUsage(api_calls=2), judge_on=True, expected_generations=1)
     assert any("실패" in p for p in problems)
 
 
@@ -538,7 +540,7 @@ def test_abstained_rows_are_not_in_the_ledger() -> None:
             answer=NO_EVIDENCE_ANSWER, chunk_ids=["c9"], abstained=True,
         ),
     ]
-    assert accounting_problems(rows, JudgeUsage(api_calls=2), expected_generations=2) == []
+    assert accounting_problems(rows, JudgeUsage(api_calls=2), judge_on=True, expected_generations=2) == []
 
 
 # ---------------------------------------------------------------------------
@@ -707,3 +709,115 @@ def test_an_empty_tag_leaves_no_trace() -> None:
     )
 
     assert name == "L-answers-qa_set-mini-cohere-off-prod-k5-pdf.json"
+
+# ---------------------------------------------------------------------------
+# 채점자를 끄는 축 — **«안 돌림» 과 «전건 실패» 가 갈려야 한다**
+#
+# `EVAL_JUDGES` 주석이 꺼짐 프로필을 오래 막아 둔 이유가 *"안 돌면 전건 실패인데 표는
+# 멀쩡해 보인다"* 였다. 2026-08-29 에 기본을 `off` 로 내리며 그 우려를 갚기로 했고,
+# 갚는 방법이 아래 둘이다 — **요약이 `None` 을 내는 것**과 **회계 게이트가 뒤집히는 것**.
+# 이 절이 빨개지면 그 옛 우려가 되살아난 것이다
+# ---------------------------------------------------------------------------
+
+
+# 꺼짐 프로필은 채점자를 아예 안 만든다. **이것이 이 축의 유일한 스위치다**
+def test_the_off_profile_builds_no_judge() -> None:
+    assert get_judge(JudgeConfig(**EVAL_JUDGES["off"]), api_key="sk-test") is None
+
+
+# 반대쪽도 못 박는다 — 스위치가 늘 꺼져 있으면 검사가 아무것도 안 잡는다
+def test_a_real_profile_builds_a_judge(tmp_path) -> None:
+    judge = get_judge(
+        JudgeConfig(**EVAL_JUDGES["mini"]), api_key="sk-test", cache_dir=tmp_path / "j"
+    )
+    assert isinstance(judge, SupportJudge)
+
+
+# **껐으면 지지 칸이 `0` 이 아니라 `None` 이다.** `0` 으로 내면 «전건 미지지» 로 읽히는데,
+# 그것이 정확히 옛 주석이 걱정한 «표는 멀쩡해 보인다» 다
+def test_a_judgeless_run_reports_none_not_zero() -> None:
+    rows = [judged_row("a")]
+    rows[0].support = None
+    rows[0].control = None
+
+    bucket = summarize(rows, judge_on=False)["positive"]
+    assert bucket["supported"] is None
+    assert bucket["unsupported"] is None
+    assert bucket["failed"] is None
+    # 인용 축은 채점자와 무관하게 그대로 산다 — 껐을 때 실제로 변별하는 것이 이쪽이다
+    assert bucket["judged"] == 1
+
+
+# 대조군 블록도 통째로 `None` 이다 — «0건 누출» 이 아니라 «물은 적이 없다» 가 맞다
+def test_a_judgeless_run_has_no_control_block() -> None:
+    assert summarize([judged_row("a")], judge_on=False)["shuffled_control"] is None
+
+
+# **껐을 때는 게이트가 뒤집힌다** — «끈 줄 알았는데 절반 돌았다» 를 잡는 자리이고,
+# `--judge off` 회차의 «판정 유료 0» 은 이 줄이 증명한다
+def test_a_judgeless_run_must_not_have_called_the_judge() -> None:
+    rows = [judged_row("a")]
+    problems = accounting_problems(
+        rows, JudgeUsage(api_calls=2), expected_generations=1, judge_on=False
+    )
+    assert any("판정을 껐는데 판정이 돌았습니다" in p for p in problems)
+
+
+# 캐시 히트도 «돌았다» 로 센다. 무료여도 그 회차는 꺼진 회차가 아니다
+def test_a_judgeless_run_counts_cache_hits_as_having_run() -> None:
+    problems = accounting_problems(
+        [judged_row("a")], JudgeUsage(cache_hits=1), expected_generations=1, judge_on=False
+    )
+    assert any("판정을 껐는데" in p for p in problems)
+
+
+# 호출이 정말 0이면 통과다. 이 상태에서만 인용 정합성을 실력으로 읽는다
+def test_a_judgeless_run_with_no_calls_passes() -> None:
+    rows = [judged_row("a")]
+    rows[0].support = None
+    rows[0].control = None
+    assert (
+        accounting_problems(rows, JudgeUsage(), expected_generations=1, judge_on=False) == []
+    )
+
+
+# **미지지는 회차를 무효화하지 않는다.** 40회차의 «무효화 vs 분모 주석» 구분이고, 2026-08-29
+# 의 실물 거짓 음성이 그 구분에 값을 매겼다 — 통과선이었으면 멀쩡한 회차가 실패로 남았다
+def test_an_unsupported_verdict_does_not_invalidate_the_run() -> None:
+    rows = [judged_row("a"), judged_row("b")]
+    rows[0].support = "unsupported"
+    problems = accounting_problems(
+        rows, JudgeUsage(api_calls=4), expected_generations=2, judge_on=True
+    )
+    assert problems == []
+
+
+# 채점자 이름이 리포트를 가른다 — 껐던 회차가 켰던 회차를 덮으면 안 된다
+def test_the_off_judge_splits_the_report() -> None:
+    common = {
+        "label": "L",
+        "qa_set": "qa_set.jsonl",
+        "rewrite": "off",
+        "rerank": "cohere",
+        "generation": "prod",
+        "top_k": 5,
+        "fmt": "pdf",
+    }
+
+    assert answer_eval.report_name(judge="off", **common) != answer_eval.report_name(
+        judge="mini", **common
+    )
+
+
+# ---------------------------------------------------------------------------
+# 생성 프롬프트 판 — 리포트가 자기 생성 조건을 말할 수 있어야 한다
+# ---------------------------------------------------------------------------
+
+
+# **`generation_profile` 만으로는 안 잡힌다** — `SYSTEM_PROMPT` 를 고쳐도 이름은 `prod` 다.
+# 두 리포트를 나중에 견줄 때 *생성 프롬프트가 달랐다* 를 되짚을 자리가 이 칸 하나다
+def test_the_generation_prompt_has_a_version() -> None:
+    from rag_pipeline.generation import prompts
+
+    assert prompts.GENERATION_PROMPT_VERSION
+    assert "GENERATION_PROMPT_VERSION" in prompts.__all__
