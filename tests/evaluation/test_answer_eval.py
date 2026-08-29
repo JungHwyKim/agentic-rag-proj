@@ -25,6 +25,7 @@ from evaluation.answer_eval import (
     is_abstention,
     score_citations,
     score_must,
+    score_must_not_claim,
     summarize,
 )
 from evaluation.config import EVAL_JUDGES
@@ -1287,9 +1288,112 @@ def test_the_conditioned_ratio_drops_rows_whose_evidence_missed_the_gold() -> No
     assert block["values_recall_given_evidence"] == pytest.approx(1.0)
 
 
+
+
+# 라벨이 없으면 두 칸이 **`None` 이지 `[]` 가 아니다.** 빈 목록은 «봤는데 후보가 없다» 라는
+# 다른 뜻이고, 접으면 리포트가 «라벨을 안 달았다» 와 그것을 못 가른다
+def test_must_not_claim_columns_stay_none_without_labels() -> None:
+    scored = _claim_row("무엇이든 답합니다.")
+    score_must_not_claim(scored, _item())
+
+    assert scored.must_not_claim_total is None
+    assert scored.must_not_claim_candidates is None
+
+
+# 금지 낱말이 든 문장을 후보로 올린다. **낱말 하나만 겹쳐도 올린다** — 어휘 대조를
+# 재현율 쪽으로만 쓰기로 한 결정이라, 정밀도는 사람이 읽어서 낸다
+def test_a_sentence_carrying_the_word_becomes_a_candidate() -> None:
+    scored = _claim_row("사전에 안전성 검증을 받아야 합니다. 위험 평가도 필요합니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["외부 안전성 검증 절차"]))
+
+    assert scored.must_not_claim_total == 1
+    assert [hit["sentence"] for hit in scored.must_not_claim_candidates] == [
+        "사전에 안전성 검증을 받아야 합니다."
+    ]
+
+
+# **부정문도 후보로 남는다 — 일부러 그렇게 뒀다.**
+#
+# 실측(2026-08-29, 저장된 답변 두 판)에서 금지어가 나온 문 넷 중 **둘이 부정문**이었고
+# 그 둘은 전제가 틀린 질문을 바로잡은 **제일 좋은 답변**이다. 그래서 이 자[尺]는 세지 않고
+# 후보만 낸다. 여기서 부정문을 걸러내기 시작하면 «어디까지가 부정문인가» 가 곧 임계값이 되고
+# (단위 정규화를 기각한 그 모양이다), 지금 표본은 문 넷뿐이라 그 임계값을 검증할 데이터가 없다
+def test_a_denial_is_still_a_candidate_because_the_reader_decides() -> None:
+    scored = _claim_row("다만, 매년 지정해야 한다는 내용은 문서에 없습니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["매년 지정 주기"]))
+
+    assert len(scored.must_not_claim_candidates) == 1
+
+
+# 한 문장이 금지 항목의 낱말 여럿에 걸려도 **한 줄이다** — 사람이 읽을 목록이라,
+# 낱말마다 되풀이하면 같은 문장이 여러 번 떠서 목록이 못 읽을 것이 된다
+def test_one_sentence_is_listed_once_per_entry() -> None:
+    scored = _claim_row("구체적 진단 도구 이름을 적습니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["구체적 진단 도구 이름"]))
+
+    assert len(scored.must_not_claim_candidates) == 1
+
+
+# **걸린 낱말을 전부 싣는다 — 이 테스트는 실측이 만들었다.**
+#
+# 저장된 답변 두 판에 소급했더니 `hai-05` 의 「설명 대상을 국민으로」가 «설명» 하나로만 찍혔다.
+# 그 낱말은 그 답변의 거의 모든 문장에 있어 두 판의 목록이 똑같아 보였고, 정작 가르는 낱말
+# («국민» — 근거는 「소비자 또는 고객」이라고 적는다)이 목록에서 안 보였다. 첫 낱말만 실으면
+# **읽는 사람이 어느 문장을 봐야 하는지 못 본다** — 사람이 읽는 것이 이 칸의 계약이라 치명적이다
+def test_every_matching_word_is_listed_not_just_the_first() -> None:
+    scored = _claim_row("국민이 설명을 요청할 수 있습니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["설명 대상을 국민으로"]))
+
+    assert scored.must_not_claim_candidates[0]["tokens"].split() == ["설명", "국민"]
+
+
+# **블록에 비[比]가 한 칸도 없어야 한다.** 후보에는 부정문이 섞여 있어 어떤 분수를 내도
+# «오류율» 로 읽히고, 그러면 제일 좋은 답변이 분자에 앉는다
+def test_the_block_carries_no_ratio() -> None:
+    scored = _claim_row("사전에 안전성 검증을 받아야 합니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["외부 안전성 검증 절차"]))
+
+    block = summarize([scored], judge_on=False)["positive"]["must_not_claim"]
+
+    assert set(block) == {"labeled", "entries", "candidates", "no_candidate_queries"}
+    assert not any(isinstance(value, float) for value in block.values())
+
+
+# **라벨은 있는데 후보가 0인 질의를 목록에 남긴다.** 안 남기면 그 질의가 리포트에서 아예
+# 사라지는데, 그것이 «답변이 안 건드렸다» 인지 «어휘로 못 잡는 종류» 인지는 사람만 안다
+def test_a_labeled_row_without_candidates_is_still_named() -> None:
+    scored = _claim_row("전혀 다른 이야기를 합니다.")
+    score_must_not_claim(scored, _item(must_not_claim=["매년 지정 주기"]))
+
+    block = summarize([scored], judge_on=False)["positive"]["must_not_claim"]
+
+    assert block["labeled"] == 1
+    assert block["candidates"] == []
+    assert block["no_candidate_queries"] == ["q1"]
+
+
+# 라벨이 하나도 없으면 블록이 통째로 `None` 이다 — 필수 사실 블록과 같은 규약
+def test_the_block_is_none_when_nothing_is_labeled() -> None:
+    scored = _claim_row("아무 답")
+
+    assert summarize([scored], judge_on=False)["positive"]["must_not_claim"] is None
+
+
+# 위 테스트들이 쓰는 최소 행
+def _claim_row(answer: str) -> AnswerRow:
+    return AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True, answer=answer,
+    )
+
 # 위 테스트들이 쓰는 최소 질의. 라벨만 갈아 끼운다
-def _item(*, must_values: list[str] | None = None, must_points: list[str] | None = None) -> QAItem:
+def _item(
+    *,
+    must_values: list[str] | None = None,
+    must_points: list[str] | None = None,
+    must_not_claim: list[str] | None = None,
+) -> QAItem:
     return QAItem(
         query_id="q1", query="질문", source_doc="안내서", gold_spans=["어떤 정답"],
         must_values=list(must_values or []), must_points=list(must_points or []),
+        must_not_claim=list(must_not_claim or []),
     )

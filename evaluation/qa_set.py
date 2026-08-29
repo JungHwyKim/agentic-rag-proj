@@ -142,6 +142,25 @@ class QAItem:
     # 없다 — 6회차가 `reviewed_hash` 를 검수가 끝난 뒤 백필한 것과 같은 순서다
     must_reviewed_by: str = "pending"
     must_reviewed_hash: str = ""
+    # 답변이 **단정하면 안 되는 것**. 위 둘과 축이 반대다 — 저쪽은 *담았나* 이고 이쪽은
+    # *덧붙였나* 라, `must_points` 로는 원리적으로 못 잰다(실측: `hai-05` 에서 답변이 근거의
+    # 「이해관계자」를 담은 **채로** 「국민」을 덧붙였고 어휘 겹침은 두 판이 같았다).
+    #
+    # **이름이 「환각이 없다」로 읽히면 안 된다.** 환각은 열거할 수 없어, 이 칸이 재는 것은
+    # «환각을 안 했나» 가 아니라 **«미리 적어 둔 오류를 냈나»** 다. 그래서 `claim` 이다 —
+    # 낱말이 나온 것(mention)이 아니라 **단정한 것**만 오류다(`plan_log/평가-세트.md` 16회차).
+    #
+    # **값/서술로 안 가른다.** `must_values`/`must_points` 를 가른 축은 «어휘로 결정적인가»
+    # 인데, 여기서는 그 축이 실측으로 무너졌다 — 다섯 건 중 셋은 금지어가 **질의 자체의
+    # 낱말**이라(전제가 틀린 질문이 이 칸을 만든다) 전제를 바로잡은 답변도 그 낱말을 쓴다.
+    # 즉 «있나» 로는 값 축조차 결정적이지 않아, 가를 근거가 없다
+    must_not_claim: list[str] = field(default_factory=list)
+    # 이 칸만의 검수 도장. **`must_reviewed_*` 에 안 묶었다** — 묶으면 같은 문자열을
+    # `must_points` ↔ `must_not_claim` 으로 **옮긴 편집이 지문에 안 걸린다**(확인함:
+    # payload 가 이어 붙인 한 목록이라 경계가 안 남는다). 뜻이 제일 크게 뒤집히는 편집이
+    # 그것이라 도장이 그것만은 잡아야 한다. 지문은 `content_hash(query, must_not_claim)` 다
+    must_not_claim_reviewed_by: str = "pending"
+    must_not_claim_reviewed_hash: str = ""
 
     # jsonl 한 줄을 레코드로. 모르는 키는 조용히 버리지 않고 막는다 —
     # 오타 난 키가 조용히 무시되면 그 레코드만 기본값으로 채점된다

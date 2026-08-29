@@ -6,13 +6,23 @@
 답변 본문을 한 글자도 안 본다 — 저장소가 *"생성 품질은 못 잰다"* 를 `plan_log/검색-생성.md`
 24·26·27·29회차에서 네 번 미결로 넘긴 것이 이 빈자리다.
 
-여기가 재는 것은 셋이고 **셋이 서로를 검사한다.**
+여기가 재는 것은 **다섯**이고, 그중 **아래 셋이 서로를 검사한다**(인용 정합성 · 근거 지지 ·
+음성 대조군). 다섯 다 **골든 답변 없이** 선다.
 
-| 무엇 | 유료 | 무엇이 없어도 되나 |
+| 무엇 | 유료 | 무엇을 내나 |
 |---|---|---|
-| **인용 정합성** — 답변이 인용한 `[n]` 청크가 `gold_span` 을 담나 | 0 | 골든 답변 |
-| **근거 지지** — 답변 문장이 근거로 뒷받침되나 (LLM) | 판정당 1 | 골든 답변 |
-| **음성 대조군** — 같은 답변에 **남의 근거**를 물려 같은 판정 | 판정당 1 | — |
+| **인용 정합성** — 답변이 인용한 `[n]` 청크가 `gold_span` 을 담나 | 0 | 비[比] |
+| **근거 지지** — 답변 문장이 근거로 뒷받침되나 (LLM) | 판정당 1 | 판정 |
+| **음성 대조군** — 같은 답변에 **남의 근거**를 물려 같은 판정 | 판정당 1 | 판정 |
+| **필수 사실** — 담아야 할 값을 담았나 (값=결정적 · 서술=어휘 탐침) | 0 | 비[比] + 탐침 |
+| **단정 금지** — 미리 적어 둔 오류를 냈나 | 0 | **후보 목록** |
+
+**마지막 줄만 수치를 안 낸다 — 그것이 그 칸의 계약이다.** 앞 넷은 *답변이 근거에 충실한가*
+쪽이고 단정 금지는 ***근거에 없는 것을 덧붙였나*** 라 축이 반대인데, 그것을 어휘로 재려
+했더니 실측에서 **문 넷 중 둘이 부정문**이었다 — 전제가 틀린 질문을 바로잡은 답변이 금지어를
+쓰기 때문이다(구조적인 이유는 `score_must_not_claim` 참고). 그래서 어휘 대조는 **후보를
+모으는 데까지만** 쓰고 단정이냐 부정이냐는 사람이 읽는다. **비율을 내면 그 순간
+«오류율» 로 읽히고, 제일 좋은 답변이 분자에 앉는다.**
 
 ## 언제 켜나 — **기본은 꺼짐이고, 그것이 2026-08-29 의 결정이다**
 
@@ -168,6 +178,7 @@ __all__ = [
     "report_name",
     "score_citations",
     "score_must",
+    "score_must_not_claim",
     "summarize",
 ]
 
@@ -280,6 +291,13 @@ class AnswerRow:
     must_values_hit: int | None = None
     must_point_tokens_total: int | None = None
     must_point_tokens_hit: int | None = None
+
+    # --- 단정하면 안 되는 것 (무료 · **후보만 뽑는다**) ---
+    # **비율을 안 낸다.** 이 칸이 내놓는 것은 «사람이 읽을 문장 목록» 이고 수치가 아니다 —
+    # 어휘 대조가 부정문과 단정을 못 가르기 때문이다(`score_must_not_claim` 참고).
+    # 라벨이 없으면 둘 다 `None`(위 필수 사실과 같은 규약)
+    must_not_claim_total: int | None = None
+    must_not_claim_candidates: list[dict[str, str]] | None = None
 
     # --- 근거 지지 (유료·LLM) ---
     support: str | None = None
@@ -461,6 +479,55 @@ def score_must(row: AnswerRow, item: QAItem) -> None:
     tokens = [token for point in item.must_points for token in _content_tokens(point)]
     row.must_point_tokens_total = len(tokens)
     row.must_point_tokens_hit = sum(1 for token in tokens if squash(token) in hay)
+
+
+# 답변을 문장으로 쪼갠다. **판정에 안 쓰이고 화면에만 쓰인다** — 사람이 읽을 조각을 자르는
+# 것뿐이라 경계가 조금 틀려도 아무것도 안 바뀐다. 그래서 임계값이 아니다
+def _split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+# 단정하면 안 되는 것의 **후보**를 뽑는다. **점수를 안 낸다 — 이것이 이 함수의 계약이다.**
+#
+# 실측(2026-08-29, 저장된 사람 세트 답변 두 판)이 문자열 검사를 기각했다: 금지어가 나온 문
+# 넷 중 **둘이 부정문**이었고(*"매년…문서에 없습니다"* · *"의무는 명시되어 있지 않습니다"*),
+# 그 둘은 전제가 틀린 질문을 **바로잡은 제일 좋은 답변**이다. 세면 좋은 답변을 벌준다.
+#
+# **그렇게 되는 것이 우연이 아니라 구조다** — 이 칸은 *질문이 틀린 전제를 깔았을 때* 생기므로
+# 금지어가 곧 질의의 낱말이다(다섯 중 셋이 그랬다). 답변이 그 전제를 다루려면 그 낱말을 쓴다.
+#
+# 그래서 어휘 대조는 **재현율 쪽으로만** 쓴다 — 낱말 하나만 겹쳐도 후보로 올리고, 단정이냐
+# 부정이냐는 사람이 읽어 가른다. 오인용 탐침(2026-08-29)이 *"후보 0건은 «오류가 없다» 가
+# 아니라 «어휘상 어긋난 자리가 없다»"* 로 간 그 자리와 같은 신분이다.
+#
+# **부정어 창으로 자동 판정하는 안은 기각했다** — 한국어 부정 표지는 열거가 안 끝나
+# «어디까지가 부정문인가» 가 곧 임계값이 되고(단위 정규화를 기각한 그 모양이다), 지금 표본은
+# 문 넷뿐이라 그 임계값을 검증할 데이터가 없다. **LLM 판정도 아니다** — ② 지지 판정이 다섯 판
+# 연속 포화로 강등된 바로 그 길이라, 갈리는지 모르는 채 호출부터 사게 된다
+def score_must_not_claim(row: AnswerRow, item: QAItem) -> None:
+    if not item.must_not_claim:
+        return
+
+    row.must_not_claim_total = len(item.must_not_claim)
+    sentences = _split_sentences(row.answer)
+    found: list[dict[str, str]] = []
+    for entry in item.must_not_claim:
+        tokens = _content_tokens(entry)
+        # **문장을 바깥 고리로 도는 것이 요점이다** — 낱말을 바깥에 두면 한 문장이 낱말 수만큼
+        # 되풀이돼, 사람이 읽을 목록에 같은 문장이 여러 줄로 뜬다
+        for sentence in sentences:
+            hay = squash(sentence)
+            # **걸린 낱말을 전부 싣는다 — 첫 것만 실었더니 실측에서 신호가 가려졌다.**
+            # `hai-05` 의 「설명 대상을 국민으로」는 «설명» 이 답변의 거의 모든 문장에 걸리는데,
+            # 정작 가르는 낱말은 «국민» 이다. 첫 것만 싣자 두 판의 목록이 «설명» 으로 똑같아져
+            # **읽는 사람이 어느 문장을 봐야 하는지 못 보았다.** 화면용이라 붙여서 싣는다
+            hit = " ".join(t for t in tokens if squash(t) in hay)
+            if hit:
+                found.append({"entry": entry, "tokens": hit, "sentence": sentence})
+    # **걸린 문장이 하나도 없어도 빈 목록이지 `None` 이 아니다** — `None` 은 «라벨이 없다»
+    # 이고 빈 목록은 «봤는데 후보가 없다» 라, 접으면 리포트가 둘을 못 가른다
+    row.must_not_claim_candidates = found
 
 
 # 캐시 키. 질의·답변 본문·근거 신원(순서까지)·모델·프롬프트 버전이 전부 들어간다.
@@ -825,6 +892,34 @@ def _must_block(rows: list[AnswerRow]) -> dict[str, Any] | None:
     }
 
 
+# 단정 금지 후보를 모은다. **비[比]가 한 칸도 없는 것이 이 블록의 계약이다** — 후보에는
+# 부정문이 섞여 있어(`score_must_not_claim` 참고) 어떤 분수를 내도 «오류율» 로 읽힌다.
+#
+# **라벨은 있는데 후보가 0인 질의를 따로 싣는다** — 그것이 «답변이 안 건드렸다» 인지
+# «어휘로 못 잡는 종류» 인지는 사람만 아는데, 안 실으면 그 질의가 목록에서 아예 사라져
+# 조용해진다(`hbas-01` 의 «구체적 진단 도구 이름» 이 실제로 그 모양이다).
+#
+# **파생 수를 안 담는다** — 후보 수·후보가 난 질의 수는 `candidates` 에서 바로 세어지므로
+# 칸으로 두면 두 번째 진실이 된다(`JudgeUsage.total_tokens` 가 프로퍼티인 것과 같은 잣대)
+def _must_not_claim_block(rows: list[AnswerRow]) -> dict[str, Any] | None:
+    labeled = [row for row in rows if row.must_not_claim_total is not None]
+    if not labeled:
+        return None
+
+    candidates: list[dict[str, str]] = []
+    for row in labeled:
+        for hit in row.must_not_claim_candidates or []:
+            candidates.append({"query_id": row.query_id, **hit})
+    return {
+        "labeled": len(labeled),
+        "entries": sum(row.must_not_claim_total or 0 for row in labeled),
+        "candidates": candidates,
+        "no_candidate_queries": [
+            row.query_id for row in labeled if not row.must_not_claim_candidates
+        ],
+    }
+
+
 # 채점표. **갈래별로 따로 낸다** — 부정 예시는 기권이 정답이고 긍정은 아니라, 합치면
 # 두 정답표가 한 수에 섞여 무엇이 그 수를 만들었는지 못 읽는다.
 #
@@ -892,6 +987,8 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
                 1 for row in judged if row.citation_problem == "out_of_range"
             ),
             "must": _must_block(judged),
+            # **무료·결정적이라 `judge_on` 을 안 탄다** (인용 정합성·필수 사실과 같은 자리다)
+            "must_not_claim": _must_not_claim_block(judged),
         }
 
     controls = [row for row in rows if row.control is not None]
@@ -986,6 +1083,7 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
         # **소급도 함께 한다** — 저장된 답변 원문만 있으면 되는 계산이라 생성이 0원이다.
         # 자기 검증 대상은 아니다(저장된 값이 아예 없어 견줄 것이 없다)
         score_must(row, item)
+        score_must_not_claim(row, item)
         after = (row.citation_problem, row.cited, row.cited_count, row.cited_gold_hits)
         # **네 칸을 다 견준다** — 전부 같은 함수·같은 근거에서 나와야 하는 값이라,
         # 하나라도 어긋나면 되살린 근거가 그때의 근거가 아니라는 뜻이다
@@ -1027,6 +1125,10 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
         raw["must_values_total"] = row.must_values_total
         raw["must_point_tokens_hit"] = row.must_point_tokens_hit
         raw["must_point_tokens_total"] = row.must_point_tokens_total
+        # **단정 금지도 행까지 싣는다** — 바로 위와 같은 이유이고, 이쪽은 요약이 아예
+        # 행의 후보 목록을 모아 만든 것이라 안 실으면 저장된 파일에서 되살릴 방법이 없다
+        raw["must_not_claim_total"] = row.must_not_claim_total
+        raw["must_not_claim_candidates"] = row.must_not_claim_candidates
     payload["summary"] = summary
 
     block = summary["positive"]
@@ -1049,6 +1151,7 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
     # **필수 사실도 여기서 찍는다** — 소급이 계산한 값을 바로 읽는 자리라,
     # 빠지면 무료로 소급하고도 그 수를 못 본다(바로 위 대조군과 같은 이유)
     _print_must(block["must"])
+    _print_must_not_claim(block["must_not_claim"])
     if write:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  남김: {path}")
@@ -1086,6 +1189,27 @@ def _print_must(block: dict[str, Any] | None) -> None:
             f"({block['values_hit_given_evidence']}/"
             f"{block['values_total_given_evidence']}){tail}"
         )
+
+
+# 단정 금지 후보를 찍는다. **수치 대신 읽을 목록을 낸다.**
+#
+# 화면이 «후보» 라고 두 번 말한다 — 한 번은 줄머리에, 한 번은 «오류가 아니다» 로. 여기 뜬
+# 문장의 절반쯤은 전제를 바로잡은 **부정문**이고(실측), 그것을 오류로 세면 제일 좋은 답변이
+# 벌을 받는다. 반대쪽도 못 박는다: **후보 0 은 «오류가 없다» 가 아니다**
+def _print_must_not_claim(block: dict[str, Any] | None) -> None:
+    if block is None:
+        return
+    print(
+        f"    단정 금지 {block['labeled']}건({block['entries']}항목) · "
+        f"후보 {len(block['candidates'])}문장 — 손으로 읽는다 "
+        "(후보는 오류가 아니다 · 후보 0 ≠ 오류 없음)"
+    )
+    for hit in block["candidates"]:
+        sentence = hit["sentence"]
+        shown = sentence if len(sentence) <= 90 else sentence[:90] + "…"
+        print(f"      {hit['query_id']} [{hit['entry']}] «{hit['tokens']}» {shown}")
+    if block["no_candidate_queries"]:
+        print(f"      후보 없음: {', '.join(block['no_candidate_queries'])}")
 
 
 # 두 요약에서 **양쪽에 다 있는** 칸만 견준다. 새로 생긴 칸은 어긋남이 아니다
@@ -1206,6 +1330,7 @@ def score_answers(
                 score_citations(row, item, chunks)
                 # **필수 사실도 채점자와 무관하게 돈다** — 인용 정합성과 같은 자리다
                 score_must(row, item)
+                score_must_not_claim(row, item)
                 if judge is not None:
                     verdict = judge.judge(item.query, text, chunks)
                     row.support = verdict.verdict
@@ -1362,6 +1487,7 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
             else:
                 print(f"    무작위 {chance:.3f} · 최대 {ceiling:.3f} (통과선 아님)")
             _print_must(b["must"])
+            _print_must_not_claim(b["must_not_claim"])
 
     control = summary["shuffled_control"]
     if control is None:

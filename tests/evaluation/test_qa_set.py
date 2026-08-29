@@ -329,3 +329,49 @@ def test_labeled_records_in_the_human_set_carry_their_own_stamp():
         assert item.must_reviewed_by == "human", item.query_id
         expected = content_hash(item.query, [*item.must_values, *item.must_points])
         assert item.must_reviewed_hash == expected, item.query_id
+
+
+# **도장을 가른 이유가 이 테스트다.** 같은 문자열을 `must_points` ↔ `must_not_claim` 으로
+# 옮기는 것이 뜻이 제일 크게 뒤집히는 편집인데(담아야 할 것 ↔ 말하면 안 되는 것),
+# 한 지문에 묶으면 payload 가 이어 붙인 **한 목록**이라 그 편집이 지문에 안 걸린다.
+# 마지막 줄이 그 «묶었다면» 을 실제로 찍어 보인다 — 지우면 가른 근거가 사라진다
+def test_moving_a_string_into_must_not_claim_is_caught_by_the_stamp():
+    kept = QAItem(
+        query_id="q1", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], must_points=["어떤 사실"],
+    )
+    moved = QAItem(
+        query_id="q1", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], must_not_claim=["어떤 사실"],
+    )
+
+    def bundled(item: QAItem) -> str:
+        return content_hash(item.query, [*item.must_values, *item.must_points, *item.must_not_claim])
+
+    def apart(item: QAItem) -> tuple[str, str]:
+        return (
+            content_hash(item.query, [*item.must_values, *item.must_points]),
+            content_hash(item.query, item.must_not_claim),
+        )
+
+    assert apart(kept) != apart(moved)
+    assert bundled(kept) == bundled(moved), "묶은 지문은 이 편집을 못 잡는다"
+
+
+# 라벨이 붙은 레코드는 **자기 도장을 갖는다.** 사람이 안 본 라벨이 커밋되는 것과, 검수 뒤에
+# 문구를 고치고 도장을 안 고친 것을 함께 잡는다(`must_reviewed_*` 쪽 형제와 같은 모양이다).
+#
+# **새 라벨을 제안하면 사람이 도장을 찍기 전까지 이 검사가 빨갛다 — 그것이 의도다.**
+# 기계가 문구를 제안하는 것이 이 칸의 절차라(16회차), 제안이 그대로 굳는 것을 여기서 막는다
+def test_must_not_claim_records_carry_their_own_stamp():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    labeled = [i for i in items if i.must_not_claim]
+    assert labeled, "라벨이 하나도 없다 — 이 검사가 아무것도 안 보고 있다"
+    for item in labeled:
+        assert item.must_not_claim_reviewed_by == "human", (
+            f"{item.query_id}: 사람이 읽고 도장을 찍거나, 라벨을 빼라"
+        )
+        expected = content_hash(item.query, item.must_not_claim)
+        assert item.must_not_claim_reviewed_hash == expected, (
+            f"{item.query_id}: 문구가 바뀌었다 — 다시 읽고 도장을 갱신하거나 pending 으로 되돌려라"
+        )
