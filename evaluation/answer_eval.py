@@ -675,6 +675,29 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
             # **대조군 둘. 무료·결정적이라 `judge_on` 을 안 탄다** (지지 칸과 갈리는 자리다)
             "citation_groundedness_chance": (chance / basis) if usable else None,
             "citation_groundedness_ceiling": (ceiling / basis) if usable else None,
+            # **조건 둘을 견줄 때 읽는 수다** — 관측값은 `c`(인용 개수)에 지배되어
+            # (`top_k` 5→10 에서 0.466→0.433 인데 최대 대비는 0.941→0.982) 조건 간 비교에
+            # 못 쓴다. 이쪽은 `c >= G` 인 행에서 `min(c,G) == G` 라 **분모가 인용 개수와
+            # 무관**하다(7판 329/330). 뜻은 «근거에 들어온 정답 청크 중 답변이 실제로
+            # 인용한 비율» 이고 7판 합이 0.953 이다.
+            #
+            # **분모가 `ΣG` 가 아니라 `Σmin(c,G)` 인 것이 결정이다** — `_ceiling` 과 글자
+            # 그대로 같은 분자라야 「관측/최대」라는 이름이 참이 되고, 이미 잠근 불변식
+            # `ceiling >= 관측` 이 그대로 이 칸의 상한(≤1)을 보증한다. 감수 사항은 `c < G` 인
+            # 행(7판 330 중 1)에서 `Σmin < ΣG` 라 위 뜻에서 살짝 벗어나는 것이다 —
+            # **정답 span 이 여럿인 세트에서는 다시 봐야 한다**(지금 세트는 질의당 하나다).
+            #
+            # **그래도 통과선이 아니다 — 두 수가 서로 반대 방향으로 속는다.** 관측은 인용을
+            # **덜** 달면 오르고(53회차: 0.474 → 0.876), 이쪽은 근거를 **전부** 인용하면
+            # `hits == G == min(c,G)` 라 **1.0** 이 된다. 그래서 화면이 둘을 같이 찍는다
+            #
+            # **`None` 조건이 기존 대조군 둘과 같아야 한다** — 갈리면 셋 중 하나만 나오는
+            # 표가 생겨 «어느 것이 못 잰 것인가» 가 안 읽힌다. `ceiling == 0`(근거에 정답이
+            # 한 번도 안 왔다)은 분모가 없는 것이라 여기서만 한 겹 더 막는다
+            "cited_gold_ceiling": ceiling if usable else None,
+            "citation_groundedness_vs_ceiling": (
+                (cited_hits / ceiling) if usable and ceiling else None
+            ),
             # 인용을 아예 안 한 답변. `check_citations()` 의 `missing` 이다
             "citation_missing": sum(1 for row in judged if row.citation_problem == "missing"),
             "citation_out_of_range": sum(
@@ -816,7 +839,14 @@ def backfill_baseline(path: Path, *, write: bool) -> bool:
     if ground is None or chance is None:
         print("  인용 정합성 — 분모 0 (인용한 답변이 없다)")
     else:
-        print(f"  인용 정합성 {ground:.3f} · 무작위 {chance:.3f} · 최대 {ceiling:.3f}")
+        # **최대 대비까지 찍는다** — 백필이 쓴 값을 바로 읽는 자리라, 여기만 빠지면 7판을
+        # 소급하고도 조건 비교에 쓸 수를 못 본다
+        vs = block["citation_groundedness_vs_ceiling"]
+        vs_shown = "—" if vs is None else f"{vs:.3f}"
+        print(
+            f"  인용 정합성 {ground:.3f} · 무작위 {chance:.3f} · 최대 {ceiling:.3f} · "
+            f"최대 대비 {vs_shown}"
+        )
     if write:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  남김: {path}")
@@ -1073,8 +1103,19 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
                 )
             ground = b["citation_groundedness"]
             shown = "—" if ground is None else f"{ground:.3f}"
+            # **관측과 최대 대비를 한 줄에 둔다** — 조건 비교에 읽는 것은 최대 대비인데,
+            # 그 수 혼자는 «근거를 전부 인용하면 1.0» 으로 속는다. 관측과 분수(`hits/c`)가
+            # 옆에 남아야 그 조작이 보인다(둘은 반대 방향으로 속는다 · `summarize()` 주석)
+            vs = b["citation_groundedness_vs_ceiling"]
+            ceil_n = b["cited_gold_ceiling"]
+            vs_shown = (
+                "—"
+                if vs is None
+                else f"{vs:.3f} ({b['cited_gold_hits']}/{ceil_n})"
+            )
             print(
                 f"  인용 정합성 {shown} ({b['cited_gold_hits']}/{b['cited_chunks']}) · "
+                f"최대 대비 {vs_shown} · "
                 f"인용 없음 {b['citation_missing']} · 범위 밖 {b['citation_out_of_range']}"
             )
             # **대조군은 통과선이 아니라 읽는 재료다** — 회계 게이트에 안 섞는다(40회차의

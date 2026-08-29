@@ -199,11 +199,17 @@ def _cell(value: Any) -> str:
 def _line(bucket: dict[str, Any]) -> str:
     ground = bucket["citation_groundedness"]
     shown = "—" if ground is None else f"{ground:.3f}"
+    # **짝을 견줄 때 읽는 것은 최대 대비다** — 두 조건의 «최대» 가 다르면 관측값끼리 견주는
+    # 것 자체가 성립하지 않는다(`top_k` 5↔10 에서 관측은 내려가고 최대 대비는 오른다).
+    # 옛 리포트는 이 칸이 없어 `—` 로 나온다 — `--backfill` 로 붙인다
+    vs = bucket.get("citation_groundedness_vs_ceiling")
+    vs_shown = "—" if vs is None else f"{vs:.3f}"
     return (
         f"질의 {bucket['queries']:>3} · 기권 {bucket['abstained']:>2} · "
         f"지지 {_cell(bucket['supported']):>3} · 미지지 {_cell(bucket['unsupported']):>2} · "
         f"실패 {_cell(bucket['failed']):>2} · 인용 정합성 {shown} "
         f"({bucket['cited_gold_hits']}/{bucket['cited_chunks']}) · "
+        f"최대 대비 {vs_shown} · "
         f"인용 없음 {bucket['citation_missing']} · 범위 밖 {bucket['citation_out_of_range']}"
     )
 

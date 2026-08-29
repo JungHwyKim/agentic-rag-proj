@@ -581,6 +581,110 @@ def test_the_baseline_survives_a_judgeless_run() -> None:
     assert positive["citation_groundedness_chance"] is not None
 
 
+# 최대 대비 = `Σhits / Σmin(c,G)`. **비율의 나눗셈이 아니라 두 정수의 비다** —
+# `usable` 일 때 분모가 `Σc` 로 같아서 약분된다. 그것이 이 칸을 만든 근거였다
+def test_vs_ceiling_is_hits_over_the_ceiling_count() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=[f"a{i}" for i in range(5)],
+            cited_count=2, cited_gold_hits=1, evidence_gold_chunks=1,
+        ),
+        AnswerRow(
+            query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=[f"b{i}" for i in range(5)],
+            cited_count=4, cited_gold_hits=1, evidence_gold_chunks=2,
+        ),
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    # `min(2,1) + min(4,2) = 3` 이고 적중은 `1 + 1 = 2` 다
+    assert positive["cited_gold_ceiling"] == 3
+    assert positive["citation_groundedness_vs_ceiling"] == pytest.approx(2 / 3)
+
+
+# **이 칸을 조건 비교의 대표값으로 고른 근거를 잠근다.** 답변을 한 글자도 안 바꾸고 인용
+# 개수만 늘리면 관측은 내려가는데(`top_k` 5→10 의 0.466→0.433 이 그 정체다) 최대 대비는
+# 안 움직인다 — `c >= G` 인 행에서 `min(c,G) == G` 라 분모가 인용 개수와 무관해서다.
+# **관측이 실제로 내려가는 것까지 같이 단언한다** — 안 그러면 «둘 다 안 움직인다» 로도 통과한다
+def test_vs_ceiling_does_not_move_when_only_the_citation_count_grows() -> None:
+    def rows(extra: int) -> list[AnswerRow]:
+        return [
+            AnswerRow(
+                query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+                chunk_ids=[f"a{i}" for i in range(5)],
+                cited_count=2 + extra, cited_gold_hits=1, evidence_gold_chunks=1,
+            ),
+            AnswerRow(
+                query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+                chunk_ids=[f"b{i}" for i in range(5)],
+                cited_count=4 + extra, cited_gold_hits=1, evidence_gold_chunks=2,
+            ),
+        ]
+
+    lean = summarize(rows(0), judge_on=False)["positive"]
+    padded = summarize(rows(2), judge_on=False)["positive"]
+
+    assert padded["citation_groundedness"] < lean["citation_groundedness"]
+    assert padded["citation_groundedness_vs_ceiling"] == pytest.approx(
+        lean["citation_groundedness_vs_ceiling"]
+    )
+
+
+# **그래도 통과선이 아니다 — 속는 방향이 관측과 반대일 뿐이다.** 근거를 통째로 인용하면
+# `hits == G == min(c,G)` 라 이 칸이 **1.0** 이 된다(관측은 반대로 `G/k` 까지 내려간다).
+# 그래서 화면이 둘을 한 줄에 같이 찍고, 어느 쪽도 회계 게이트에 안 섞는다
+def test_citing_the_whole_evidence_pins_vs_ceiling_at_one() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a", "b", "c"],
+            cited_count=3, cited_gold_hits=2, evidence_gold_chunks=2,
+        )
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness_vs_ceiling"] == pytest.approx(1.0)
+    assert positive["citation_groundedness"] == pytest.approx(2 / 3)
+
+
+# **근거에 정답이 한 번도 안 오면 분모가 없다.** `0` 으로 내면 «인용을 다 틀렸다» 가 없던
+# 데서 생기는데, 그것은 백필 자기 검증이 기권 행에서 실제로 잡았던 그 사고와 같은 모양이다.
+# **관측·무작위·최대 셋은 그대로 나온다** — 저쪽 분모는 `Σc` 라 살아 있다
+def test_vs_ceiling_is_none_when_no_gold_reached_the_evidence() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a", "b"], cited_count=2, cited_gold_hits=0, evidence_gold_chunks=0,
+        )
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness"] == pytest.approx(0.0)
+    assert positive["citation_groundedness_ceiling"] == pytest.approx(0.0)
+    assert positive["citation_groundedness_vs_ceiling"] is None
+
+
+# **`None` 조건이 기존 대조군 둘과 같아야 한다** — 갈리면 셋 중 하나만 나오는 표가 생겨
+# «어느 것이 못 잰 것인가» 가 안 읽힌다
+def test_vs_ceiling_is_none_wherever_the_baseline_is() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a", "b"], cited_count=1, cited_gold_hits=1, evidence_gold_chunks=1,
+        ),
+        AnswerRow(
+            query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["c", "d"], cited_count=1, cited_gold_hits=0, evidence_gold_chunks=None,
+        ),
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness_ceiling"] is None
+    assert positive["cited_gold_ceiling"] is None
+    assert positive["citation_groundedness_vs_ceiling"] is None
+
+
 # ---------------------------------------------------------------------------
 # 회계 게이트 — 지표보다 먼저 읽는다
 # ---------------------------------------------------------------------------
