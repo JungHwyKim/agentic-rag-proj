@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from evaluation import answer_eval
@@ -25,9 +27,10 @@ from evaluation.answer_eval import (
     summarize,
 )
 from evaluation.config import EVAL_JUDGES
-from evaluation.qa_set import QAItem
+from evaluation.qa_set import QAItem, QASet
 from rag_pipeline.generation.prompts import NO_EVIDENCE_ANSWER
 from rag_pipeline.schemas.retrieval import RetrievedChunk
+from rag_pipeline.schemas.vector import StoredChunk
 
 
 def chunk(chunk_id: str, text: str, doc: str = "안내서.pdf") -> RetrievedChunk:
@@ -473,6 +476,112 @@ def test_an_answer_without_citations_is_missing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 인용 정합성의 대조군 — 무료·결정적이고, 그래서 채점자를 꺼도 산다
+# ---------------------------------------------------------------------------
+
+
+# **인용 안 한 청크도 세어진다.** 이것이 «근거에 애초에 정답이 몇 개 있었나» 라, 여기가
+# 인용 적중과 갈리는 자리다 — 같아지면 대조군이 관측을 그대로 베껴 아무것도 안 잰다
+def test_the_baseline_counts_gold_chunks_that_were_not_cited() -> None:
+    chunks = [chunk("c1", "여기에정답 문장이있다"), chunk("c2", "여기에도 정답 문장"), chunk("c3", "무관")]
+    scored = AnswerRow(
+        query_id="q1", query="질문", source_doc="안내서", answerable=True,
+        answer="근거 [1] 입니다",
+    )
+    score_citations(scored, item(), chunks)
+
+    assert scored.cited_gold_hits == 1
+    assert scored.evidence_gold_chunks == 2
+
+
+# **부정 예시는 대조군도 못 만든다** — `cited_gold_hits` 와 같은 규칙이고 같은 이유다.
+# 0으로 적으면 «근거에 정답이 하나도 없었다» 라는 **다른 뜻**이 된다
+def test_negative_examples_have_no_baseline() -> None:
+    scored = AnswerRow(
+        query_id="n1", query="질문", source_doc="안내서", answerable=False,
+        answer="지어낸 답 [1]",
+    )
+    score_citations(scored, item("n1", answerable=False, spans=[]), [chunk("c1", "본문")])
+
+    assert scored.evidence_gold_chunks is None
+
+
+# 무작위 = c·G/k 의 합 / c 의 합 · 최대 = min(c,G) 의 합 / c 의 합.
+#
+# **둘째 행이 `hits < min(c,G)` 여야 한다** — 정답 둘이 근거에 있는데 하나만 인용한 행이다.
+# 두 수를 같게 두면 «최대» 를 «관측» 으로 갈아끼워도 테스트가 통과한다(변이로 확인했다).
+def test_chance_and_ceiling_come_from_the_evidence() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=[f"a{i}" for i in range(5)],
+            cited_count=2, cited_gold_hits=1, evidence_gold_chunks=1,
+        ),
+        AnswerRow(
+            query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=[f"b{i}" for i in range(5)],
+            cited_count=4, cited_gold_hits=1, evidence_gold_chunks=2,
+        ),
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness"] == pytest.approx(2 / 6)
+    assert positive["citation_groundedness_chance"] == pytest.approx((2 * 1 / 5 + 4 * 2 / 5) / 6)
+    assert positive["citation_groundedness_ceiling"] == pytest.approx((1 + 2) / 6)
+
+
+# **최대는 관측 아래로 못 내려간다** — `min(c,G) >= hits` 가 늘 참이다.
+# **반대쪽(무작위 <= 관측)은 일부러 안 잠근다** — 관측이 무작위보다 낮게 나올 수 있고
+# 그것도 이 판이 얻으려는 답이다. 잠그면 자[尺]가 결론을 미리 정한다
+def test_the_ceiling_never_falls_below_the_observation() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            # 정답 셋이 근거에 있는데 하나만 인용했다 — 둘이 **갈리는** 자리여야 검사가 된다
+            chunk_ids=["a", "b", "c"], cited_count=3, cited_gold_hits=1, evidence_gold_chunks=3,
+        )
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness_ceiling"] > positive["citation_groundedness"]
+
+
+# **대조군 칸이 없는 행이 섞이면 둘 다 `None` 이다.** 그냥 건너뛰고 분모를 전체로 두면
+# 분자만 작아져 «무작위가 낮다 = 생성이 잘 고른다» 라는 **틀린 결론이 공짜로** 나온다
+def test_a_row_without_the_baseline_makes_both_none() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a", "b"], cited_count=1, cited_gold_hits=1, evidence_gold_chunks=1,
+        ),
+        AnswerRow(
+            query_id="q2", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["c", "d"], cited_count=1, cited_gold_hits=0, evidence_gold_chunks=None,
+        ),
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["citation_groundedness"] is not None
+    assert positive["citation_groundedness_chance"] is None
+    assert positive["citation_groundedness_ceiling"] is None
+
+
+# **채점자를 꺼도 대조군은 나온다** — 지지 칸이 `None` 이 되는 것과 갈리는 자리이고,
+# 강등된 자[尺]에서 실제로 변별하는 축이 이것 하나라는 51회차 결론이 여기 서 있다
+def test_the_baseline_survives_a_judgeless_run() -> None:
+    rows = [
+        AnswerRow(
+            query_id="q1", query="질문", source_doc="안내서", answerable=True, answer="답",
+            chunk_ids=["a", "b"], cited_count=1, cited_gold_hits=1, evidence_gold_chunks=1,
+        )
+    ]
+    positive = summarize(rows, judge_on=False)["positive"]
+
+    assert positive["supported"] is None
+    assert positive["citation_groundedness_chance"] is not None
+
+
+# ---------------------------------------------------------------------------
 # 회계 게이트 — 지표보다 먼저 읽는다
 # ---------------------------------------------------------------------------
 
@@ -821,3 +930,142 @@ def test_the_generation_prompt_has_a_version() -> None:
 
     assert prompts.GENERATION_PROMPT_VERSION
     assert "GENERATION_PROMPT_VERSION" in prompts.__all__
+
+
+# ---------------------------------------------------------------------------
+# 백필 — 저장된 리포트에 대조군을 소급한다. 자기 검증이 통과할 때만 쓴다
+# ---------------------------------------------------------------------------
+
+
+# 컬렉션 흉내. `iter_chunks()` 로 텍스트만 읽으므로 임베더가 필요 없다
+class _FakeStore:
+    def __init__(self, chunks: list[StoredChunk]) -> None:
+        self._chunks = chunks
+        self.closed = False
+
+    def count(self) -> int:
+        return len(self._chunks)
+
+    def iter_chunks(self):
+        return iter(self._chunks)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def stored(chunk_id: str, text: str) -> StoredChunk:
+    return StoredChunk(id=chunk_id, chunk_id=chunk_id, document_id="안내서.pdf", text=text)
+
+
+def _report(rows: list[dict]) -> dict:
+    return {
+        "meta": {
+            "label": "L",
+            "format": "pdf",
+            "qa_set": "qa_set_human.jsonl",
+            "embedding_profile": "baseline",
+            "judge_profile": "off",
+        },
+        "summary": {},
+        "rows": rows,
+    }
+
+
+def _wire(mocker, chunks: list[StoredChunk], items: list[QAItem]):
+    store = _FakeStore(chunks)
+    mocker.patch.object(
+        answer_eval, "load_report", return_value={"indexed": [{"chunks": len(chunks)}]}
+    )
+    mocker.patch.object(answer_eval, "require_fresh_store")
+    mocker.patch.object(answer_eval, "eval_config", return_value=mocker.Mock())
+    mocker.patch("rag_pipeline.ingestion.indexing.get_store", return_value=store)
+    mocker.patch.object(answer_eval, "load_qa_set", return_value=QASet(items=items, path=None))
+    return store
+
+
+def _row(**over) -> dict:
+    base = {
+        "query_id": "q1", "query": "질문", "source_doc": "안내서", "answerable": True,
+        "answer": "근거 [1] 입니다", "chunk_ids": ["c1", "c2"], "rewritten": None,
+        "abstained": False, "citation_problem": None, "cited": [1], "cited_gold_hits": 1,
+        "cited_count": 1, "support": None, "support_reasoning": "",
+        "unsupported_sentences": [], "control_from": None, "control": None, "warnings": [],
+    }
+    base.update(over)
+    return base
+
+
+# **기권 행은 `score_answers()` 가 인용 칸을 아예 안 계산한다.** 백필이 그것을 모르고 다시
+# 돌리면 `None` 이 `0` 이 되어 «인용을 다 틀렸다» 가 없던 데서 생긴다 — 실제로 첫 판이
+# 자기 검증에 걸려 잡혔다. **그 자리를 여기서 잠근다**
+def test_backfill_skips_abstained_rows_like_the_run_did(tmp_path, mocker) -> None:
+    rows = [
+        _row(),
+        _row(query_id="q2", answer=NO_EVIDENCE_ANSWER, abstained=True, cited=[],
+             cited_count=0, cited_gold_hits=None),
+    ]
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_report(rows), ensure_ascii=False), encoding="utf-8")
+    _wire(mocker, [stored("c1", "정답 문장"), stored("c2", "무관")], [item("q1"), item("q2")])
+
+    assert answer_eval.backfill_baseline(path, write=True) is True
+    written = json.loads(path.read_text(encoding="utf-8"))["rows"]
+    assert written[0]["evidence_gold_chunks"] == 1
+    # 기권 행은 손대지 않는다 — 그 자리는 계산된 적이 없다
+    assert written[1]["evidence_gold_chunks"] is None
+
+
+# **근거를 하나라도 못 찾으면 안 쓴다.** 일부만 찾은 채 계산하면 `k` 가 줄어 무작위 기대값이
+# 위로 뜨고, 그러면 «생성이 무작위와 다를 게 없다» 라는 반대쪽 거짓 결론이 나온다
+def test_backfill_refuses_when_a_chunk_is_missing(tmp_path, mocker) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_report([_row()]), ensure_ascii=False), encoding="utf-8")
+    _wire(mocker, [stored("c1", "정답 문장")], [item("q1")])
+
+    assert answer_eval.backfill_baseline(path, write=True) is False
+    assert "evidence_gold_chunks" not in json.loads(path.read_text(encoding="utf-8"))["rows"][0]
+
+
+# **재계산이 저장된 값과 어긋나면 안 쓴다** — 되살린 근거가 그때의 근거가 아니라는 뜻이라,
+# 그 위에서 만든 대조군은 무엇을 재는지 모르는 수가 된다
+def test_backfill_refuses_when_the_recount_disagrees(tmp_path, mocker) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_report([_row()]), ensure_ascii=False), encoding="utf-8")
+    # 저장된 행은 적중 1인데 컬렉션의 글에는 정답이 없다
+    _wire(mocker, [stored("c1", "무관"), stored("c2", "무관")], [item("q1")])
+
+    assert answer_eval.backfill_baseline(path, write=True) is False
+    assert "evidence_gold_chunks" not in json.loads(path.read_text(encoding="utf-8"))["rows"][0]
+
+
+# 연 쪽이 닫는다 — qdrant 로컬 파일 모드는 배타 잠금이라, 안 닫으면 다음 백필이 죽는다
+def test_backfill_closes_the_store(tmp_path, mocker) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_report([_row()]), ensure_ascii=False), encoding="utf-8")
+    store = _wire(mocker, [stored("c1", "정답 문장"), stored("c2", "무관")], [item("q1")])
+
+    answer_eval.backfill_baseline(path, write=False)
+
+    assert store.closed
+
+
+# **찍기만 하는 것이 기본이다** — 유료로 산 원자료를 건드리는 자리라 손잡이를 하나 더 뒀다
+def test_backfill_writes_nothing_without_the_flag(tmp_path, mocker) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_report([_row()]), ensure_ascii=False), encoding="utf-8")
+    _wire(mocker, [stored("c1", "정답 문장"), stored("c2", "무관")], [item("q1")])
+
+    assert answer_eval.backfill_baseline(path, write=False) is True
+    assert "evidence_gold_chunks" not in json.loads(path.read_text(encoding="utf-8"))["rows"][0]
+
+
+# **옛 요약 칸이 움직여도 안 쓴다.** 대조군을 «더하는» 판이라, 이미 산 수치가 바뀌면
+# 그것은 더하기가 아니라 고쳐 쓰기다
+def test_backfill_refuses_when_an_old_summary_cell_moves(tmp_path, mocker) -> None:
+    payload = _report([_row()])
+    payload["summary"] = {"positive": {"queries": 99}}
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    _wire(mocker, [stored("c1", "정답 문장"), stored("c2", "무관")], [item("q1")])
+
+    assert answer_eval.backfill_baseline(path, write=True) is False

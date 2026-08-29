@@ -157,6 +157,7 @@ __all__ = [
     "SupportJudge",
     "SupportVerdict",
     "accounting_problems",
+    "backfill_baseline",
     "build_support_prompt",
     "control_partner",
     "get_judge",
@@ -250,6 +251,11 @@ class AnswerRow:
     # 인용한 청크 중 `gold_span` 을 담은 수. 부정 예시는 정답이 없어 None
     cited_gold_hits: int | None = None
     cited_count: int = 0
+    # 근거 k 개 중 `gold_span` 을 담은 청크 수 — **인용 정합성의 대조군 분자다.**
+    # 무작위로 `cited_count` 개를 인용했다면 기대 적중이 `cited_count * G / k` 다.
+    # **`k` 를 따로 안 싣는다** — `len(chunk_ids)` 가 이미 그 수라 실으면 두 번째 진실이 생긴다.
+    # 부정 예시는 `cited_gold_hits` 와 **같은 규칙으로** None (아래 `score_citations` 주석)
+    evidence_gold_chunks: int | None = None
 
     # --- 근거 지지 (유료·LLM) ---
     support: str | None = None
@@ -333,7 +339,9 @@ def score_citations(row: AnswerRow, item: QAItem, chunks: list[RetrievedChunk]) 
     row.cited_count = len(inside)
 
     # **부정 예시는 분모가 없다.** 정답이 없어 «인용한 청크가 정답을 담나» 가 성립하지 않는다 —
-    # 0으로 적으면 «인용을 다 틀렸다» 로 읽히는데 그것은 이 질의에 대해 물을 수 없는 것이다
+    # 0으로 적으면 «인용을 다 틀렸다» 로 읽히는데 그것은 이 질의에 대해 물을 수 없는 것이다.
+    # **대조군 칸도 같은 규칙으로 `None` 이다** — 근거에 정답이 몇 개인가 역시 못 묻는 것이고,
+    # 0으로 적으면 «근거에 정답이 하나도 없었다» 라는 **다른 뜻**이 된다
     if not item.answerable or not item.gold_spans:
         row.cited_gold_hits = None
         return
@@ -345,6 +353,13 @@ def score_citations(row: AnswerRow, item: QAItem, chunks: list[RetrievedChunk]) 
         if any(needle in hay for needle in needles):
             hits += 1
     row.cited_gold_hits = hits
+
+    # **대조군 분자. 인용과 같은 `needles`·같은 `squash()` 로 센다** — 다른 경로로 세면
+    # 관측과 기대값이 서로 다른 자[尺]를 써 비[比]가 성립하지 않는다. 이것이 답하는 것은
+    # «근거에 애초에 정답이 몇 개 들어 있었나» 이고, 그래서 **인용 안 한 청크도 세어진다**
+    row.evidence_gold_chunks = sum(
+        1 for chunk in chunks if any(needle in squash(chunk.text) for needle in needles)
+    )
 
 
 # 캐시 키. 질의·답변 본문·근거 신원(순서까지)·모델·프롬프트 버전이 전부 들어간다.
@@ -594,6 +609,34 @@ def accounting_problems(
     return problems
 
 
+# 인용 정합성의 **대조군 둘**을 만든다 — `(무작위 기대 적중, 최대 달성 적중, 그 분모)`.
+#
+# **왜 있나.** 인용 정합성 하나만으로는 그 수가 좋은지 나쁜지 말할 수 없다(34회차부터의
+# 미결이었다). 답변이 근거 k 개 중 c 개를 인용했고 그 k 개 중 G 개가 정답을 담았다면,
+# **아무렇게나 골라도** `c·G/k` 는 맞는다. 그 선 위인지 아래인지가 «생성이 근거를 고르나» 다.
+#
+# **최대(`min(c, G)`)를 함께 내는 이유**는 1.0 이 도달 가능한 값이 아니어서다 — 정답 청크가
+# 하나뿐인데 답변이 셋을 인용하면 그 답변의 상한이 이미 1/3 이다. 최대를 안 보이면
+# 0.47 이 «절반도 못 맞힌다» 로 읽힌다.
+#
+# **유료 0 · 결정적이다.** 같은 (답변, 근거, 라벨)이면 늘 같은 수라 `judge_on` 을 안 탄다.
+def _citation_baseline(rows: list[AnswerRow]) -> tuple[float, int, int]:
+    chance = 0.0
+    ceiling = 0
+    basis = 0
+    for row in rows:
+        k = len(row.chunk_ids)
+        gold = row.evidence_gold_chunks
+        # **못 세는 행은 분모에서도 뺀다** — 여기서 조용히 넘기고 분모는 전체로 두면
+        # 기대값만 낮아져 «생성이 잘 고른다» 가 공짜로 나온다. 부르는 쪽이 분모를 대조한다
+        if not k or gold is None:
+            continue
+        chance += row.cited_count * gold / k
+        ceiling += min(row.cited_count, gold)
+        basis += row.cited_count
+    return chance, ceiling, basis
+
+
 # 채점표. **갈래별로 따로 낸다** — 부정 예시는 기권이 정답이고 긍정은 아니라, 합치면
 # 두 정답표가 한 수에 섞여 무엇이 그 수를 만들었는지 못 읽는다.
 #
@@ -612,6 +655,12 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
         cited_rows = [row for row in judged if row.cited_gold_hits is not None]
         cited_total = sum(row.cited_count for row in cited_rows)
         cited_hits = sum(row.cited_gold_hits or 0 for row in cited_rows)
+        chance, ceiling, basis = _citation_baseline(cited_rows)
+        # **분모가 다르면 둘 다 `None` 이다** — 대조군 칸이 없는 옛 리포트가 섞이면 분자만
+        # 작아져 «무작위가 낮다 = 생성이 잘 고른다» 라는 **틀린 결론이 그럴듯하게** 나온다.
+        # 못 재는 것을 못 잰다고 내는 자리이고, `judge_on=False` 가 지지 칸을 `None` 로
+        # 내는 것과 같은 규약이다
+        usable = basis == cited_total and cited_total > 0
         return {
             "queries": len(subset),
             "abstained": sum(1 for row in subset if row.abstained),
@@ -623,6 +672,9 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
             "cited_chunks": cited_total,
             "cited_gold_hits": cited_hits,
             "citation_groundedness": (cited_hits / cited_total) if cited_total else None,
+            # **대조군 둘. 무료·결정적이라 `judge_on` 을 안 탄다** (지지 칸과 갈리는 자리다)
+            "citation_groundedness_chance": (chance / basis) if usable else None,
+            "citation_groundedness_ceiling": (ceiling / basis) if usable else None,
             # 인용을 아예 안 한 답변. `check_citations()` 의 `missing` 이다
             "citation_missing": sum(1 for row in judged if row.citation_problem == "missing"),
             "citation_out_of_range": sum(
@@ -655,6 +707,139 @@ def summarize(rows: list[AnswerRow], *, judge_on: bool) -> dict[str, Any]:
         "positive": bucket([row for row in rows if row.answerable]),
         "shuffled_control": control_block,
     }
+
+
+# 저장된 리포트에 대조군 칸을 **소급해** 붙인다. **외부 호출 0 · 모델 적재 0.**
+#
+# 재료는 리포트가 이미 든 원자료(답변 원문과 근거 `chunk_id` 목록)와 그 실행의 컬렉션뿐이다.
+# 다시 생성하지 않는 것이 요점이다 — 생성에는 캐시가 없고 온도가 0.2 라 **답변 자체가 달라진다**
+# (모듈 docstring 「원자료를 리포트에 싣는다」). 임베더도 안 만든다: 청크 **텍스트만** 읽는다.
+#
+# **자기 검증이 이 함수의 핵심이다.** 되살린 근거로 인용 네 칸을 다시 계산해 저장된 값과
+# 대조한다 — 지도가 한 자리라도 어긋나면 `evidence_gold_chunks` 가 조용히 작아지고, 그러면
+# 무작위 기대값이 낮게 나와 *"생성이 근거를 잘 고른다"* 라는 **틀린 결론이 그럴듯하게** 나온다.
+# 어긋나면 **아무것도 안 쓴다.** 52회차의 무료 탐침이 전건 히트로 자기를 검증한 그 자리다
+def backfill_baseline(path: Path, *, write: bool) -> bool:
+    from rag_pipeline.ingestion.indexing import get_store
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    meta = payload["meta"]
+    label, fmt = meta["label"], meta["format"]
+    run = load_report(label, fmt)
+    config = eval_config(
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}",
+        embedding=meta.get("embedding_profile") or DEFAULT_EMBEDDING_PROFILE,
+    )
+    store = get_store(config.indexing, config.embedding)
+    try:
+        # **컬렉션이 그 실행의 것이 맞는지 먼저 막는다** — 청킹이 바뀌었으면 같은 `chunk_id` 가
+        # 다른 글을 담아 계산이 조용히 거짓이 된다
+        require_fresh_store(
+            store.count(), sum(x["chunks"] for x in run["indexed"]), label=label, fmt=fmt
+        )
+        texts = {chunk.chunk_id: chunk.text for chunk in store.iter_chunks()}
+    finally:
+        # **연 쪽이 닫는다** — qdrant 로컬 파일 모드는 디렉터리에 배타 잠금을 건다
+        store.close()
+
+    qa = load_qa_set(QA_SET_HUMAN_PATH.parent / meta["qa_set"])
+    items = {item.query_id: item for item in qa.items}
+    rows = [AnswerRow(**raw) for raw in payload["rows"]]
+
+    unknown: list[str] = []
+    missing: list[str] = []
+    mismatched: list[str] = []
+    abstained = 0
+    recomputed = 0
+    for raw, row in zip(payload["rows"], rows, strict=True):
+        item = items.get(row.query_id)
+        if item is None:
+            unknown.append(row.query_id)
+            continue
+        # **기권 행은 건너뛴다 — `score_answers()` 가 건너뛰는 그 자리와 같아야 한다.**
+        # 안 갈랐다가 자기 검증에 걸렸다: 기권 행은 인용 칸이 계산된 적이 없어 `None` 인데
+        # 다시 돌리면 `0` 이 되고, 그러면 «인용을 다 틀렸다» 가 없던 데서 생긴다
+        if row.abstained:
+            abstained += 1
+            continue
+        gaps = [cid for cid in row.chunk_ids if cid not in texts]
+        if gaps:
+            missing.append(f"{row.query_id} — {gaps[0]}")
+            continue
+        chunks = [
+            RetrievedChunk(chunk_id=cid, document_id="", text=texts[cid]) for cid in row.chunk_ids
+        ]
+        before = (raw["citation_problem"], raw["cited"], raw["cited_count"], raw["cited_gold_hits"])
+        score_citations(row, item, chunks)
+        after = (row.citation_problem, row.cited, row.cited_count, row.cited_gold_hits)
+        # **네 칸을 다 견준다** — 전부 같은 함수·같은 근거에서 나와야 하는 값이라,
+        # 하나라도 어긋나면 되살린 근거가 그때의 근거가 아니라는 뜻이다
+        recomputed += 1
+        if before != after:
+            mismatched.append(f"{row.query_id} — {before} -> {after}")
+
+    print(
+        f"{path.name}: 행 {len(rows)} · 기권 {abstained} · "
+        f"재계산 {recomputed} · 일치 {recomputed - len(mismatched)}"
+    )
+    for tag, bad in (
+        ("세트에 없는 질의", unknown),
+        ("컬렉션에 없는 근거", missing),
+        ("재계산 불일치", mismatched),
+    ):
+        if bad:
+            print(f"  ! {tag} {len(bad)}건 — {bad[:3]}")
+    if unknown or missing or mismatched:
+        print("  → 안 씁니다. 이 리포트의 대조군은 못 만듭니다")
+        return False
+
+    summary = summarize(rows, judge_on=meta.get("judge_profile", "off") != "off")
+    # **옛 칸이 그대로인지도 본다** — 대조군을 붙이면서 이미 산 수치가 움직이면 그것은
+    # 「더하기」가 아니라 「고쳐 쓰기」다. 움직인 칸이 있으면 역시 안 쓴다
+    moved = _summary_drift(payload.get("summary") or {}, summary)
+    if moved:
+        print(f"  ! 옛 요약 칸이 {len(moved)}개 움직였습니다 — {moved[:3]}")
+        print("  → 안 씁니다")
+        return False
+
+    for raw, row in zip(payload["rows"], rows, strict=True):
+        # **키를 더하기만 한다** — 유료로 산 원자료다
+        raw["evidence_gold_chunks"] = row.evidence_gold_chunks
+    payload["summary"] = summary
+
+    block = summary["positive"]
+    ground, chance, ceiling = (
+        block["citation_groundedness"],
+        block["citation_groundedness_chance"],
+        block["citation_groundedness_ceiling"],
+    )
+    if ground is None or chance is None:
+        print("  인용 정합성 — 분모 0 (인용한 답변이 없다)")
+    else:
+        print(f"  인용 정합성 {ground:.3f} · 무작위 {chance:.3f} · 최대 {ceiling:.3f}")
+    if write:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"  남김: {path}")
+    else:
+        print("  (찍기만 했습니다. 리포트에 넣으려면 --write)")
+    return True
+
+
+# 두 요약에서 **양쪽에 다 있는** 칸만 견준다. 새로 생긴 칸은 어긋남이 아니다
+def _summary_drift(old: dict[str, Any], new: dict[str, Any], *, prefix: str = "") -> list[str]:
+    moved: list[str] = []
+    for key, was in old.items():
+        if key not in new:
+            continue
+        now = new[key]
+        if isinstance(was, dict) and isinstance(now, dict):
+            moved += _summary_drift(was, now, prefix=f"{prefix}{key}.")
+        elif isinstance(was, float) and isinstance(now, float):
+            if abs(was - now) > 1e-9:
+                moved.append(f"{prefix}{key}: {was} -> {now}")
+        elif was != now:
+            moved.append(f"{prefix}{key}: {was} -> {now}")
+    return moved
 
 
 # 세트 하나를 한 `top_k` 로 채점한다. 생성은 제품 함수가 하고 이 함수는 재기만 한다
@@ -892,6 +1077,14 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
                 f"  인용 정합성 {shown} ({b['cited_gold_hits']}/{b['cited_chunks']}) · "
                 f"인용 없음 {b['citation_missing']} · 범위 밖 {b['citation_out_of_range']}"
             )
+            # **대조군은 통과선이 아니라 읽는 재료다** — 회계 게이트에 안 섞는다(40회차의
+            # «무효화 vs 분모 주석»). 관측이 무작위보다 **낮게** 나올 수도 있고, 그것도 답이다
+            chance = b["citation_groundedness_chance"]
+            ceiling = b["citation_groundedness_ceiling"]
+            if chance is None:
+                print("    대조군 — 못 잼 (대조군 칸이 없는 행이 섞였다. --backfill 참고)")
+            else:
+                print(f"    무작위 {chance:.3f} · 최대 {ceiling:.3f} (통과선 아님)")
 
     control = summary["shuffled_control"]
     if control is None:
@@ -925,7 +1118,7 @@ def _print(rows: list[AnswerRow], meta: dict[str, Any], *, show_wrong: bool) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="생성된 답변의 인용 정합성과 근거 지지를 잰다")
-    parser.add_argument("--label", required=True, help="읽을 실행 라벨 (그 컬렉션을 연다)")
+    parser.add_argument("--label", help="읽을 실행 라벨 (그 컬렉션을 연다)")
     parser.add_argument("--format", dest="fmt", default="pdf")
     parser.add_argument(
         "--qa-set",
@@ -942,7 +1135,28 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
     # 프로필로도 안 갈리는 회차를 가른다 — 같은 조건을 두 번 돌려 온도 잡음을 재는 자리다
     parser.add_argument("--tag", default="", help="리포트 이름에 붙일 꼬리표 (같은 조건 재실행)")
+    # **재실행이 아니라 소급이다** — 저장된 리포트에 대조군 칸만 붙인다 (유료 0)
+    parser.add_argument(
+        "--backfill",
+        nargs="+",
+        metavar="리포트",
+        help="저장된 답변 리포트에 대조군 칸을 소급해 붙인다 (이름 또는 경로 · 유료 0)",
+    )
+    # **기본이 찍기만 하는 것이다** — 유료로 산 원자료를 건드리는 자리라 한 손잡이를 더 둔다
+    parser.add_argument("--write", action="store_true", help="--backfill 을 리포트에 실제로 쓴다")
     args = parser.parse_args()
+
+    if args.backfill:
+        ok = True
+        for name in args.backfill:
+            target = Path(name)
+            if not target.exists():
+                target = RESULTS_DIR / name
+            ok = backfill_baseline(target, write=args.write) and ok
+        return 0 if ok else 1
+
+    if not args.label:
+        parser.error("--label 이 필요합니다 (또는 --backfill)")
 
     rows, meta = score_answers(
         label=args.label,
