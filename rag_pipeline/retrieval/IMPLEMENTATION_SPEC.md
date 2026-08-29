@@ -222,7 +222,9 @@ class BaseTool(ABC):
 ## Phase 10. Generator  ✅ 2026-08-29
 
 - **의존성**: Phase 9
-- **범위**: `final_context` + `current_query` → `final_answer`, 출처 인용 형식
+- **범위**: `final_context` + ~~`current_query`~~ → **`original_query`** → `final_answer`, 출처 인용 형식
+  - **2026-08-29 정정.** 재작성 질의는 PRF 로 부풀린 검색어 뭉치라 질문의 모양이 아니고, 그것에 답하면 **사용자가 묻지 않은 질문에 답한다.** 저장소는 이미 같은 규칙을 셋에서 쓴다 — 리랭커·Evaluator·`answer_question()` 의 생성. 여기만 스펙을 따르면 **네 번째 진입점만 나머지 셋과 다르게 답한다.** 근거는 `agent/loop.py` 모듈 docstring 의 「검색은 `current_query`, 판정·생성은 `original_query`」 절. 이 문서 머리말의 규약대로 **저쪽이 맞다.**
+  - **Pre-Lock A 의 `AgentState.current_query` 필드는 이 정정과 무관하다** — 그 필드는 실재하고 **검색**이 그것을 쓴다(`step_retrieve()`). 문구를 고치면서 필드까지 지우면 검색이 원 질의로만 돌아 **승급이 죽는데 에러가 안 난다.**
 - **범위 밖**: 평가 지표 계산
 - **DoD**: `evaluation/qa_set.jsonl` 의 `gold_spans` 로 Faithfulness/Hallucination rate 측정 가능한 출력
 - **DoD 는 문자 그대로는 못 채운다 — 대체 지표 셋으로 닫았다** (2026-08-29 · 53회차).
