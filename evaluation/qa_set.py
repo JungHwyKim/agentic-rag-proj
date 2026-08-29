@@ -122,6 +122,26 @@ class QAItem:
     # 원문을 바로 열게 하는 것이 목적이고, 두 판의 쪽이 어떻게 어긋나는지가 함께 남는다.
     # 한 개의 int 로는 못 쓴다 — 실측으로 학교기록물은 PDF 가 +1, AI 가이드는 아예 다르다
     gold_page: dict[str, int] = field(default_factory=dict)
+    # 답변이 **반드시 담아야 할 것**. `gold_spans` 와 축이 다르다 — 저쪽은 *검색이 이 청크를
+    # 물어왔나* 이고 이쪽은 *생성이 이 사실을 답에 담았나* 다(`plan_log/평가-세트.md` 13회차).
+    #
+    # **둘로 가른 것이 이 스키마의 요점이다.** `must_values` 는 값·날짜라 어휘 대조로
+    # **결정적**이고, `must_points` 는 서술이라 LLM 판정이 든다. 한 칸으로 접으면 자[尺]가
+    # 통째로 LLM 이 되어 이 형태를 고른 이유가 사라진다 — 고른 이유는 `judge_probe` 가 놓친
+    # 셋(`3월→4월`·`206개→207개`·`2026년→2027년`)이 **전부 값**이었다는 것이다.
+    #
+    # **`must_points` 에 원문을 그대로 뜨면 안 된다.** 부분 문자열이면 베낀 답변이 통과하고
+    # 바꿔 쓴 답변이 떨어져, 재는 것이 completeness 가 아니라 *원문을 옮겼나* 가 된다 —
+    # 인용 정합성(`generation/citations.py`)이 이미 재는 것이다
+    must_values: list[str] = field(default_factory=list)
+    must_points: list[str] = field(default_factory=list)
+    # 위 둘의 검수 도장. **`reviewed_by`/`reviewed_hash` 와 일부러 갈라 뒀다** — 합치면
+    # 기존 43건 도장이 전부 깨져 재검수를 강요하는데, 그것이 `plan_log/검색-생성.md` 56회차가
+    # *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"* 며 라벨을 안 건드린 자리다.
+    # 지문은 `content_hash(query, must_values + must_points)` 이고 `--check` 검증은 아직
+    # 없다 — 6회차가 `reviewed_hash` 를 검수가 끝난 뒤 백필한 것과 같은 순서다
+    must_reviewed_by: str = "pending"
+    must_reviewed_hash: str = ""
 
     # jsonl 한 줄을 레코드로. 모르는 키는 조용히 버리지 않고 막는다 —
     # 오타 난 키가 조용히 무시되면 그 레코드만 기본값으로 채점된다

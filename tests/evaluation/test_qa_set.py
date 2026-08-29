@@ -267,3 +267,65 @@ def test_human_set_carries_both_kinds():
     positives = [i for i in items if i.answerable]
     negatives = [i for i in items if not i.answerable]
     assert positives and negatives, f"긍정 {len(positives)} · 부정 {len(negatives)}"
+# `must_*` 가 없는 레코드는 **빈 라벨 + pending 으로 읽힌다.** 기본값이 그렇기 때문이고,
+# 그래서 아직 라벨을 안 단 98건이 이 필드를 안 적고도 그대로 산다
+def test_must_labels_default_to_empty():
+    item = QAItem.from_json({
+        "query_id": "x-10", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+    })
+    assert item.must_values == []
+    assert item.must_points == []
+    assert item.must_reviewed_by == "pending"
+    assert item.must_reviewed_hash == ""
+
+
+# jsonl 에 적힌 라벨이 실제로 실린다. **둘이 따로 실린다는 것**이 요점이다 —
+# 한 칸으로 접으면 결정적인 값 축이 LLM 판정에 섞인다(`plan_log/평가-세트.md` 13회차)
+def test_must_labels_are_read_from_json():
+    item = QAItem.from_json({
+        "query_id": "x-11", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+        "must_values": ["6개월", "2020.10.1."],
+        "must_points": ["시행일은 유예기간을 거친 뒤이다"],
+    })
+    assert item.must_values == ["6개월", "2020.10.1."]
+    assert item.must_points == ["시행일은 유예기간을 거친 뒤이다"]
+
+
+# **13회차 결정을 잠그는 테스트다 — `must_*` 는 `reviewed_hash` 를 안 건드린다.**
+# 넣었으면 이미 검수된 43건의 도장이 전부 깨져 재검수를 강요하는데, 그것이
+# `plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"*
+# 며 라벨을 안 건드린 자리다. 도장이 둘인 것은 실수가 아니라 그 이유로 고른 것이다
+def test_must_labels_do_not_disturb_the_span_review_stamp():
+    base = {
+        "query_id": "x-12", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+    }
+    bare = QAItem.from_json(dict(base))
+    labeled = QAItem.from_json({**base, "must_values": ["6개월"], "must_points": ["ㄱ"]})
+
+    stamp = content_hash(bare.query, bare.gold_spans)
+    assert content_hash(labeled.query, labeled.gold_spans) == stamp
+
+
+# 모르는 키는 **여전히** 막힌다. 필드를 넷 더하면서 이 가드가 헐거워지지 않았는지 본다 —
+# 오타 난 `must_value`(단수)가 조용히 무시되면 그 레코드만 라벨 없이 채점된다
+def test_a_typo_in_the_new_field_is_still_rejected():
+    with pytest.raises(ValueError, match="모르는 키"):
+        QAItem.from_json({
+            "query_id": "x-13", "query": "질문", "source_doc": "시행령-개정안-안내서",
+            "gold_spans": ["어떤 정답 문장"], "must_value": ["6개월"],
+        })
+
+
+# 실제 커밋된 사람 세트가 라벨을 달고도 통째로 성립한다. **라벨이 붙은 레코드는 도장을
+# 갖는다** — 사람이 안 본 라벨이 `human` 으로 실리는 것을 여기서 잡는다
+def test_labeled_records_in_the_human_set_carry_their_own_stamp():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    labeled = [i for i in items if i.must_values or i.must_points]
+    assert labeled, "라벨이 하나도 없다 — 이 검사가 아무것도 안 보고 있다"
+    for item in labeled:
+        assert item.must_reviewed_by == "human", item.query_id
+        expected = content_hash(item.query, [*item.must_values, *item.must_points])
+        assert item.must_reviewed_hash == expected, item.query_id
