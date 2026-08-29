@@ -232,6 +232,8 @@ cleaner가 실제로 밟은 경로다.
 
 `-m integration` 은 어느 훅도 자동으로 돌리지 않는다. `paid_test_check.py` 가 아예 막고, 풀려면 `ALLOW_PAID_TESTS=1` 로 사용자가 직접 승인해야 한다.
 
+**heredoc 으로 파일을 쓰는 것은 `heredoc_write_check.py` 가 막는다**(PreToolUse). 막는 것은 둘뿐이다 — ① 본문이 그대로 파일이 되는 형태(`cat > f <<EOF` · `tee f <<EOF`)와 ② 본문에 백슬래시가 있는 heredoc. **③ 백슬래시 없는 짧은 `python <<PY` → stdout 은 일부러 안 막는다** — 그 형태는 실제로 잘 돌고, 거기까지 막으면 헛경보가 상시가 되어 `SKIP_HEREDOC=1` 이 습관이 된다(4회차 *"오탐은 무력화의 한 형태"*). **PowerShell 은 ① 만 본다** — ②(백슬래시가 한 겹 벗겨지는 것)는 Bash heredoc 에서만 실측됐고, `git commit -m @'...'@` 는 도구 설명이 권하는 정상 용도다. **안 잰 것을 잰 것처럼 막지 않는다는 뜻이라 「비대칭이니 통일하자」로 지우면 근거 없는 차단이 생긴다**(`test_powershell_backslash_alone_does_not_block` 이 잠가 뒀다). 이 훅이 산문이 아니라 훅인 이유는 **산문이 이미 졌기 때문이다** — CLAUDE.md 와 메모리에 항목이 있는 채로 2026-08-29 하루에 4건이 났고, 누적은 `task_log/` 15세션이다(전체 101). 건너뛰려면 `SKIP_HEREDOC=1`.
+
 ## plan mode 면담 게이트
 
 plan mode 에서 `ExitPlanMode` 는 **사용자가 "설계서 작성해줘" 라고 말하거나 면담 문항에서 작성을 고른 뒤에만** 통과한다. `plan_interview_check.py` 가 그전의 호출을 `deny` 로 막고, 대신 `AskUserQuestion` 으로 라운드를 더 돌라는 사유를 돌려준다. 진행 방식은 `plan-interview` 스킬에 있다.
