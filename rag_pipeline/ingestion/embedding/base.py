@@ -63,15 +63,28 @@ def cache_salt_for(embedding: EmbeddingConfig) -> str:
 class EmbeddingUsage:
     # 실제로 나간 API 호출 수. **성공한 뒤에만** 오른다
     api_calls: int = 0
-    # 그 호출들이 쓴 토큰. 배치라 호출 수보다 이쪽이 비용을 대변한다
-    total_tokens: int = 0
+    # 그 호출들이 쓴 토큰. 배치라 호출 수보다 이쪽이 비용을 대변한다.
+    #
+    # **입력만 찬다.** 임베딩 API 에는 출력 토큰이 없어 `output_tokens` 는 늘 0이고, 그
+    # 0 은 *"안 썼다"* 가 아니라 *"이 API 에는 그 칸이 없다"* 는 뜻이다. 칸을 아예 안 두면
+    # 다섯 usage 의 모양이 갈려 비용표를 손으로 맞춰야 한다 — `RerankUsage` 가 토큰을 안
+    # 쓰는 Cohere 갈래에서도 같은 칸을 지키는 것과 같은 판단이다
+    input_tokens: int = 0
+    output_tokens: int = 0
     # 캐시로 아낀 텍스트 수
     cache_hits: int = 0
+
+    # 합계는 **파생이지 필드가 아니다** (`RerankUsage.total_tokens` 참고).
+    # `openai_api.py` 의 `max_embedding_tokens_per_doc` 상한 검사가 이 값을 읽는다
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
     # 문서 하나를 끝내고 다음 문서로 넘어갈 때 부른다
     def reset(self) -> None:
         self.api_calls = 0
-        self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
         self.cache_hits = 0
 
 

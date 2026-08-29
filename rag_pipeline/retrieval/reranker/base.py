@@ -63,17 +63,31 @@ __all__ = [
 class RerankUsage:
     # 실제로 나간 외부 API 호출 수. **성공한 뒤에만** 오른다. 로컬은 늘 0 이다
     api_calls: int = 0
-    # 그 호출들이 쓴 토큰. 로컬은 0 이다
-    total_tokens: int = 0
+    # 그 호출들이 쓴 토큰. **입력과 출력을 가르는 것이 2026-08-29 의 변경이다** —
+    # 단가가 서로 달라 합계 하나로는 금액을 **원리적으로 못 낸다**. 로컬·Cohere 는 0 이다
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Cohere 의 과금 단위. **토큰이 아니라 검색 단위로 받는다**(`meta.billed_units`).
+    # 나머지 갈래는 늘 0 이고, 그 0 은 *"이 API 는 그 단위가 없다"* 는 뜻이다
+    search_units: int = 0
     # 캐시로 아낀 질의 수
     cache_hits: int = 0
     # 실제로 점수를 매긴 후보 수. **로컬의 비용은 토큰이 아니라 이것이다**(후보 수에 선형)
     reranked: int = 0
 
+    # 합계는 **파생이지 필드가 아니다.** 나란한 필드로 두면 두 번째 진실이 되어 조용히
+    # 어긋난다. 프로퍼티로 두면 `evaluation/run_eval.py` 의 `usage` 블록 같은 기존 독자가
+    # 한 줄도 안 바뀐다 — 쓰는 쪽만 `input_tokens += …` 로 옮긴다
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
     # 질의 하나를 끝내고 다음으로 넘어갈 때 부른다
     def reset(self) -> None:
         self.api_calls = 0
-        self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.search_units = 0
         self.cache_hits = 0
         self.reranked = 0
 

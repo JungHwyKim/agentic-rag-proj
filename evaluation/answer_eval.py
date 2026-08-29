@@ -121,6 +121,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,7 @@ from evaluation.inspect import load_report, require_fresh_store
 from evaluation.qa_set import QAItem, load_qa_set
 from evaluation.run_eval import RESULTS_DIR
 from evaluation.scoring import squash
+from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.generation.citations import CITATION_PATTERN, check_citations, cited_numbers
 from rag_pipeline.generation.prompts import (
     GENERATION_PROMPT_VERSION,
@@ -212,10 +214,20 @@ class JudgeConfig:
 @dataclass
 class JudgeUsage:
     api_calls: int = 0
-    total_tokens: int = 0
+    # **입력과 출력을 가른다** — 단가가 서로 달라 합계 하나로는 금액을 원리적으로 못 낸다.
+    # `EvaluatorUsage`·`RerankUsage`·`RewriteUsage`·`EmbeddingUsage` 넷이 같은 날 같은
+    # 모양으로 바뀌었다(위 주석의 "같은 모양" 약속이 여기까지다)
+    input_tokens: int = 0
+    output_tokens: int = 0
     cache_hits: int = 0
     # 실제로 판정을 얻은 수. 실패는 여기 안 센다 — 그것이 실패 버킷의 분자다
     judged: int = 0
+
+    # 합계는 **파생이지 필드가 아니다.** 나란한 필드로 두면 두 번째 진실이 되어 조용히
+    # 어긋난다. 프로퍼티라 `_print()` 의 회계 줄이 한 글자도 안 바뀐다
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
 # 지지 판정 하나. **`failed` 가 제3의 상태다** (모듈 docstring 참고)
@@ -469,17 +481,53 @@ class SupportJudge:
         restored = _verdict_from_payload(self._cache.get(key))
         if restored is not None:
             self._usage.cache_hits += 1
+            # **아낀 것도 남긴다.** 이 판정은 대상 하나에 호출이 **2회**(본판 + 음성
+            # 대조군)라 캐시가 아끼는 양이 다른 갈래의 두 배다 (모듈 docstring)
+            self._log_cost("cache_hit", items=len(chunks))
             return restored
 
         verdict = self._call_api(query, answer, chunks)
         if verdict is None:
-            # 경고는 이미 `_call_api` 가 남겼다. 판정을 지어내지 않는다
+            # 경고는 이미 `_call_api` 가 남겼다. 판정을 지어내지 않는다.
+            # **실패도 한 줄 남긴다** — `_print()` 의 회계 게이트가 리포트 안에서만 도는데,
+            # 로그에 남으면 그 검사를 리포트 밖에서도 할 수 있다
+            self._log_cost(
+                "failed",
+                items=len(chunks),
+                detail=self._warnings[-1] if self._warnings else None,
+            )
             return SupportVerdict(verdict="failed", reasoning="판정을 얻지 못했습니다")
 
         # **못 쓸 응답은 캐시에 안 넣는다**
         self._cache.set(key, asdict(verdict))
         self._usage.judged += 1
         return verdict
+
+    # 비용 로그 한 줄. **`stage="judge"` 로 `evaluate` 와 가른다** — 둘 다 판정이지만
+    # 저쪽은 *근거가 충분한가*(질의당 1회)이고 이쪽은 *답변이 근거에 실렸는가*(대상당
+    # **2회** — 본판 + 음성 대조군)라, 합치면 「판정이 왜 이렇게 비싸지」의 답이 사라진다.
+    #
+    # **이 파일이 `rag_pipeline` 밖인데도 같은 로그를 쓴다.** 비용은 계층이 아니라 돈의
+    # 문제라, 평가 하네스가 쓴 돈도 같은 파일에 모여야 «이번 주에 얼마» 가 성립한다
+    def _log_cost(
+        self,
+        outcome: CostOutcome,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        items: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        append_cost_log(
+            stage="judge",
+            provider="openai",
+            model=self._config.judge_model,
+            outcome=outcome,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            items=items,
+            detail=detail,
+        )
 
     # 실제로 보낸다. 실패·손상은 전부 None 으로 바꿔 제3의 상태에 맡긴다
     def _call_api(
@@ -519,10 +567,15 @@ class SupportJudge:
 
         # 카운터는 성공한 뒤에만 올린다 (embedding·리랭커와 같은 규약)
         self._usage.api_calls += 1
-        usage = getattr(response, "usage", None)
-        tokens = getattr(usage, "total_tokens", None)
-        if isinstance(tokens, int):
-            self._usage.total_tokens += tokens
+        prompt_tokens, completion_tokens = split_tokens(response)
+        self._usage.input_tokens += prompt_tokens
+        self._usage.output_tokens += completion_tokens
+        self._log_cost(
+            "call",
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            items=len(chunks),
+        )
         return verdict
 
     # 응답에서 본문을 꺼낸다. 모양이 틀려도 예외를 안 내고 None 으로 떨어뜨린다
@@ -1198,6 +1251,12 @@ def main() -> int:
 
     if not args.label:
         parser.error("--label 이 필요합니다 (또는 --backfill)")
+
+    # 이 채점이 쓴 돈에 그 실행의 이름을 붙인다. **`--backfill` 뒤에 두는 것이 요점이다** —
+    # 저쪽은 유료 0이라 붙일 비용이 없다. `setdefault` 라 사람이 준 `COST_LABEL` 이 이긴다.
+    # 라벨이 `run_eval` 것과 같으므로 `cost/report.py --label` 이 **검색과 채점의 비용을
+    # 한 줄에 모아** 준다 — 지지 판정은 대상당 호출이 2회(본판 + 대조군)라 그 합이 크다
+    os.environ.setdefault("COST_LABEL", args.label)
 
     rows, meta = score_answers(
         label=args.label,

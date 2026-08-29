@@ -50,6 +50,30 @@ def _korean_font(size: int = 48) -> ImageFont.FreeTypeFont | None:
     return None
 
 
+# 유료 API 비용 로그를 tmp_path 로 돌린다. **이 저장소 루트 conftest 의 첫 autouse 픽스처다.**
+#
+# `CostLogConfig.cost_log_path` 기본값이 `PROJECT_ROOT/data/cost.jsonl` 이고 기본이 **켜짐**이라,
+# 안 덮으면 유료 이음새를 지나는 모든 테스트가 개발자의 실제 비용 로그에 줄을 쌓는다. 그 파일은
+# "이번 실측이 얼마짜리였나"의 유일한 근거라, 모킹된 가짜 호출이 섞이면 그 근거가 조용히
+# 오염된다 — `tests/api/conftest.py` 의 `QUERY_LOG_PATH` 핀과 **글자 그대로 같은 이유**다.
+#
+# **여기(루트)여야 한다.** 저쪽 핀은 `tests/api` 폴더에만 먹는데 비용 로그의 호출 지점은
+# `rag_pipeline/`·`evaluation/` 안이라 **전체 pytest 가 지나간다.** 2026-08-26 에 라우트를
+# 픽스처보다 먼저 배선했다가 훅이 몇 초 만에 테스트를 돌려 `data/queries.jsonl` 에 15줄이
+# 실제로 샜다 — 그래서 이 픽스처가 `cost_log.py` 보다 **먼저** 들어간다.
+#
+# 환경변수로 덮는 이유도 같다: `CostLogConfig()` 를 쓰기 직전에 만들므로 이 한 줄이 모든
+# 호출부에 먹는다. 모듈마다 patch 하면 새 이음새가 생길 때마다 빠뜨린다.
+#
+# **끄지 않고 옮기는 것이 요점이다.** `COST_LOG_ENABLED=false` 로 막으면 쓰는 코드가
+# 테스트에서 한 번도 안 돌아, 이음새를 빠뜨려도 아무도 모른다
+@pytest.fixture(autouse=True)
+def cost_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "data" / "cost.jsonl"
+    monkeypatch.setenv("COST_LOG_PATH", str(path))
+    return path
+
+
 # 외부 API를 절대 호출하지 않는 설정. 단위 테스트 기본값
 @pytest.fixture
 def offline_config(tmp_path: Path) -> IngestConfig:

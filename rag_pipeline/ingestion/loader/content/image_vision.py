@@ -21,6 +21,7 @@ from typing import Any
 
 from PIL import Image
 
+from rag_pipeline.cost_log import append_cost_log, split_tokens
 from rag_pipeline.ingestion.loader.content.base import (
     ContentRegion,
     LoadContext,
@@ -152,6 +153,15 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
 
     cached = cache.get(key)
     if cached is not None:
+        # **아낀 것도 남긴다.** 재업로드가 재과금을 안 하는 것이 `ResultCache` 의 존재
+        # 이유인데, 지금까지 그 아낀 양을 세는 자리가 없었다 (cost_log.py)
+        append_cost_log(
+            stage="vision",
+            provider="openai",
+            model=cfg.vision_model,
+            outcome="cache_hit",
+            items=1,
+        )
         return cached
 
     if ctx.vision_calls >= cfg.max_vision_calls_per_doc:
@@ -195,10 +205,30 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
         )
     except Exception as exc:  # noqa: BLE001 - 외부 API 장애가 적재를 멈추면 안 된다
         ctx.warn(f"Vision 호출 실패로 OCR로 폴백했습니다: {type(exc).__name__}")
+        append_cost_log(
+            stage="vision",
+            provider="openai",
+            model=cfg.vision_model,
+            outcome="failed",
+            items=1,
+            detail=type(exc).__name__,
+        )
         return None
 
-    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다
+    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다.
+    # **비용 로그도 같은 이유로 여기다** — 아래 해석 실패로 옮기면 그 회차가 공짜로
+    # 기록된다(`generation/answer.py` 가 빈 응답 검사 앞에서 남기는 것과 같은 잣대다)
     ctx.vision_calls += 1
+    prompt_tokens, completion_tokens = split_tokens(response)
+    append_cost_log(
+        stage="vision",
+        provider="openai",
+        model=cfg.vision_model,
+        outcome="call",
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        items=1,
+    )
 
     try:
         choice = response.choices[0]

@@ -82,8 +82,14 @@ class _Choice:
         self.message = _Message(content)
 
 
+# **셋을 다 낸다.** 실제 응답이 `prompt_tokens`·`completion_tokens`·`total_tokens` 를 함께
+# 주는데 합계만 흉내내면, 입출력을 가르는 코드가 0을 받고도 테스트가 통과한다.
+# 가른 값으로 두어 아래 `total_tokens == 42` 단언이 **파생 프로퍼티까지** 재게 한다
 class _Usage:
     def __init__(self, total_tokens: int) -> None:
+        completion = total_tokens // 6
+        self.prompt_tokens = total_tokens - completion
+        self.completion_tokens = completion
         self.total_tokens = total_tokens
 
 

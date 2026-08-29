@@ -36,6 +36,8 @@ from typing import Any
 
 import pymupdf
 
+from rag_pipeline.config import ContentRoutingConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.ingestion.loader.content.base import (
     ContentRegion,
     LoadContext,
@@ -97,6 +99,31 @@ def _make_client(api_key: str | None) -> Any | None:
     except ImportError:
         return None
     return OpenAI(api_key=api_key)
+
+
+# 비용 로그 한 줄. **`image_vision` 과 같은 `stage="vision"` 을 쓴다** — 상한(`max_vision_
+# calls_per_doc`)을 둘이 **공유**하므로 비용 축도 같아야 한다. 갈라 찍으면 리포트의 합이
+# 그 상한과 대조가 안 돼, «예산을 얼마나 썼나» 를 두 줄을 더해야 알게 된다.
+# `items` 는 격자 행 수다 — 이 호출의 규모를 재는 유일한 값이다
+def _log_cost(
+    config: ContentRoutingConfig,
+    outcome: CostOutcome,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    items: int = 0,
+    detail: str | None = None,
+) -> None:
+    append_cost_log(
+        stage="vision",
+        provider="openai",
+        model=config.vision_model,
+        outcome=outcome,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        items=items,
+        detail=detail,
+    )
 
 
 # 표 영역 blob(단일 쪽 PDF)을 PNG 로 굽는다. 못 구우면 None.
@@ -203,6 +230,8 @@ def _call_vision(
     if use_cache:
         cached = cache.get(key)
         if cached is not None:
+            # **아낀 것도 남긴다** (cost_log.py). `use_cache=False` 인 재시도는 여기 안 온다
+            _log_cost(cfg, "cache_hit", items=len(rows))
             return cached.get("rows")
 
     # 상한은 이미지와 **공유**한다. 목적이 문서당 Vision 과금 총량 통제라 축을 나누면
@@ -246,10 +275,20 @@ def _call_vision(
         )
     except Exception as exc:  # noqa: BLE001 - 외부 API 장애가 적재를 멈추면 안 된다
         ctx.warn(f"표 Vision 호출 실패로 로컬 추출로 폴백했습니다: {type(exc).__name__}")
+        _log_cost(cfg, "failed", items=len(rows), detail=type(exc).__name__)
         return None
 
-    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다
+    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다.
+    # **비용 로그도 같은 이유로 여기다** — 아래 해석 실패로 옮기면 그 회차가 공짜로 기록된다
     ctx.vision_calls += 1
+    prompt_tokens, completion_tokens = split_tokens(response)
+    _log_cost(
+        cfg,
+        "call",
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        items=len(rows),
+    )
 
     try:
         choice = response.choices[0]

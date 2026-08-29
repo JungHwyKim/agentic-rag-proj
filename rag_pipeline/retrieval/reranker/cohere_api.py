@@ -56,6 +56,7 @@ from __future__ import annotations
 from typing import Any
 
 from rag_pipeline.config import RerankConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 from rag_pipeline.retrieval.reranker.base import (
     RerankUsage,
@@ -113,6 +114,19 @@ def _scores_in_input_order(response: Any, expected: int) -> list[float] | None:
     return [float(value) for value in scores]  # type: ignore[arg-type]
 
 
+# 응답이 스스로 말하는 과금 단위. **모양을 안 믿는다** — 없으면 0 이고 예외를 안 낸다.
+#
+# **문서 수로 짐작하지 않는 것이 요점이다.** 지금은 후보 수와 얼추 비례하지만 그 비례는
+# Cohere 의 정책이지 우리 계약이 아니라, 정책이 바뀌면 **에러 없이 수치로만** 틀린다 —
+# `_scores_in_input_order()` 가 순서를 짐작하지 않고 `index` 로 되돌리는 것과 같은 잣대다.
+# 0 이 나오면 그것이 곧 *"이 응답이 과금 단위를 안 알려줬다"* 이고, 리포트가 그 줄을
+# 「금액 못 냄」으로 따로 센다(0으로 채워 안 쓴 것처럼 보이게 하지 않는다)
+def _billed_search_units(response: Any) -> int:
+    billed = getattr(getattr(response, "meta", None), "billed_units", None)
+    units = getattr(billed, "search_units", None)
+    return units if isinstance(units, int) else 0
+
+
 # Cohere 리랭킹 API 로 후보 풀을 다시 정렬한다
 class CohereReranker:
     # 클라이언트를 여기서 만들지 않는다. `_make_client()` 를 호출 시점에 부르는 것이
@@ -157,11 +171,20 @@ class CohereReranker:
         scores = cached.get("scores") if isinstance(cached, dict) else None
         if isinstance(scores, list) and len(scores) == len(pool):
             self._usage.cache_hits += 1
+            # **아낀 것도 남긴다** — 안 남기면 「얼마 아꼈나」를 못 낸다 (cost_log.py)
+            self._log_cost("cache_hit", items=len(pool))
             return apply_scores(pool, [float(value) for value in scores]) + candidates[len(pool):]
 
         scores = self._call_api(text, pool)
         if scores is None:
-            # 경고는 남기고 순서는 안 건드린다. ranking_score 가 fused_score 로 떨어진다
+            # 경고는 남기고 순서는 안 건드린다. ranking_score 가 fused_score 로 떨어진다.
+            # **폴백을 남기는 것이 이 갈래에서 특히 값어치다** — Trial 키의 분당 10회 한도로
+            # 60건 중 30건이 429 로 떨어진 실행이 지표 여덟 개를 전부 품질 저하로 보이게 했다
+            self._log_cost(
+                "failed",
+                items=len(pool),
+                detail=self._warnings[-1] if self._warnings else None,
+            )
             return candidates
 
         # **못 쓸 응답은 캐시에 안 넣는다** (표-경로.md 13회차가 고친 그 실수다)
@@ -201,6 +224,32 @@ class CohereReranker:
             return None
 
         # 카운터는 성공한 뒤에만 올린다 (embedding 과 같은 규약).
-        # **`api_calls` 는 HTTP 호출 수지 과금 단위가 아니다** (모듈 docstring 참고)
+        # **`api_calls` 는 HTTP 호출 수지 과금 단위가 아니다** (모듈 docstring 참고) —
+        # 과금 단위는 응답이 스스로 말해주는 `meta.billed_units.search_units` 다.
+        # 문서 수를 세어 짐작하면 **한도 정책이 바뀌는 날 조용히 틀린다**
         self._usage.api_calls += 1
+        units = _billed_search_units(response)
+        self._usage.search_units += units
+        self._log_cost("call", search_units=units, items=len(pool))
         return scores
+
+    # 비용 로그 한 줄. **카운터가 오르는 자리 옆에 둔다** — 두 번째 진실이 안 생긴다.
+    # 토큰 칸을 안 채우는 것이 이 갈래의 정체다: 0 은 *"안 썼다"* 가 아니라
+    # *"이 API 는 토큰으로 안 판다"* 이고, 그것을 `provider` 가 가른다 (cost_log.py)
+    def _log_cost(
+        self,
+        outcome: CostOutcome,
+        *,
+        search_units: int | None = None,
+        items: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        append_cost_log(
+            stage="rerank",
+            provider="cohere",
+            model=self._config.rerank_model,
+            outcome=outcome,
+            search_units=search_units,
+            items=items,
+            detail=detail,
+        )

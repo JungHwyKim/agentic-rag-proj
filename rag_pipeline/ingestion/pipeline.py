@@ -91,18 +91,24 @@ def ingest(
 
 # 주입받은 임베더의 `usage` 를 재는 자[尺]. 앱 수명 동안 누적이라 앞뒤를 빼야
 # **이 문서 몫**이 나온다. `reset()` 이 아닌 이유는 `index_document()` 주석에 있다
-def _usage_snapshot(embedder: Embedder) -> tuple[int, int, int]:
+#
+# **입력·출력 토큰을 따로 뜬다.** 2026-08-29 에 `total_tokens` 가 파생 프로퍼티가 되면서
+# 아래 `_usage_since()` 가 그것을 **생성자 인자로** 넘기다 깨졌다 — 프로퍼티로 바꾸면
+# *읽는* 쪽은 한 줄도 안 바뀌지만 **만드는** 쪽은 바뀐다. 그 둘을 같은 것으로 본 것이
+# 이 변경에서 유일하게 놓친 자리다(전체 pytest 가 잡았다)
+def _usage_snapshot(embedder: Embedder) -> tuple[int, int, int, int]:
     usage = embedder.usage
-    return (usage.api_calls, usage.total_tokens, usage.cache_hits)
+    return (usage.api_calls, usage.input_tokens, usage.output_tokens, usage.cache_hits)
 
 
 # 스냅샷 이후로 늘어난 만큼만 담은 새 `EmbeddingUsage`
-def _usage_since(before: tuple[int, int, int], embedder: Embedder) -> EmbeddingUsage:
+def _usage_since(before: tuple[int, int, int, int], embedder: Embedder) -> EmbeddingUsage:
     usage = embedder.usage
     return EmbeddingUsage(
         api_calls=usage.api_calls - before[0],
-        total_tokens=usage.total_tokens - before[1],
-        cache_hits=usage.cache_hits - before[2],
+        input_tokens=usage.input_tokens - before[1],
+        output_tokens=usage.output_tokens - before[2],
+        cache_hits=usage.cache_hits - before[3],
     )
 
 

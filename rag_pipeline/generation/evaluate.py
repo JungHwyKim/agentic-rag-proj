@@ -68,6 +68,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from rag_pipeline.config import EvaluatorConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.generation.prompts import (
     EVALUATOR_PROMPT_VERSION,
     EVALUATOR_SYSTEM_PROMPT,
@@ -86,17 +87,25 @@ __all__ = ["EvaluatorUsage", "OpenAIEvaluator", "get_evaluator"]
 class EvaluatorUsage:
     # 실제로 나간 외부 API 호출 수. **성공한 뒤에만** 오른다
     api_calls: int = 0
-    # 그 호출들이 쓴 토큰
-    total_tokens: int = 0
+    # 그 호출들이 쓴 토큰. **입력과 출력을 가른다** — 단가가 서로 달라 합계 하나로는
+    # 금액을 원리적으로 못 낸다 (`RerankUsage` 와 같은 모양을 지킨다)
+    input_tokens: int = 0
+    output_tokens: int = 0
     # 캐시로 아낀 질의 수
     cache_hits: int = 0
     # 실제로 판정을 얻은 질의 수. 실패는 여기 안 센다 — 그것이 실패 버킷의 분자다
     evaluated: int = 0
 
+    # 합계는 **파생이지 필드가 아니다** (`RerankUsage.total_tokens` 참고)
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
     # 질의 하나를 끝내고 다음으로 넘어갈 때 부른다
     def reset(self) -> None:
         self.api_calls = 0
-        self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
         self.cache_hits = 0
         self.evaluated = 0
 
@@ -197,11 +206,21 @@ class OpenAIEvaluator:
         restored = _verdict_from_payload(cached)
         if restored is not None:
             self._usage.cache_hits += 1
+            # **아낀 것도 남긴다** (cost_log.py)
+            self._log_cost("cache_hit", items=len(chunks))
             return restored
 
         verdict = self._call_api(text, chunks)
         if verdict is None:
-            # 경고는 이미 _call_api 가 남겼다. 판정을 지어내지 않는다
+            # 경고는 이미 _call_api 가 남겼다. 판정을 지어내지 않는다.
+            # **실패도 한 줄 남긴다** — 제3의 상태(`verdict="failed"`)를 만든 이유가
+            # *"죽은 판정자가 만점을 받으면 안 된다"* 인데, 비용 쪽도 같은 자리다:
+            # 실패한 호출은 돈을 안 쓰지만 **안 남기면 회계가 «안 돌았다» 와 안 갈린다**
+            self._log_cost(
+                "failed",
+                items=len(chunks),
+                detail=self._warnings[-1] if self._warnings else None,
+            )
             return EvaluatorVerdict(verdict="failed", reasoning="판정을 얻지 못했습니다")
 
         # **못 쓸 응답은 캐시에 안 넣는다** (표-경로.md 13회차가 고친 그 실수다)
@@ -247,11 +266,37 @@ class OpenAIEvaluator:
 
         # 카운터는 성공한 뒤에만 올린다 (embedding·리랭커와 같은 규약)
         self._usage.api_calls += 1
-        usage = getattr(response, "usage", None)
-        tokens = getattr(usage, "total_tokens", None)
-        if isinstance(tokens, int):
-            self._usage.total_tokens += tokens
+        prompt_tokens, completion_tokens = split_tokens(response)
+        self._usage.input_tokens += prompt_tokens
+        self._usage.output_tokens += completion_tokens
+        self._log_cost(
+            "call",
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            items=len(chunks),
+        )
         return verdict
+
+    # 비용 로그 한 줄. **카운터가 오르는 자리 옆에 둔다** — 두 번째 진실이 안 생긴다
+    def _log_cost(
+        self,
+        outcome: CostOutcome,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        items: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        append_cost_log(
+            stage="evaluate",
+            provider="openai",
+            model=self._config.evaluator_model,
+            outcome=outcome,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            items=items,
+            detail=detail,
+        )
 
     # 응답에서 본문을 꺼낸다. 모양이 틀려도 예외를 안 내고 None 으로 떨어뜨린다 —
     # 여기서 AttributeError 가 새면 제3의 상태가 아니라 500 이 된다

@@ -53,6 +53,7 @@ from typing import Any
 
 from rag_pipeline.agent.tools.base import BaseTool
 from rag_pipeline.config import WebSearchConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log
 from rag_pipeline.schemas.agent import ToolInput, ToolOutput
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
@@ -95,12 +96,53 @@ class WebSearchTool(BaseTool):
         if client is None:
             return ToolOutput(success=False, error=NOT_CONFIGURED)
 
-        response = client.search(
-            query=tool_input.query,
-            max_results=_resolve_max_results(tool_input, config),
-            search_depth=config.web_search_depth,
-        )
-        return ToolOutput(success=True, data=_to_chunks(response))
+        # **여기가 이 저장소에서 흔적이 제일 안 남는 유료 호출이다.** 이 도구에는
+        # 호출 캐시가 **일부러** 없고(`WebSearchConfig` 주석 — 웹 검색은 *같은 입력이면
+        # 같은 출력* 이 거짓이라 내용 해시 키가 안 선다) `usage` 카운터도 없다. 그래서
+        # `.cache/` 를 훑는 과거 복구가 이 갈래만은 **한 건도** 못 되살린다.
+        # 그 주석이 스스로 적어 둔 대가 — *"테스트·탐색을 되풀이하면 크레딧이 그만큼
+        # 나간다"* — 를 세는 유일한 자리가 아래 두 줄이다
+        try:
+            response = client.search(
+                query=tool_input.query,
+                max_results=_resolve_max_results(tool_input, config),
+                search_depth=config.web_search_depth,
+            )
+        except Exception as exc:  # noqa: BLE001 - 다시 던진다. 값으로 바꾸는 것은 run() 몫이다
+            # **`run()` 이 예외를 값으로 바꿔 삼키므로 여기서 안 남기면 실패가 사라진다.**
+            # 크레딧이 나갔는지는 예외 종류에 달렸지만, 안 남기면 «도구가 죽었다» 와
+            # «한도에 막혔다» 를 나중에 못 가른다
+            _log_cost(config, "failed", detail=f"{type(exc).__name__}: {exc}")
+            raise
+
+        chunks = _to_chunks(response)
+        # **0건도 성공이다** — 크레딧은 결과 수와 무관하게 나갔다
+        _log_cost(config, "call", items=len(chunks))
+        return ToolOutput(success=True, data=chunks)
+
+
+# 비용 로그 한 줄. **`model` 칸에 검색 깊이를 싣는다** — Tavily 에는 모델이 없고 크레딧을
+# 가르는 축이 `basic`/`advanced` 라(`WebSearchConfig` 주석: *"`advanced` 는 같은 질의에
+# 크레딧을 더 쓴다"*), 그 자리가 곧 다른 갈래의 모델 이름과 같은 뜻이다. 비워 두면
+# 리포트가 두 깊이를 한 줄로 합쳐 **비싼 회차를 싼 단가로 계산한다.**
+#
+# 토큰 칸은 안 채운다 — 0 은 *"안 썼다"* 가 아니라 *"이 API 는 토큰으로 안 판다"* 이고,
+# 그것을 `provider` 가 가른다 (Cohere 리랭킹과 같은 모양이다)
+def _log_cost(
+    config: WebSearchConfig,
+    outcome: CostOutcome,
+    *,
+    items: int = 0,
+    detail: str | None = None,
+) -> None:
+    append_cost_log(
+        stage="web_search",
+        provider="tavily",
+        model=config.web_search_depth,
+        outcome=outcome,
+        items=items,
+        detail=detail,
+    )
 
 
 # metadata 의 max_results 를 쓰되 정수가 아니면 설정값으로 돌아간다.

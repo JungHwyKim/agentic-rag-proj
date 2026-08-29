@@ -37,7 +37,19 @@ class FakeResponse:
         else:
             message = type("Message", (), {"content": content})()
             self.choices = [type("Choice", (), {"message": message})()]
-        self.usage = type("Usage", (), {"total_tokens": tokens})()
+        # **셋을 다 낸다.** 실제 응답이 `prompt_tokens`·`completion_tokens`·`total_tokens` 를
+        # 함께 주는데 합계만 흉내내면, 입출력을 가르는 코드가 **0을 받고도 통과한다** —
+        # 실제로 2026-08-29 에 이 가짜가 그 상태였고 어느 테스트도 안 잡았다
+        completion = tokens // 6
+        self.usage = type(
+            "Usage",
+            (),
+            {
+                "prompt_tokens": tokens - completion,
+                "completion_tokens": completion,
+                "total_tokens": tokens,
+            },
+        )()
 
 
 # client.chat.completions.create(...) 경로를 그대로 흉내낸다
@@ -97,6 +109,11 @@ def test_insufficient_is_a_judgement_not_a_failure(mocker, tmp_path):
     assert verdict.verdict == "insufficient"
     assert evaluator.warnings == []
     assert evaluator.usage.evaluated == 1
+    # **성공 경로의 토큰을 재는 유일한 자리다.** 아래 `test_usage_counts_only_success` 는
+    # 실패 경로의 0 만 보므로, 여기가 없으면 토큰을 통째로 안 세도 전부 통과한다
+    assert evaluator.usage.input_tokens == 100
+    assert evaluator.usage.output_tokens == 20
+    assert evaluator.usage.total_tokens == 120
 
 
 # 키가 없으면 failed 다. **insufficient 로 미끄러지면 안 된다** (모듈 docstring)

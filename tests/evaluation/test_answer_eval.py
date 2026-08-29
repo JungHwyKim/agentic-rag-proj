@@ -53,7 +53,18 @@ class FakeResponse:
     def __init__(self, content: str | None, tokens: int = 11) -> None:
         message = type("M", (), {"content": content})()
         self.choices = [type("C", (), {"message": message})()]
-        self.usage = type("U", (), {"total_tokens": tokens})()
+        # **셋을 다 낸다.** 실제 응답이 `prompt_tokens`·`completion_tokens`·`total_tokens` 를
+        # 함께 주는데 합계만 흉내내면, 입출력을 가르는 코드가 0을 받고도 통과한다
+        completion = tokens // 6
+        self.usage = type(
+            "U",
+            (),
+            {
+                "prompt_tokens": tokens - completion,
+                "completion_tokens": completion,
+                "total_tokens": tokens,
+            },
+        )()
 
 
 class FakeClient:

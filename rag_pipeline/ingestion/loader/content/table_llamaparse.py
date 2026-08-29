@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rag_pipeline.config import ContentRoutingConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log
 from rag_pipeline.ingestion.loader.content.base import (
     ContentRegion,
     LoadContext,
@@ -57,6 +59,22 @@ def _markdown_of(result: Any) -> str:
     return "\n\n".join(parts).strip()
 
 
+# 비용 로그 한 줄. **토큰 칸을 안 채운다** — LlamaParse 는 쪽 단위로 팔고 토큰을 안 알려준다.
+# `model` 자리에는 `tier` 를 싣는다: 여기서 단가가 갈리므로 다른 갈래의 모델 이름과 같은
+# 뜻이고, 비워 두면 리포트가 두 tier 를 한 줄로 합쳐 비싼 회차를 싼 단가로 계산한다.
+# `items` 도 0 이다 — 리전 하나가 곧 요청 하나라 셀 규모가 따로 없다
+def _log_cost(
+    config: ContentRoutingConfig, outcome: CostOutcome, *, detail: str | None = None
+) -> None:
+    append_cost_log(
+        stage="llamaparse",
+        provider="llamaparse",
+        model=config.llamaparse_tier,
+        outcome=outcome,
+        detail=detail,
+    )
+
+
 # 표 영역 이미지를 LlamaParse로 파싱해 마크다운을 얻는다. 실패하면 None
 def _parse_blob(blob: bytes, kind: str, ctx: LoadContext) -> str | None:
     cfg = ctx.config
@@ -65,6 +83,8 @@ def _parse_blob(blob: bytes, kind: str, ctx: LoadContext) -> str | None:
 
     cached = cache.get(key)
     if cached is not None:
+        # **아낀 것도 남긴다** (cost_log.py)
+        _log_cost(cfg, "cache_hit")
         return cached.get("markdown") or None
 
     client = _make_client(cfg.llama_cloud_api_key)
@@ -85,10 +105,14 @@ def _parse_blob(blob: bytes, kind: str, ctx: LoadContext) -> str | None:
         )
     except Exception as exc:  # noqa: BLE001 - 외부 API 장애가 적재를 멈추면 안 된다
         ctx.warn(f"LlamaParse 호출 실패로 로컬 추출로 폴백했습니다: {type(exc).__name__}")
+        _log_cost(cfg, "failed", detail=type(exc).__name__)
         return None
 
-    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다
+    # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다.
+    # **비용 로그도 같은 이유로 여기다** — 2026-08-18 에 `markdown` 을 문자열로 알고
+    # `.strip()` 을 부르다 적재 전체가 멈춘 그 자리가 바로 아래 `try` 다
     ctx.llamaparse_calls += 1
+    _log_cost(cfg, "call")
 
     try:
         markdown = _markdown_of(result)

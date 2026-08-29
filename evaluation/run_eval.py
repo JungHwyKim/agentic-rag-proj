@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 from pathlib import Path
 from typing import Any
@@ -506,6 +507,12 @@ def main() -> int:
         help="이번 결과를 baseline.json 으로 굳힌다. 없으면 기준선을 안 건드린다",
     )
     args = parser.parse_args()
+
+    # 이 실행이 쓴 돈에 이름을 붙인다. **`setdefault` 라 사람이 준 `COST_LABEL` 이 이긴다** —
+    # 한 라벨 아래 여러 회차를 묶고 싶을 때가 있고, 그때 러너가 덮으면 그 묶음이 깨진다.
+    # 라벨을 리포트 JSON 과 **같은 값**으로 두는 것이 요점이다: `cost/report.py --label` 이
+    # 그 회차의 비용을, `evaluation/results/<label>-<fmt>.json` 이 그 회차의 지표를 낸다
+    os.environ.setdefault("COST_LABEL", args.label)
 
     # **`--rerank` 를 `--dense` 없이 주면 멈춘다.** 아래 갈래가 세트 검증만 돌고 `통과` 를
     # 찍는데, 리랭커를 켰다고 믿은 사람은 그것을 성공으로 읽는다. `--hybrid` 에 같은 함정이

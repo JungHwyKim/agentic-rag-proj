@@ -273,7 +273,10 @@ class LocalEmbedder:
         self._check_dimensions(vectors)
 
         self._usage.api_calls += 1
-        self._usage.total_tokens += _count_tokens(model, batch)
+        # **비용 로그를 안 부른다.** 이 갈래는 무료라 남길 돈이 없고, 남기면 문서 하나
+        # 색인에 수백 줄이 쌓여 상한 없는 파일이 폭주한다(`cost_log.py` 의 *"로컬·무료
+        # 갈래는 안 부른다"*). 토큰은 계속 센다 — 그것은 비용이 아니라 **부하**의 지표다
+        self._usage.input_tokens += _count_tokens(model, batch)
         return vectors
 
     # 한 배치 안에서 차원이 흔들리면 저장 단계가 아니라 여기서 잡는다.

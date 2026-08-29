@@ -39,6 +39,7 @@ import json
 from typing import Any
 
 from rag_pipeline.config import RerankConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 from rag_pipeline.retrieval.reranker.base import (
     RerankUsage,
@@ -161,11 +162,19 @@ class OpenAILLMReranker:
         scores = cached.get("scores") if isinstance(cached, dict) else None
         if isinstance(scores, list) and len(scores) == len(pool):
             self._usage.cache_hits += 1
+            # **아낀 것도 남긴다** — 안 남기면 「얼마 아꼈나」를 못 낸다 (cost_log.py)
+            self._log_cost("cache_hit", items=len(pool))
             return apply_scores(pool, [float(value) for value in scores]) + candidates[len(pool):]
 
         scores = self._call_api(text, pool)
         if scores is None:
-            # 경고는 남기고 순서는 안 건드린다. ranking_score 가 fused_score 로 떨어진다
+            # 경고는 남기고 순서는 안 건드린다. ranking_score 가 fused_score 로 떨어진다.
+            # **폴백도 한 줄 남긴다** — 429 로 반이 떨어진 실행이 품질 저하로 읽혔던 자리다
+            self._log_cost(
+                "failed",
+                items=len(pool),
+                detail=self._warnings[-1] if self._warnings else None,
+            )
             return candidates
 
         # **못 쓸 응답은 캐시에 안 넣는다** (표-경로.md 13회차가 고친 그 실수다)
@@ -209,11 +218,38 @@ class OpenAILLMReranker:
 
         # 카운터는 성공한 뒤에만 올린다 (embedding 과 같은 규약)
         self._usage.api_calls += 1
-        usage = getattr(response, "usage", None)
-        tokens = getattr(usage, "total_tokens", None)
-        if isinstance(tokens, int):
-            self._usage.total_tokens += tokens
+        prompt_tokens, completion_tokens = split_tokens(response)
+        self._usage.input_tokens += prompt_tokens
+        self._usage.output_tokens += completion_tokens
+        self._log_cost(
+            "call",
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            items=len(pool),
+        )
         return scores
+
+    # 비용 로그 한 줄. **카운터가 오르는 자리 옆에 둔다** — 두 번째 진실이 안 생긴다.
+    # `provider` 를 설정에서 읽지 않고 못 박는 이유: 이 클래스가 곧 그 갈래다
+    def _log_cost(
+        self,
+        outcome: CostOutcome,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        items: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        append_cost_log(
+            stage="rerank",
+            provider="openai",
+            model=self._config.rerank_model,
+            outcome=outcome,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            items=items,
+            detail=detail,
+        )
 
     # 응답에서 본문을 꺼낸다. 모양이 틀려도 예외를 안 내고 None 으로 떨어뜨린다 —
     # 여기서 AttributeError 가 새면 폴백이 아니라 500 이 된다

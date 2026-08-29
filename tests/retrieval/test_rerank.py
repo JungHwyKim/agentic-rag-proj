@@ -188,10 +188,24 @@ def test_only_the_local_branch_has_weights_to_warm(provider, expected):
 # 응답 하나를 흉내낸다. 실제 SDK 모양(choices[0].message.content)을 지킨다 —
 # 문자열로 만들면 테스트가 오해를 그대로 검증한다 (CLAUDE.md 의 LlamaParse 교훈)
 class _FakeResponse:
+    # **`usage` 는 셋을 다 낸다.** 실제 응답이 `prompt_tokens`·`completion_tokens`·
+    # `total_tokens` 를 함께 주는데 합계만 흉내내면, 입출력을 가르는 코드가 0을 받고도
+    # 테스트가 통과한다 — 바로 위 주석의 교훈이 토큰 칸에서 되풀이되는 자리다.
+    # 100 + 23 으로 가른 것은 아래 `total_tokens == 123` 단언이 **파생 프로퍼티가
+    # 실제로 도는지**를 함께 재게 하려는 것이다
     def __init__(self, content: str | None, tokens: int = 123) -> None:
         message = type("M", (), {"content": content})()
         self.choices = [type("C", (), {"message": message})()]
-        self.usage = type("U", (), {"total_tokens": tokens})()
+        completion = tokens // 6
+        self.usage = type(
+            "U",
+            (),
+            {
+                "prompt_tokens": tokens - completion,
+                "completion_tokens": completion,
+                "total_tokens": tokens,
+            },
+        )()
 
 
 class _FakeClient:

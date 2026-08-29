@@ -30,7 +30,8 @@ class _CountingEmbedder:
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         self.batches += 1
         self.usage.api_calls += 1
-        self.usage.total_tokens += 7 * len(texts)
+        # 임베딩 API 에는 출력 토큰이 없다 — 실물과 같은 칸에 쌓는다
+        self.usage.input_tokens += 7 * len(texts)
         return [[0.1] * self.dim for _ in texts]
 
     def embed_query(self, text: str) -> list[float]:
@@ -220,7 +221,7 @@ def test_injected_embedder_replaces_the_built_one(docx_file, offline_config, moc
 def test_injected_embedder_usage_is_this_document_only(docx_file, offline_config):
     embedder = _CountingEmbedder()
     embedder.usage.api_calls = 5  # 다른 문서·질의가 이미 쌓아 둔 값
-    embedder.usage.total_tokens = 999
+    embedder.usage.input_tokens = 999
 
     result = index_document(
         docx_file, original_name="안내서.docx", config=offline_config, embedder=embedder

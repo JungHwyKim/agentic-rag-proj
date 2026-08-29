@@ -36,9 +36,12 @@
 - 실패했는데 `ctx.warn()` 이 없다 → 사용자는 결과가 왜 엉성한지 알 길이 없다
 - 폴백으로 내려가면서 이미 계산한 결과를 버리고 다시 계산한다
 
-## 3. 비용 통제 3종
+## 3. 비용 통제 4종
 
-비용 가시성은 `LoadContext` 의 카운터가 `DocumentMetadata` 로 노출되는 경로 하나뿐이다.
+비용 가시성은 **경로가 둘이다**(2026-08-29 에 둘째가 생겼다). 하나는 적재 쪽 —
+`LoadContext` 의 카운터가 `DocumentMetadata` 로 노출된다. 다른 하나는 **모든 유료 단계에
+걸치는** `rag_pipeline/cost_log.py` 이고, 그쪽이 (d)다. 앞엣것은 *이 문서 하나가 얼마를
+썼나* 를, 뒤엣것은 *이 실행이 얼마를 썼나* 를 답한다 — 겹치지만 분모가 다르다.
 
 **(a) 카운터는 호출이 나간 뒤에 올린다** — `table_llamaparse.py` 의 `_parse_blob()`,
 `table_vision.py` 와 `image_vision.py` 의 `_call_vision()`
@@ -79,6 +82,30 @@ content_hash(blob, salt=f"llamaparse:{tier}:{version}")     # table_llamaparse.p
 는 셋 다 `loader/content/base.py` 에 있고, 따라서 loader 패키지 소속이다. 새 단계가 외부 API
 비용을 쓴다면 이걸 **재사용·일반화**했는지 확인한다. 따로 복제했으면 비용 가시성이 두 곳으로
 갈라지므로 지적한다.
+
+**(d) 유료 호출 지점에는 `append_cost_log()` 한 줄이 카운터 **옆**에 있다.**
+`rag_pipeline/cost_log.py`. 이음새는 열하나이고 전부 같은 모양이다 — `api_calls += 1` ·
+`cache_hits += 1` · 폴백 자리 바로 옆이다. **카운터가 이미 그 자리에 있으므로 두 번째
+진실이 안 생긴다**, 그 배치를 옮기면 생긴다.
+
+- **새 유료 단계에 로그가 없다 → Critical.** `usage` 인스턴스를 만들어도 그것을 읽는
+  코드가 없으면 비용이 0으로 사라진다. `generation/answer.py` 가 **함수라 인스턴스를 못
+  갖고** 그래서 `verify_log/` 에 *"생성 LLM 2회"* 처럼 횟수만 남았던 자리다
+- **세 상태를 다 남기는가** — `call`·`cache_hit`·`failed`. 성공만 남기면 「얼마 아꼈나」와
+  「한도에 막혔나」를 못 낸다. 뒤엣것이 429 사고를 가른 신호다
+- **로컬·무료 갈래는 안 부른다.** 부르면 문서 하나 색인에 수백 줄이 쌓인다
+  (`local_ce.py`·`local_st.py` 는 계약만 맞추고 로그를 안 부른다 — 되돌리지 말 것)
+- **금액을 줄에 싣지 않는다.** 단가가 바뀌면 쌓인 줄이 조용히 거짓이 된다. 금액은
+  `cost/pricing.py` 를 읽는 `cost/report.py` 몫이다
+- **`usage` 의 `total_tokens` 는 파생 프로퍼티다** — 다섯 클래스 전부. **생성자 인자로
+  넘기면 깨진다**(`pipeline.py:_usage_since()` 가 실제로 그렇게 깨졌다). 읽는 쪽은 안 바뀌고
+  **만드는 쪽만** 바뀐다는 것이 이 변경에서 제일 놓치기 쉬운 자리다
+- **가짜 응답에 `prompt_tokens`·`completion_tokens` 가 있는가.** 합계만 흉내낸 가짜는
+  입출력을 가르는 코드에 **0을 먹이고도 통과한다** — 실제로 그 상태로 잠긴 적이 없었다
+
+`cost/` 는 **`rag_pipeline` 도 `evaluation` 도 import 하지 않는다**(플러그인으로 뽑을 수
+있게 둔 경계이고 `tests/cost/test_cost_portable.py` 가 잠갔다). 거기에 저장소 상수를
+들이면 지적한다.
 
 ## 4. 예외 → HTTP 매핑
 

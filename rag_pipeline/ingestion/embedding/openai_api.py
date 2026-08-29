@@ -37,6 +37,7 @@ from typing import Any
 import tiktoken
 
 from rag_pipeline.config import EmbeddingConfig
+from rag_pipeline.cost_log import append_cost_log
 from rag_pipeline.exceptions import EmbeddingError
 from rag_pipeline.ingestion.embedding.base import EmbeddingUsage, cache_salt_for
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
@@ -170,6 +171,22 @@ class OpenAIEmbedder:
             else:
                 missing.append(index)
 
+        # **캐시 히트는 텍스트마다가 아니라 호출 한 번에 한 줄로 묶는다.**
+        # 이 갈래는 배치라 `embed_documents()` 한 번이 텍스트 수백 개를 담는데, 하나에
+        # 한 줄씩 쓰면 문서 하나 색인에 수백 줄이 쌓여 상한 없는 파일이 폭주한다.
+        # **`items` 가 바로 그 축이다** — 이 줄이 말하는 것은 *"N개를 캐시로 아꼈다"* 이지
+        # *"한 번 아꼈다"* 가 아니다. 나머지 갈래(리랭킹·재작성·판정)는 질의당 호출이
+        # 하나라 줄과 호출이 1:1 이고, 그래서 거기서는 이 묶음이 필요 없다
+        hits = len(texts) - len(missing)
+        if hits:
+            append_cost_log(
+                stage="embedding",
+                provider="openai",
+                model=self._config.embedding_model,
+                outcome="cache_hit",
+                items=hits,
+            )
+
         if missing:
             self._fill_missing(texts, slots, missing)
 
@@ -241,10 +258,24 @@ class OpenAIEmbedder:
         self._usage.api_calls += 1
         usage = getattr(response, "usage", None)
         reported = getattr(usage, "total_tokens", None)
-        self._usage.total_tokens += (
+        # **여기는 `split_tokens()` 를 안 쓴다.** 임베딩 응답에는 `completion_tokens` 가
+        # 아예 없고, 무엇보다 **API 가 usage 를 안 줬을 때 우리가 직접 세는 폴백**이
+        # 이 갈래에만 있다. 공용 헬퍼로 밀어 넣으면 그 폴백이 채팅 갈래로 새어
+        # *"응답이 안 준 토큰을 지어낸다"* 가 된다
+        tokens = (
             reported
             if isinstance(reported, int)
             else _count_tokens(batch, config.embedding_model)
+        )
+        self._usage.input_tokens += tokens
+        append_cost_log(
+            stage="embedding",
+            provider="openai",
+            model=config.embedding_model,
+            outcome="call",
+            input_tokens=tokens,
+            # 배치라 호출 하나가 텍스트 여럿을 담는다. 그 수가 곧 이 줄의 규모다
+            items=len(batch),
         )
         return vectors
 

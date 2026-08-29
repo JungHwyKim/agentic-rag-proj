@@ -41,6 +41,7 @@ from __future__ import annotations
 from typing import Any
 
 from rag_pipeline.config import GenerationConfig
+from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.exceptions import GenerationError
 from rag_pipeline.generation.prompts import (
     NO_EVIDENCE_ANSWER,
@@ -62,6 +63,42 @@ def _make_client(api_key: str | None) -> Any | None:
     except ImportError:
         return None
     return OpenAI(api_key=api_key)
+
+
+# 비용 로그 한 줄. **이 단계만 `usage` 인스턴스가 없어 모듈 레벨 함수다** —
+# `generate_answer()` 가 함수라 카운터를 얹을 자리가 없고, `Answer` 에 usage 칸을 더하면
+# 그 공개 계약이 캐시 payload·화면·`query_log` 까지 번진다(`schemas/answer.py`).
+#
+# **그래서 이 자리가 call-level 로그를 고른 값어치를 그대로 보여준다** — 함수형 단계가
+# 인스턴스 usage 를 못 갖는데 로그는 가질 수 있다. 지금까지 `verify_log/` 에 생성 비용이
+# `생성 LLM 2회` 처럼 **횟수만** 남은 이유가 이것이었다.
+#
+# **재시도 루프(`agent/loop.py`)는 이 함수를 한 번만 부른다.** `step_generate` 가 유일한
+# 정상 출구라 `step_budget()` 이 `generate` 를 1로 못 박는다 — 계획 단계에서 *"루프가
+# 생성을 여러 번 부르니 줄 수가 곧 재시도 횟수"* 라고 적었는데 **틀렸다.** 재시도와 함께
+# 늘어나는 것은 `evaluate` 다(`step_retrieve` 안에 있어 재시도+1회).
+#
+# 그래도 루프 쪽에 로그를 안 붙인 이유는 그대로다 — 붙이면 같은 호출이 두 번 세진다.
+# `tests/cost/test_cost_in_the_retry_loop.py` 가 그 둘(생성 1 · 판정 재시도+1)을 잠근다
+def _log_cost(
+    config: GenerationConfig,
+    outcome: CostOutcome,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    items: int = 0,
+    detail: str | None = None,
+) -> None:
+    append_cost_log(
+        stage="generate",
+        provider="openai",
+        model=config.generation_model,
+        outcome=outcome,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        items=items,
+        detail=detail,
+    )
 
 
 # 근거 청크로 답변을 만든다. 공개 진입 함수이고 HTTP 를 모른다
@@ -100,10 +137,25 @@ def generate_answer(
     try:
         response = client.chat.completions.create(**kwargs)
     except Exception as exc:  # noqa: BLE001 - 원인을 GenerationError로 바꿔 올린다
+        # **올리기 전에 한 줄 남긴다.** 이 갈래는 예외로 위로 올라가므로 호출부가
+        # `usage` 를 읽을 기회 자체가 없다 — 로그가 아니면 실패가 흔적 없이 사라진다
+        _log_cost(cfg, "failed", items=len(chunks), detail=f"{type(exc).__name__}: {exc}")
         raise GenerationError(
             f"답변 생성에 실패했습니다: {type(exc).__name__}: {exc}",
             user_message="답변을 만드는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
         ) from exc
+
+    # **응답이 돌아온 이 자리에서 남긴다.** 아래 두 검사(빈 choices·빈 본문)는 예외로
+    # 올라가는데, 그때도 **돈은 이미 나갔다** — 과금은 응답이 온 시점의 일이지 우리가
+    # 그것을 쓸 수 있었는지와 무관하다. 검사 뒤로 옮기면 그 회차가 공짜로 기록된다
+    prompt_tokens, completion_tokens = split_tokens(response)
+    _log_cost(
+        cfg,
+        "call",
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        items=len(chunks),
+    )
 
     # 응답 모양을 믿지 않는다 — image_vision 이 choices=[] 에서 IndexError 를 낸 적이 있다
     choices = getattr(response, "choices", None) or []

@@ -757,6 +757,35 @@ class WebSearchConfig(BaseSettings):
     # 대가는 **테스트·탐색을 되풀이하면 크레딧이 그만큼 나간다**는 것이다
 
 
+# 유료 API 호출을 한 줄씩 남기는 비용 로그 설정.
+#
+# **`IngestConfig` 에 안 붙는다.** 단계가 아니라 **가로지르는** 것이라서다 — 적재(Vision·
+# LlamaParse)도 검색(리랭킹·재작성)도 생성도 평가(지지 판정)도 도구(웹 검색)도 같은 파일에
+# 쓴다. `RuntimeConfig` 이 홀로 사는 것과 같은 자리이고, 소비자가 하나인 `WebSearchConfig`
+# 와는 반대 이유로 그렇다(저쪽은 소비자가 하나라서, 이쪽은 소비자가 전부라서).
+#
+# **기본이 켜짐인 것이 결정이다.** 유료 실측은 다시 돌리는 것 자체가 비용이라, "켜는 걸
+# 잊은 회차"는 그 수치를 영영 못 얻는다. 대가는 테스트가 개발자 파일에 쓰는 것인데 그쪽은
+# `tests/conftest.py` 의 **autouse 핀**이 막는다 — `Settings.query_log_enabled` 가 이미 밟은
+# 길이고, 거기서 배운 것은 **핀이 배선보다 먼저 들어가야 한다**는 것이다.
+#
+# **금액 설정이 여기 없는 것도 결정이다.** 가격표는 `cost/pricing.py` 가 갖고 로그는 관측만
+# 남긴다 — 단가가 바뀌면 이미 쌓인 줄이 조용히 거짓이 되기 때문이다
+class CostLogConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    cost_log_enabled: bool = True
+    cost_log_path: Path = PROJECT_ROOT / "data" / "cost.jsonl"
+
+    # 이 실행에 붙일 이름. `run_eval --label` · `answer_eval --label` 이 그대로 넘겨 리포트
+    # JSON 과 조인된다. **비어 있어도 된다** — 그때는 `run_id` 만으로 실행이 갈린다
+    cost_label: str = ""
+
+
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다
 def default_config() -> IngestConfig:
     return IngestConfig()
