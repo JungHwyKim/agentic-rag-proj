@@ -31,9 +31,16 @@ from dataclasses import dataclass
 
 __all__ = ["CHECKED_ON", "RATES", "Rate", "cost_usd", "rate_for"]
 
-# **사람이 공급자 가격 페이지와 대조한 날.** `None` 이면 아직 아무도 안 봤다는 뜻이고
-# `report.py` 가 그것을 표 아래에 찍는다. 대조한 사람이 "YYYY-MM-DD" 를 넣는다
-CHECKED_ON: str | None = None
+# **공급자 가격 페이지와 대조한 날.** `None` 이면 아직 아무도 안 봤다는 뜻이고
+# `report.py` 가 그것을 표 아래에 찍는다. 대조한 사람이 "YYYY-MM-DD" 를 넣는다.
+#
+# 2026-08-29 대조 — `developers.openai.com/api/docs/pricing` 에서 아래 두 줄이 글자 그대로
+# 맞았다. **Cohere 는 못 했다**: 공개 가격 페이지(`cohere.com/pricing`)에 리랭크의 검색 단위
+# 단가가 **안 실려 있고**(거기 있는 `$5.00/시간`·`$3,250/월` 은 전용 배포인 Model Vault 값이라
+# 다른 축이다), `docs.cohere.com/docs/how-does-cohere-pricing-work` 도 *"검색 수로 과금한다"*
+# 까지만 말하고 금액은 그 페이지로 돌려보낸다. 그래서 **표에 안 넣었다** — 아래 `RATES` 의
+# 주석 참고. 이 날짜는 **여기 남은 줄에 대해서만** 참이다
+CHECKED_ON: str | None = "2026-08-29"
 
 
 # 단가 한 줄. **단위가 갈래마다 다르다** — 토큰(OpenAI)과 검색 단위(Cohere)는 서로 못 바꾼다
@@ -71,14 +78,15 @@ RATES: dict[tuple[str, str], Rate] = {
     ),
     # **`text-embedding-3-large` 는 일부러 없다.** 이 저장소가 안 쓰는 모델을 표에 두면
     # 죽은 줄이 되고, 죽은 줄은 나중에 «이건 확인된 값인가» 를 흐린다.
-    # `tests/cost/test_cost_pricing.py` 가 첫 실행에서 실제로 그 줄을 잡아냈다
-    ("cohere", "rerank-v3.5"): Rate(
-        provider="cohere",
-        model="rerank-v3.5",
-        unit="search_unit",
-        usd_per_1k_units=2.00,
-        source="https://cohere.com/pricing",
-    ),
+    # `tests/cost/test_cost_pricing.py` 가 첫 실행에서 실제로 그 줄을 잡아냈다.
+    #
+    # **`rerank-v3.5` 도 일부러 없다 — 이쪽은 이유가 다르다.** 저장소가 실제로 쓰는
+    # 유료 모델인데 **공개 가격 페이지에 검색 단위 단가가 안 실려 있다**(2026-08-29 확인 —
+    # `cohere.com/pricing` 의 `$5.00/시간`·`$3,250/월` 은 전용 배포 값이라 다른 축이고,
+    # 문서는 *"검색 수로 과금한다"* 까지만 말한다). **못 확인한 수를 넣느니 「금액 못 냄」이
+    # 낫다** — 넣으면 합계가 확신에 찬 채 틀리고, 안 넣으면 리포트가 그 줄을 따로 세어
+    # 사람이 본다. `search_units` 는 계속 쌓이므로 단가를 알게 된 날 곱하기만 하면 된다.
+    # 이유는 `tests/cost/test_cost_pricing.py:_KNOWN_UNPRICED` 에도 적혀 있다
 }
 
 

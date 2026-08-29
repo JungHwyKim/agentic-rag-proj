@@ -23,6 +23,12 @@ from rag_pipeline.config import ContentRoutingConfig, GenerationConfig
 _KNOWN_UNPRICED: dict[str, str] = {
     "rerank-v4.0-fast": "실측 회차만 쓴 실험 프로필이라 운영 단가를 아직 안 본다",
     "gpt-5.6-luna": "판정 모델 후보였다가 mini 로 닫혔다 (2026-08-29) — 운영에서 안 쓴다",
+    # **이쪽은 «안 쓴다» 가 아니라 «못 찾았다» 다.** 실제로 쓰는 유료 모델인데
+    # 2026-08-29 확인으로 공개 가격 페이지에 검색 단위 단가가 없었다 —
+    # `cohere.com/pricing` 의 시간·월 단가는 전용 배포(Model Vault)라 다른 축이고
+    # `docs.cohere.com/docs/how-does-cohere-pricing-work` 는 금액을 그 페이지로 돌려보낸다.
+    # 대시보드나 계약서에서 단가를 확인하면 `RATES` 로 옮기고 이 줄을 지운다
+    "rerank-v3.5": "공개 가격 페이지에 검색 단위 단가가 안 실린다 (2026-08-29 확인)",
 }
 
 # 로컬(무료) 모델은 단가가 없다. HuggingFace 이름은 `조직/모델` 이라 슬래시로 갈린다

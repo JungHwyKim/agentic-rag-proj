@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from cost import pricing, report
 from cost.pricing import Rate, cost_usd
 from cost.report import load_rows, main, summarize
 
@@ -74,10 +75,33 @@ def test_unknown_model_is_unpriced_not_zero() -> None:
 
 
 # 단가는 아는데 **응답이 과금 단위를 안 준** 경우는 따로 센다 — 사람이 할 일이 다르다
-# (표를 고치는 것이 아니라 그 호출의 응답을 보는 것이다)
-def test_known_model_without_billing_units_is_flagged() -> None:
+# (표를 고치는 것이 아니라 그 호출의 응답을 보는 것이다).
+#
+# **단가를 꽂아 넣는 이유**: 2026-08-29 현재 `RATES` 에 `search_unit` 갈래가 하나도 없다
+# (Cohere 단가를 공개 페이지에서 못 찾아 일부러 뺐다 — `cost/pricing.py` 참고). 그러면 이
+# 분기가 실제 표로는 못 도는데, **코드가 살아 있는 한 검사도 살아 있어야** 단가를 넣는 날
+# 그 자리가 이미 잠겨 있다
+def test_known_model_without_billing_units_is_flagged(monkeypatch) -> None:
+    monkeypatch.setitem(
+        pricing.RATES,
+        ("cohere", "rerank-v3.5"),
+        Rate(
+            provider="cohere",
+            model="rerank-v3.5",
+            unit="search_unit",
+            usd_per_1k_units=2.0,
+            source="https://example.invalid/",
+        ),
+    )
     bucket = summarize([_row(search_units=None)], "stage")["rerank"]
     assert (bucket.unpriced, bucket.units_unknown) == (1, 1)
+
+
+# 표에 아예 없는 모델은 **「과금단위 없음」이 아니라 그냥 「금액 못 냄」이다.**
+# 사람이 할 일이 다르다 — 이쪽은 단가를 찾아 넣는 것이고, 위쪽은 응답을 보는 것이다
+def test_missing_rate_is_not_counted_as_missing_units() -> None:
+    bucket = summarize([_row(search_units=None)], "stage")["rerank"]
+    assert (bucket.unpriced, bucket.units_unknown) == (1, 0)
 
 
 def test_token_cost_is_split_by_direction() -> None:
@@ -124,8 +148,22 @@ def test_cli_runs_end_to_end(tmp_path: Path, capsys) -> None:
     # 회계 줄이 표보다 **먼저** 나온다
     assert out.index("회계") < out.index("합계")
     assert "폴백 1" in out
-    # 단가표를 아직 사람이 확인 안 했으면 그 사실이 보여야 한다
+    # 단가표를 언제 대조했는지가 표 아래에 보여야 한다
+    assert "단가표 기준일" in out
+
+
+# **반대 갈래도 잠근다.** `CHECKED_ON` 이 `None` 이면 경고가 나와야 하는데, 2026-08-29 에
+# 그 값을 채우자 위 테스트가 깨졌다 — 한 갈래만 잠겨 있었다는 뜻이다. 둘 다 잠근다
+def test_unchecked_pricing_table_warns(tmp_path: Path, capsys, monkeypatch) -> None:
+    # `report.py` 가 `from cost.pricing import CHECKED_ON` 으로 이름을 떠 왔으므로
+    # 원본이 아니라 **그쪽 이름**을 갈아끼운다
+    monkeypatch.setattr(report, "CHECKED_ON", None)
+    path = _write(tmp_path / "cost.jsonl", [_row()])
+    main(["--log", str(path)])
+
+    out = capsys.readouterr().out
     assert "확인하지 않았습니다" in out
+    assert "단가표 기준일" not in out
 
 
 def test_label_filter_narrows_the_rows(tmp_path: Path, capsys) -> None:
