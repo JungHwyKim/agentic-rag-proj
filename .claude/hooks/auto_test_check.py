@@ -171,7 +171,10 @@ def _run_pytest(args: list[str], *, timeout: int) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            # 이 둘이 한 쌍이다. errors 만 있으면 한국어 사유가 대체문자로 뭉개지고,
+            # env 만 있으면 못 읽는 바이트에서 훅이 죽는다 (_hookutil.child_env 주석)
             errors="replace",
+            env=_hookutil.child_env(),
             timeout=timeout,
             # 하위 프로세스가 stdin 을 기다리며 멈추지 않게 한다
             stdin=subprocess.DEVNULL,

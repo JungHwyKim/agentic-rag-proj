@@ -34,6 +34,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import _hookutil
+
 # .claude/hooks/pre_commit_check.py -> 프로젝트 루트
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,7 +73,11 @@ def _run(args: list[str], *, timeout: int) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            # 이 둘이 한 쌍이다. errors 만 있으면 한국어 사유가 대체문자로 뭉개지고,
+            # env 만 있으면 못 읽는 바이트에서 훅이 죽는다 (_hookutil.child_env 주석).
+            # 여기는 커밋을 **막는** 쪽이라 사유를 못 읽는 대가가 auto_test_check 보다 크다
             errors="replace",
+            env=_hookutil.child_env(),
             timeout=timeout,
             # 하위 프로세스가 stdin 을 기다리며 멈추지 않게 한다
             stdin=subprocess.DEVNULL,
