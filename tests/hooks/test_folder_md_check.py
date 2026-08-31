@@ -67,9 +67,14 @@ def has_body(context: str, rel: str) -> bool:
     return f"# 폴더 지침: {rel}" in context
 
 
-# 포인터로만 실렸나
-def has_pointer(context: str, rel: str) -> bool:
-    return f"- `{rel}`" in context and not has_body(context, rel)
+# 조각으로 실렸나 — 「n/N」 표시가 붙는다
+def is_partial(context: str, rel: str) -> bool:
+    return f"# 폴더 지침: {rel} (" in context
+
+
+# 그 지침이 통째로 한 조각에 실렸나(「n/N」 표시가 없다)
+def is_whole(context: str, rel: str) -> bool:
+    return f"# 폴더 지침: {rel}\n" in context
 
 
 # 훅이 실제로 내보낸 컨텍스트. 아무것도 안 실었으면 빈 문자열
@@ -121,11 +126,16 @@ def test_ancestor_docs_are_injected(session: str):
 
     assert code == 0
     assert out is not None, "지침이 있는 파일을 읽었는데 아무것도 안 실렸다"
-    context = out["hookSpecificOutput"]["additionalContext"]
-    # **둘의 대우가 갈린다** — ingestion(2,414자)은 예산에 들고 loader(12,681자)는 안 든다.
-    # 「경로가 문자열로 있나」로만 재면 포인터와 전문이 안 갈려 이 구분이 조용히 사라진다
-    assert has_body(context, "rag_pipeline/ingestion/CLAUDE.md")
-    assert has_pointer(context, "rag_pipeline/ingestion/loader/CLAUDE.md")
+
+    # **얕은 쪽이 먼저다**(넓은 규칙 → 좁은 규칙). ingestion(2,414자)이 한 조각에 다 들어가고
+    # 나면 loader 조각(최대 9,100자)은 남은 예산에 안 들어가 **다음 명령으로 밀린다**
+    assert is_whole(context_of(out), "rag_pipeline/ingestion/CLAUDE.md")
+
+    second, _ = run_hook(bash("cat rag_pipeline/ingestion/loader/registry.py", session))
+
+    # **밀린 것이 사라지지 않는다는 것이 이 테스트의 요점이다** — 조상을 전부 모으는 이유가
+    # 「하나가 조용히 빠지는 것」을 막는 것인데, 예산이 그 구멍을 다시 만들면 안 된다
+    assert is_partial(context_of(second), "rag_pipeline/ingestion/loader/CLAUDE.md")
 
 
 # **뿌리 `CLAUDE.md` 는 늘 로드되므로 실으면 두 벌이 된다.** 조상 훑기가 뿌리에서 멈추는지
@@ -145,25 +155,76 @@ def test_piped_read_still_injects(session: str):
     assert out is not None, "파이프가 붙었다고 안 실으면 차단안과 같은 구멍이 생긴다"
 
 
-# --- 예산 ---
+# --- 예산과 이어싣기 ---
 #
 # **이 절이 이 훅의 두 번째 실패를 잠근다.** 첫 판은 «실었다» 까지는 맞았는데 하네스가 큰
 # `additionalContext` 를 2KB 프리뷰로 잘라 내용이 모델에 안 닿았다 — 훅은 성공한 것처럼
-# 보이고 아무 에러도 안 난다. 실측 경계는 (10,000, 10,239]자다(훅 docstring).
+# 보이고 아무 에러도 안 난다. 상한은 **정확히 10,000자**다(훅 docstring).
+#
+# **두 번째 처방인 「쪽지」는 기각됐다** — 세 판 다 우회당했고, 근본 원인은 문구가 아니라
+# **모델의 선택에 기댄 설계**였다(`plan_log/문서-최신성.md` 12회차). 지금 계약은 조각을
+# 이어서 싣는 것이고, 이 절이 재는 것은 **모델이 아무것도 안 해도 전문이 도착하는가** 다.
 
 
-# 예산에 드는 지침은 **전문이 그대로** 온다. 포인터로 다 바꾸는 안을 기각한 이유가 이것이다
-def test_small_doc_is_still_delivered_whole(session: str):
+# 예산에 드는 지침은 **한 조각에 통째로** 온다. 작은 폴더가 손해를 보면 안 된다
+def test_small_doc_is_delivered_whole(session: str):
     out, _ = run_hook(bash(f"cat {FITS_FILE}", session))
 
-    assert has_body(context_of(out), FITS_DOC), "예산에 드는데도 포인터로 떨어지면 손해다"
+    assert is_whole(context_of(out), FITS_DOC), "예산에 드는데 조각으로 쪼개면 손해다"
 
 
-# 예산을 넘는 지침은 **본문 대신 경로**가 온다
-def test_oversized_doc_becomes_a_pointer(session: str):
+# 예산을 넘는 지침은 **첫 조각 + 「n/N」 표시**로 온다.
+#
+# **표시가 계약의 절반이다** — 안 붙이면 모델이 잘린 글을 온전한 것으로 읽고, 뒷부분에만
+# 있는 함정을 «없다» 로 판단한다
+def test_oversized_doc_arrives_as_a_first_slice(session: str):
     out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
+    context = context_of(out)
 
-    assert has_pointer(context_of(out), BIG_DOC)
+    assert is_partial(context, BIG_DOC)
+    assert "1/" in context, "몇 조각 중 몇 번째인지 안 밝히면 잘린 글이 온전해 보인다"
+
+
+# **다음 명령이 다음 조각을 잇는다 — 앞 조각을 되풀이하지 않는다.**
+# 마커가 «집었나» 가 아니라 «어디까지 보냈나» 인 것이 이것이다
+def test_next_command_continues_instead_of_repeating(session: str):
+    first = context_of(run_hook(bash(f"cat {BIG_FILE}", session))[0])
+    second = context_of(run_hook(bash("cat evaluation/corpus.py", session))[0])
+
+    assert "1/" in first and "2/" in second, f"이어지지 않았다: {second[:120]}"
+    body_of_first = first.split("\n\n", 2)[-1]
+    assert body_of_first not in second, "같은 조각을 두 번 실으면 이어싣기가 아니다"
+
+
+# **끝까지 이으면 원문이 한 글자도 안 빠지고 복원된다.** 이 절에서 제일 중요한 검사다 —
+# 조각 경계가 글자를 먹거나 겹치면 «실었는데 틀린 글» 이 되는데 아무 에러도 안 난다
+def test_slices_reassemble_into_the_original(session: str):
+    doc = folder_md_check.PROJECT_ROOT / BIG_DOC
+    received = []
+
+    for _ in range(20):
+        out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
+        context = context_of(out)
+        if not context:
+            break
+        received.append(context.split("\n\n", 2)[-1])
+
+    assert "".join(received) == doc.read_text(encoding="utf-8"), (
+        "조각을 이어 붙인 것이 원문과 다르다"
+    )
+
+
+# 다 보낸 뒤에는 **침묵한다.** 안 그러면 되풀이가 예산을 먹는다
+def test_exhausted_doc_goes_silent(session: str):
+    for _ in range(20):
+        out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
+        if context_of(out) == "":
+            break
+
+    again, code = run_hook(bash(f"cat {BIG_FILE}", session))
+
+    assert code == 0
+    assert again is None, "다 보낸 지침을 또 실으면 이어싣기가 무한 반복이 된다"
 
 
 # **한 명령이 일곱 폴더를 다 물어도 예산 안이다.** 상한이 문서당이 아니라 **호출당**이라,
@@ -180,62 +241,45 @@ def test_a_command_touching_every_folder_stays_under_budget(session: str):
     )
 
 
-# **쪽지는 `cat` 으로 열면 잘린다고 경고해야 한다.**
+# **조각 하나는 혼자서 반드시 예산에 들어야 한다.** 안 그러면 그 조각이 어떤 명령에서도
+# 자리를 못 얻어 커서가 거기 멈추고, 뒤가 통째로 사라지는데 아무 에러도 안 난다
+def test_every_slice_of_every_real_doc_fits_alone():
+    for doc in sorted(folder_md_check.PROJECT_ROOT.rglob("CLAUDE.md")):
+        if doc.parent == folder_md_check.PROJECT_ROOT:
+            continue  # 뿌리는 대상이 아니다
+        slices = folder_md_check.slices_for(doc)
+        for index in range(len(slices)):
+            block = folder_md_check.block_for(doc, index, len(slices))
+            size = len(folder_md_check.HEAD) + len(folder_md_check.SEPARATOR) + len(block)
+            assert size <= folder_md_check.CONTEXT_BUDGET_CHARS, (
+                f"{doc.name} 의 {index + 1}번째 조각이 혼자서도 예산을 넘는다 ({size}자)"
+            )
+
+
+# **줄 경계에서 자른다** — 문장 한가운데가 갈리면 조각 하나가 못 읽는 글이 된다
+def test_slices_are_cut_on_line_boundaries():
+    body = "".join(f"{i}번째 줄입니다\n" for i in range(4000))
+
+    slices = folder_md_check.slices_of(body)
+
+    assert len(slices) > 1, "이 입력은 상한을 넘어야 한다"
+    assert "".join(slices) == body
+    for piece in slices[:-1]:
+        assert piece.endswith("\n"), "줄 한가운데를 잘랐다"
+
+
+# 상한보다 긴 **한 줄**은 마지막 수단으로 줄 안에서 자른다.
 #
-# 실측(2026-09-01): 쪽지를 받은 모델이 실제로 따라갔는데 `Read` 가 아니라 `cat` 으로 열었다
-# (auto mode 가 `cat` 을 지시하므로 그쪽이 이긴다). 그때는 통했지만 `loader/CLAUDE.md` 가
-# 23,197바이트라 우연히 셸 출력 상한 아래였기 때문이고, **`evaluation/CLAUDE.md`(37,141바이트)는
-# `cat` 하면 앞 2KB만 오고 조용히 실패한다.** 경고를 빼면 제일 큰 폴더에서만 안 듣는다
-def test_pointer_warns_that_cat_truncates(session: str):
-    out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
-    context = context_of(out)
+# 실측(2026-09-01)으로 지금 폴더 지침의 최장 줄은 2,814자라 이 경로를 안 밟는다. 그래도
+# 통째로 넣으면 그 조각이 예산을 넘겨 **영영 안 실리므로** 자르는 쪽이 맞다
+def test_a_single_line_longer_than_the_cap_is_split():
+    body = "가" * (folder_md_check.MAX_SLICE_CHARS * 2 + 5)
 
-    assert "Read" in context, "무엇으로 열라는 말이 없으면 쪽지가 할 일을 안 한다"
-    assert "cat" in context, (
-        "`cat` 으로 열면 잘린다는 경고가 없으면, auto mode 의 모델이 `cat` 으로 열고 "
-        "큰 폴더에서 조용히 실패한다"
-    )
+    slices = folder_md_check.slices_of(body)
 
-
-# 쪽지는 **크기를 함께 준다** — 요약이 아니라 매번 다시 재는 값이라 낡지 않는다
-def test_pointer_carries_the_size(session: str):
-    out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
-
-    size = (folder_md_check.PROJECT_ROOT / BIG_DOC).stat().st_size
-    assert f"{size:,}바이트" in context_of(out)
-
-
-# 포인터로 돌린 폴더는 **마커를 안 집는다** — 다음 명령에서 다시 시도된다.
-#
-# 마커는 «큰 비용을 두 번 치르지 않는다» 는 장치인데 포인터는 큰 비용이 아니다. 집어 버리면
-# 세션에 단 한 번뿐인 넛지를 **모델이 안 따라갈 수도 있는 리다이렉트에** 써 버린다
-def test_pointer_does_not_consume_the_session_marker(session: str):
-    first, _ = run_hook(bash(f"cat {BIG_FILE}", session))
-    assert has_pointer(context_of(first), BIG_DOC)
-
-    second, _ = run_hook(bash("cat evaluation/corpus.py", session))
-
-    assert has_pointer(context_of(second), BIG_DOC), (
-        "포인터가 마커를 집으면 모델이 안 따라 읽었을 때 그 폴더 지침이 세션 내내 사라진다"
-    )
-
-
-# **크기가 아니라 예산에 밀린** 폴더는 나중에 혼자 오면 전문으로 온다.
-#
-# 앞 테스트가 「포인터가 되풀이된다」를 봤다면 이쪽은 **놓아 준 마커가 되돌리기로 쓰인다**는
-# 것을 본다. 넷 다 혼자면 예산에 드는 폴더인데 합이 11,720자라 적어도 하나는 밀린다.
-# **어느 것이 밀리는지는 고정하지 않는다** — 문서 크기가 바뀌면 달라지므로 훅에게 물어본다
-def test_a_folder_pushed_out_by_budget_arrives_whole_later(session: str):
-    first, _ = run_hook(bash(MANY_SMALL_COMMAND, session))
-    context = context_of(first)
-
-    pushed_out = [rel for rel in SMALL_ANCHORS if has_pointer(context, rel)]
-    assert pushed_out, "작은 폴더 넷을 한 번에 물었는데 아무것도 안 밀렸다"
-
-    rel = pushed_out[0]
-    second, _ = run_hook(bash(f"cat {SMALL_ANCHORS[rel]}", session))
-
-    assert has_body(context_of(second), rel), "놓아 준 마커가 실제로는 안 놓아졌다"
+    assert len(slices) == 3
+    assert "".join(slices) == body
+    assert all(len(piece) <= folder_md_check.MAX_SLICE_CHARS for piece in slices)
 
 
 # --- 중복 방지 ---

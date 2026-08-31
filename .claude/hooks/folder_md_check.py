@@ -22,7 +22,7 @@
 
 주입은 셋 다 없다. 파이프든 리다이렉션이든 가리지 않고, 아무것도 막지 않는다.
 
-## 큰 지침은 전문 대신 포인터를 싣는다
+## 큰 지침은 나눠서 이어 싣는다
 
 **싣는 것으로 끝이 아니다 — 하네스가 큰 `additionalContext` 를 2KB 프리뷰로 자르고 나머지를
 파일로 뺀다.** 훅은 성공한 것처럼 보이는데 내용이 모델에 안 닿아, 이 훅의 첫 판이 실사용에서
@@ -61,29 +61,43 @@
 한 명령이 일곱 폴더를 다 물면 55,150자가 한 번에 실린다(실측). `grep -rn x backend/ tests/`
 한 줄이면 두 폴더가 더해지므로, 아무리 잘게 쪼개도 **명령이 폴더를 여럿 무는 순간 넘는다.**
 
-**「전부 포인터로」도 기각했다.** 일곱 중 넷(retrieval 1,907 · cost 2,271 · ingestion 2,414 ·
-tests 5,128자)은 지금 전문이 그대로 온다. 전면 포인터는 **되던 넷을 «모델이 따라 읽어야
-하는» 상태로 떨어뜨린다.** 그래서 예산까지 전문을 채우고 넘치는 것만 포인터다.
+**「짧은 포인터를 대신 싣는다」도 기각했다 — 만들어서 세 판 쟀고 전부 우회당했다**
+(2026-09-01, `plan_log/문서-최신성.md` 12회차).
 
-**포인터는 요약이 아니라 리다이렉트다.** 요약을 두면 본문이 고쳐져도 안 따라가 두 번째
-진실이 된다 — 뿌리 `CLAUDE.md` 가 폴더 표에 요약을 안 두는 것과 같은 잣대다.
+    1차  탐침이 커서 `cat` 이 잘리자 모델이 `Read` 로 되읽었고 **네이티브가 대신 실었다**
+    2차  쪽지를 따라갔지만 `Read` 가 아니라 `cat` 이었다 — 통한 것은 그 파일이
+         23,197바이트라 **셸 출력 상한 아래였던 우연**이다
+    3차  «`cat` 으로 열면 잘린다» 경고와 크기를 넣었더니 **`Grep` 으로 기록 폴더를 뒤져
+         그 파일을 아예 안 열었다**
 
-**포인터로 돌린 폴더는 마커를 놓아 준다.** 마커는 «큰 비용을 두 번 치르지 않는다» 는
-장치인데 포인터는 큰 비용이 아니고, 집어 버리면 세션에 단 한 번뿐인 넛지를 **모델이 안
-따라갈 수도 있는 리다이렉트에** 써 버린다. 그래서 다음 셸 명령이 그 폴더를 다시 물면 다시
-시도된다. **집었다가 되돌리는 순서인 것은 원자성 때문이다** — 「먼저 들여다보고 나중에
-집는」 순서로 짜면 병렬로 도는 Bash 훅 둘이 같은 폴더에서 **둘 다 전문을 싣는다**(실제로
-한 턴에 Bash 를 넷 띄우는 일이 있다).
+**공통점이 결론이다 — 37KB 파일을 여는 것보다 싼 길이 늘 있고, 쪽지는 `grep` 과 경쟁해서
+진다**(`grep` 은 *물어본 것*에 답하고 폴더 지침은 *안 물어본 것*을 준다). 근본 원인은 문구가
+아니라 **이 장치의 전제(«모델에게 시키는 일은 지켜질 때도 아닐 때도 있다»)를 어긴 설계**다.
+**그래서 이어싣기는 모델의 선택을 회로에서 뺀다** — 시키지 않고 그냥 싣는다.
+
+**「내용이 크다」가 아니라 「훅의 파이프가 좁다」가 옳은 틀이다.** 같은 판에서
+`backend/CLAUDE.md` 11,538자가 **네이티브로는 전문이 왔다** — 상한은 이 채널만의 것이다.
+
+**조각은 줄 경계에서만 자르고 순서대로 보낸다.** 「함정 절부터」안은 조각 1의 값어치가 크지만
+**어느 절이 중한지를 훅이 판단하게 되고**, 문서마다 절 이름이 달라 조용히 어긋난다.
+그리고 **조각마다 「n/N」을 밝힌다** — 안 밝히면 잘린 글이 온전해 보여 뒤에만 있는 함정을
+«없다» 로 읽는다.
 
 **`permissionDecision` 을 일부러 안 낸다.** `"allow"` 를 내면 이 훅이 배선된 동안 **모든
 셸 명령이 권한 프롬프트를 건너뛴다** — 이 훅이 만들어도 되는 부작용이 아니다.
 `additionalContext` 만으로 목적이 달성된다(2026-08-31 실측: 실제로 실린다).
 
-## 폴더당 세션 1회인 것이 이 훅의 절반이다
+## 같은 조각을 두 번 안 싣는 것이 이 훅의 절반이다
 
 **없으면 역효과다.** `evaluation/CLAUDE.md` 는 37,141바이트라 `cat` 마다 실으면 다섯 번에
 분산 전 뿌리(147,014)보다 나빠진다. 네이티브 지연 로드도 같은 파일을 두 번 읽는다고 두 번
 안 넣으므로, 마커는 **그 동작을 흉내 내는 것**이다.
+
+**이어싣기가 되면서 마커의 뜻이 «집었나» 에서 «어디까지 보냈나» 로 바뀌었다.** 커서를
+*파일에 적힌 숫자*로 두지 않고 **조각 번호를 네임스페이스에 넣은 것**은 원자성 때문이다 —
+숫자를 읽고-고치고-쓰면 병렬로 도는 Bash 훅 둘이 같은 조각을 함께 싣는다(한 턴에 Bash 를
+넷 띄우는 일이 실제로 있다). 조각마다 이름이 다르면 `claim_session()` 의 `O_EXCL` 이 그대로
+쓰이고, 진 쪽은 다음 조각으로 넘어간다.
 
 마커의 대가는 압축이다 — 컨텍스트에서 사라졌는데 마커가 남으면 다시 안 실린다. 그래서
 `InstructionsLoaded` 에서 `load_reason == "compact"` 일 때 마커를 지운다. **그 값이 실제로
@@ -141,23 +155,17 @@ CONTEXT_BUDGET_CHARS = 9500
 HEAD = (
     "방금 셸로 읽은 파일이 속한 폴더에 지침이 있습니다. `Read` 도구가 아니라 "
     "Bash 로 읽으면 이것이 자동으로 안 들어와서, 훅이 대신 싣습니다. "
-    "이 세션에서 폴더마다 한 번만 실립니다."
-)
-
-# 예산을 넘겨 본문을 못 실은 지침의 머리말. **경로만 준다 — 요약을 두면 두 번째 진실이 된다**
-#
-# **`cat` 경고가 장식이 아니다.** 실측(2026-09-01): 쪽지를 받은 모델이 실제로 따라갔는데
-# `Read` 가 아니라 `cat` 으로 열었다(auto mode 가 `cat` 을 지시하므로 그쪽이 이긴다).
-# 그때는 통했지만 그건 `loader/CLAUDE.md` 가 23,197바이트라 우연히 셸 출력 상한 아래였기
-# 때문이고, **`evaluation/CLAUDE.md`(37,141바이트)는 `cat` 하면 앞 2KB만 오고 조용히 실패한다.**
-# 그래서 쪽지가 «Read 를 써라» 로 그치면 제일 큰 폴더에서만 안 듣는다
-POINTER_HEAD = (
-    "아래 폴더에도 지침이 있는데 한 번에 실을 수 있는 크기를 넘어 본문을 못 실었습니다. "
-    "그 폴더의 파일을 고치거나 판단이 필요하면 **`Read` 도구로** 여십시오 — "
-    "`cat` 으로 열면 큰 파일은 앞부분만 오고 나머지가 아무 에러 없이 빠집니다."
+    "큰 지침은 나눠서 이어 싣고, 같은 조각을 두 번 싣지는 않습니다."
 )
 
 SEPARATOR = "\n\n---\n\n"
+
+# 조각 하나가 **혼자서는 반드시 예산에 드는** 크기. 머리말·블록 머리·구분자 몫을 넉넉히 뺀다.
+#
+# **이 여유가 없으면 그 조각이 영영 안 실린다** — 조각이 예산보다 크면 어떤 명령에서도 자리가
+# 안 나고, 커서가 그 자리에 멈춘 채 뒤가 통째로 사라지는데 아무 에러도 안 난다
+SLICE_OVERHEAD_CHARS = 400
+MAX_SLICE_CHARS = CONTEXT_BUDGET_CHARS - SLICE_OVERHEAD_CHARS
 
 # 명령 문자열에서 경로 후보를 뽑는 정규식. 한글 파일명이 흔한 저장소라 한글을 넣는다.
 # 넉넉하게 잡고 **실재하는 파일인지로 거른다** — 여기서 정교하게 굴면 새 형태의 명령이
@@ -214,68 +222,93 @@ def rel_of(doc: Path) -> str:
     return doc.relative_to(PROJECT_ROOT).as_posix()
 
 
-# 그 폴더 몫의 마커 네임스페이스. 경로가 곧 신원이라 해시로 못 박는다
-def namespace_for(doc: Path) -> str:
-    return NAMESPACE_PREFIX + hashlib.sha256(rel_of(doc).encode("utf-8")).hexdigest()[:16]
+# 그 폴더 몫의 마커 네임스페이스. 경로가 곧 신원이라 해시로 못 박는다.
+#
+# **조각마다 네임스페이스가 따로인 것이 원자성을 지킨다** — 커서를 «파일에 적힌 숫자» 로 두면
+# 읽고-고치고-쓰기가 되어 병렬 훅 둘이 같은 조각을 함께 보낸다. 조각 번호를 이름에 넣으면
+# `claim_session()` 의 `O_EXCL` 이 그대로 쓰이고, 진 쪽은 다음 조각으로 넘어간다
+def namespace_for(doc: Path, index: int = 0) -> str:
+    base = NAMESPACE_PREFIX + hashlib.sha256(rel_of(doc).encode("utf-8")).hexdigest()[:16]
+    return base if index == 0 else f"{base}_s{index}"
 
 
-# 이 세션에 아직 안 실은 것만. 집는 순간 마커가 생긴다
-def unclaimed(docs: list[Path], session_id: str) -> list[Path]:
-    return [doc for doc in docs if _hookutil.claim_session(namespace_for(doc), session_id)]
+# 지침 본문을 «혼자서는 예산에 드는» 조각들로 자른다. **줄 경계에서만 자른다** —
+# 문장·코드펜스 한가운데가 갈리면 조각 하나가 통째로 못 읽는 글이 된다.
+#
+# 실측(2026-09-01) 폴더 지침 일곱의 최장 줄은 2,814자로 상한(9,100)의 3분의 1이라 **지금은
+# 한 줄이 넘치는 경우가 없다.** 그래도 넘칠 때 그 줄을 통째로 넣으면 그 조각이 예산을 넘겨
+# **영영 안 실리므로**, 마지막 수단으로 줄 안에서 자른다
+def slices_of(body: str) -> list[str]:
+    out: list[str] = []
+    current = ""
+
+    for line in body.splitlines(keepends=True):
+        while len(line) > MAX_SLICE_CHARS:
+            if current:
+                out.append(current)
+                current = ""
+            out.append(line[:MAX_SLICE_CHARS])
+            line = line[MAX_SLICE_CHARS:]
+
+        if current and len(current) + len(line) > MAX_SLICE_CHARS:
+            out.append(current)
+            current = ""
+        current += line
+
+    if current:
+        out.append(current)
+    return out or [""]
 
 
-# 지침 하나가 실릴 때의 본문. 못 읽으면 None — 판단이 안 서면 조용히 뺀다
-def block_for(doc: Path) -> str | None:
+# 이 지침의 조각들. 못 읽으면 빈 목록 — 판단이 안 서면 조용히 뺀다
+def slices_for(doc: Path) -> list[str]:
     try:
-        body = doc.read_text(encoding="utf-8")
+        return slices_of(doc.read_text(encoding="utf-8"))
     except OSError:
-        return None
-    return f"# 폴더 지침: {rel_of(doc)}\n\n{body}"
+        return []
 
 
-# 예산을 넘긴 지침을 가리키는 한 줄. **요약이 아니라 경로다**(위 docstring — 요약은 두 번째
-# 진실이 된다). 크기를 함께 주는 것은 요약이 아니라 **매번 다시 재는 값**이라 낡지 않고,
-# 「이건 커서 `cat` 으로 열면 잘리겠구나」를 모델이 스스로 판단할 재료가 된다
-def pointer_for(doc: Path) -> str:
-    try:
-        size = f" ({doc.stat().st_size:,}바이트)"
-    except OSError:
-        size = ""
-    return f"- `{rel_of(doc)}`{size}"
+# 조각 하나가 실릴 때의 본문. **몇 조각 중 몇 번째인지 밝힌다** — 안 밝히면 모델이 잘린 글을
+# 온전한 것으로 읽고, 뒷부분에만 있는 함정을 «없다» 로 판단한다
+def block_for(doc: Path, index: int, total: int) -> str:
+    head = f"# 폴더 지침: {rel_of(doc)}"
+    if total > 1:
+        head += f" ({index + 1}/{total} — 나머지는 이 폴더를 다시 읽을 때 이어서 옵니다)"
+    return f"{head}\n\n{slices_for(doc)[index]}"
 
 
-# 예산 안에서 전문을 채우고 넘치는 것은 포인터로 돌린다. 반환은 (실어 보낼 본문, 포인터로
-# 돌린 것들). 얕은 폴더부터 채우는 순서는 `folder_docs_for()` 가 이미 잡아 뒀다
-def compose(docs: list[Path]) -> tuple[str, list[Path]]:
+# 예산 안에서 «아직 안 보낸 다음 조각» 들을 채운다. 반환은 실어 보낼 본문.
+#
+# 얕은 폴더부터 채우는 순서는 `folder_docs_for()` 가 이미 잡아 뒀다. 한 지침에서 조각을 하나만
+# 집는 것은 조각 하나가 이미 예산의 대부분이라 어차피 둘이 안 들어가서다
+def compose(docs: list[Path], session_id: str) -> str:
     blocks: list[str] = []
-    deferred: list[Path] = []
     used = len(HEAD)
 
     for doc in docs:
-        block = block_for(doc)
-        if block is None:
+        total = len(slices_for(doc))
+        if total == 0:
             continue
 
-        cost = len(SEPARATOR) + len(block)
-        if used + cost <= CONTEXT_BUDGET_CHARS:
+        for index in range(total):
+            namespace = namespace_for(doc, index)
+            if _hookutil.is_marked(namespace, session_id):
+                continue  # 이미 보낸 조각
+
+            block = block_for(doc, index, total)
+            if used + len(SEPARATOR) + len(block) > CONTEXT_BUDGET_CHARS:
+                break  # 자리가 없다 — 다음 명령에서 이어서
+
+            # **집는 것과 싣는 것이 한 동작이어야 한다.** 졌으면(병렬 훅이 먼저 집었으면)
+            # 싣지 않고 다음 조각으로 넘어간다
+            if not _hookutil.claim_session(namespace, session_id):
+                continue
+
             blocks.append(block)
-            used += cost
-            continue
+            used += len(SEPARATOR) + len(block)
+            break
 
-        # 포인터도 자리를 먹는다. 안 세면 포인터가 많을 때 예산을 넘겨 **잘림을 피하려던
-        # 장치가 잘림을 만든다.** 머리말은 처음 한 번만 센다
-        used += len(pointer_for(doc)) + 1
-        if not deferred:
-            used += len(POINTER_HEAD) + 2
-        deferred.append(doc)
-
-    parts: list[str] = []
-    if blocks:
-        parts.append(HEAD + "\n\n" + SEPARATOR.join(blocks))
-    if deferred:
-        parts.append(POINTER_HEAD + "\n" + "\n".join(pointer_for(doc) for doc in deferred))
-
-    return "\n\n".join(parts), deferred
+    return HEAD + "\n\n" + SEPARATOR.join(blocks) if blocks else ""
 
 
 # 압축으로 컨텍스트가 접히면 마커를 전부 지운다. 그래야 다음 읽기에 다시 실린다
@@ -339,14 +372,7 @@ def main() -> None:
     if not command:
         sys.exit(0)
 
-    docs = unclaimed(folder_docs_for(files_in(command)), session_id)
-    context, deferred = compose(docs)
-
-    # 포인터로 돌린 폴더는 마커를 놓아 준다 — 다음 셸 명령에서 다시 시도된다(위 docstring).
-    # 집었다가 되돌리는 순서인 것은 병렬 훅에서 둘 다 전문을 싣지 않게 하기 위해서다
-    for doc in deferred:
-        _hookutil.clear_marker(namespace_for(doc), session_id)
-
+    context = compose(folder_docs_for(files_in(command)), session_id)
     if context:
         emit(context)
 
