@@ -180,6 +180,31 @@ def test_a_command_touching_every_folder_stays_under_budget(session: str):
     )
 
 
+# **쪽지는 `cat` 으로 열면 잘린다고 경고해야 한다.**
+#
+# 실측(2026-09-01): 쪽지를 받은 모델이 실제로 따라갔는데 `Read` 가 아니라 `cat` 으로 열었다
+# (auto mode 가 `cat` 을 지시하므로 그쪽이 이긴다). 그때는 통했지만 `loader/CLAUDE.md` 가
+# 23,197바이트라 우연히 셸 출력 상한 아래였기 때문이고, **`evaluation/CLAUDE.md`(37,141바이트)는
+# `cat` 하면 앞 2KB만 오고 조용히 실패한다.** 경고를 빼면 제일 큰 폴더에서만 안 듣는다
+def test_pointer_warns_that_cat_truncates(session: str):
+    out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
+    context = context_of(out)
+
+    assert "Read" in context, "무엇으로 열라는 말이 없으면 쪽지가 할 일을 안 한다"
+    assert "cat" in context, (
+        "`cat` 으로 열면 잘린다는 경고가 없으면, auto mode 의 모델이 `cat` 으로 열고 "
+        "큰 폴더에서 조용히 실패한다"
+    )
+
+
+# 쪽지는 **크기를 함께 준다** — 요약이 아니라 매번 다시 재는 값이라 낡지 않는다
+def test_pointer_carries_the_size(session: str):
+    out, _ = run_hook(bash(f"cat {BIG_FILE}", session))
+
+    size = (folder_md_check.PROJECT_ROOT / BIG_DOC).stat().st_size
+    assert f"{size:,}바이트" in context_of(out)
+
+
 # 포인터로 돌린 폴더는 **마커를 안 집는다** — 다음 명령에서 다시 시도된다.
 #
 # 마커는 «큰 비용을 두 번 치르지 않는다» 는 장치인데 포인터는 큰 비용이 아니다. 집어 버리면
