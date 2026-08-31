@@ -27,6 +27,16 @@ from pathlib import Path
 # .claude/hooks/_hookutil.py -> 프로젝트 루트
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# 기록 세 폴더(plan_log·task_log·verify_log)를 담은 위키의 뿌리.
+#
+# **한 자리에 두는 이유는 어긋나도 아무 에러가 안 나서다.** 두 기록 훅이 각자
+# `"plan_log/"` `"task_log/"` 를 들고 있었는데, 그 접두사가 실제 경로와 어긋나면
+# `rel.startswith()` 가 늘 False 를 돌려 **기록을 남긴 세션이 안 남긴 것으로 보인다** —
+# 검사가 죽는 게 아니라 반대로 늘 막는 쪽으로 고장 나고, 그러면 `SKIP_TASKLOG=1` 이
+# 습관이 되어 검사가 통째로 죽는다. `openwork/collect.py` 의 `WIKI_ROOT` 와 같은 잣대이고
+# (거기는 조용히 짧아지는 쪽으로 고장 난다), 양쪽을 `tests/hooks` 가 잠근다.
+WIKI_ROOT = ".claude/wiki/"
+
 GIT_TIMEOUT_SEC = 20
 
 
@@ -168,7 +178,7 @@ def is_marked(namespace: str, session_id: str) -> bool:
 # **이것이 필요한 이유는 "누가 썼는가"로 판정하면 구멍이 난다는 것이다.** 기록 훅들은
 # "이번 세션에 기록했는가"를 PostToolUse 의 `tool_input.file_path` 로만 봤는데, 그 필드는
 # Write/Edit 에만 있다. Bash 로 쓴 기록은 **아무리 잘 써도 안 보인다** — 2026-08-19 에
-# plan_log/ 를 python heredoc 으로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도
+# .claude/wiki/plan_log/ 를 python heredoc 으로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도
 # 막혔다. 도구를 Write/Edit 로 쓰라고 지시해서 고칠 수는 없다. 모델에게 시키는 일은
 # 지켜질 때도 있고 아닐 때도 있다는 것이 이 장치 전체의 전제이기 때문이다.
 #

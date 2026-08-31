@@ -70,7 +70,7 @@ def _make_client(api_key: str | None) -> Any | None:
 # 그 공개 계약이 캐시 payload·화면·`query_log` 까지 번진다(`schemas/answer.py`).
 #
 # **그래서 이 자리가 call-level 로그를 고른 값어치를 그대로 보여준다** — 함수형 단계가
-# 인스턴스 usage 를 못 갖는데 로그는 가질 수 있다. 지금까지 `verify_log/` 에 생성 비용이
+# 인스턴스 usage 를 못 갖는데 로그는 가질 수 있다. 지금까지 `.claude/wiki/verify_log/` 에 생성 비용이
 # `생성 LLM 2회` 처럼 **횟수만** 남은 이유가 이것이었다.
 #
 # **재시도 루프(`agent/loop.py`)는 이 함수를 한 번만 부른다.** `step_generate` 가 유일한

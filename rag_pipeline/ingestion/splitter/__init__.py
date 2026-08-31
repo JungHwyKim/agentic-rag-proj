@@ -23,7 +23,7 @@
 `pipeline.py` 의 예약 주석은 `split → embed → index` 를 한 덩어리로 적어놨고, 청크를 소비할
 곳(embedding)이 아직 없다. `ingest()` 의 반환 타입은 곧 `backend` 의 `response_model` 이라
 청크를 내보내는 것은 splitter 결정이 아니라 API 결정이다. **빠뜨린 것이 아니라 결정이다** —
-근거는 `plan_log/splitter.md` 의 "합성 지점" 절에 있다.
+근거는 `.claude/wiki/plan_log/splitter.md` 의 "합성 지점" 절에 있다.
 
 ## chunk_id
 

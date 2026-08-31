@@ -282,7 +282,7 @@ splitter 가 청크를 끊을 경계를 얻는다(`splitter.md` 1절). 로더는
   보여 실측 오검출 2건이다(기하 판정은 0건). 판정용 셀 행 수는 `metadata` 사설 키로 나르고
   `detect_regions()` 가 지운다 — **그 키가 공개 스키마로 새면 지적한다**
 - **이 둘을 외부 API 로 대신하자는 제안이 나오면 기각한다.** 핸들러가 리전 하나의 blob 만
-  보내 LlamaParse 는 조각 하나밖에 못 본다. 근거는 `plan_log/표-경로.md`
+  보내 LlamaParse 는 조각 하나밖에 못 본다. 근거는 `.claude/wiki/plan_log/표-경로.md`
 
 ## 5. 새 포맷을 추가했다면 등록 4곳을 센다
 

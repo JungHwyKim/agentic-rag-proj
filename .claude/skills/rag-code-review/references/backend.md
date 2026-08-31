@@ -131,7 +131,7 @@
 ## 5. 게으른 getter와 기동 워밍업 — 되돌리면 조용히 깨지는 것 여섯
 
 `routes/query.py` 의 `_embedder`·`_bm25`·`_reranker` 와 `warm_up()`, `main.py` 의 lifespan
-스레드에 적용한다. 근거는 `verify_log/2026-08-26-{첫질의-대표값,기동-워밍업}.md` 다.
+스레드에 적용한다. 근거는 `.claude/wiki/verify_log/2026-08-26-{첫질의-대표값,기동-워밍업}.md` 다.
 
 - **`warmup_on_startup` 의 기본값을 켜짐으로 바꾸지 않는다.** `tests/api` 의 일부가
   `with TestClient(...)` 로 **lifespan 을 진짜로 돌린다**(`test_query_route.py` ·
@@ -164,7 +164,7 @@
 ## 6. 판정(verdict)이 화면·로그로 나가는 길 — 되돌리면 조용히 깨지는 것 셋
 
 `routes/query.py:ask()` · `core/query_log.py` · `templates/_answer.html` 에 적용한다.
-근거는 `task_log/2026-08-27-판정-화면배선.md` 다.
+근거는 `.claude/wiki/task_log/2026-08-27-판정-화면배선.md` 다.
 
 - **Evaluator 를 `app.state` 싱글턴으로 "정리"하지 않는다.** 위 5절의 셋과 달리 여기는
   **질의마다** 만드는 것이 결정이다 — 가중치가 없어 만드는 값이 사실상 0 이고, 싱글턴이면
@@ -183,7 +183,7 @@
 ## 7. 재작성(rewrite) 흔적 — 위 6절과 같은 규칙, 한 곳만 반대다
 
 `rag_pipeline/schemas/answer.py` · `rag_pipeline/query.py` · `core/query_log.py` ·
-`templates/_answer.html` 에 적용한다. 근거는 `task_log/2026-08-27-재작성-흔적.md` 다.
+`templates/_answer.html` 에 적용한다. 근거는 `.claude/wiki/task_log/2026-08-27-재작성-흔적.md` 다.
 
 - **`Answer.rewrite` 를 `rewritten: str` 로 "펴지" 않는다.** `query` 와 `mode` 가 한 덩어리인
   이유는 **화면 문구가 mode 에서 갈리기** 때문이다 — `fuse` 는 원 질의 갈래도 함께 돌았으므로
@@ -211,7 +211,7 @@
 ## 8. 질의 로그의 `source` — 「정리」가 곧 이 칸을 무의미하게 만든다
 
 `routes/query.py:ask()` · `core/query_log.py` 에 적용한다.
-근거는 `task_log/2026-08-28-답변캐시-exact.md` 다.
+근거는 `.claude/wiki/task_log/2026-08-28-답변캐시-exact.md` 다.
 
 - **합법값을 화이트리스트로 좁히지 않는다.** 제일 그럴듯한 「정리」인데, 모르는 값을 `user`
   로 접으면 **오타 하나가 측정 트래픽을 실사용으로 세게 한다** — 이 칸이 존재하는 이유가
@@ -235,7 +235,7 @@
 
 `routes/query.py:ask()` · `rag_pipeline/query.py` · `core/query_log.py` ·
 `templates/_answer.html` · `rag_pipeline/answer_cache/fingerprint.py` 에 적용한다.
-근거는 `task_log/2026-08-29-재시도루프-배선-모델스위치.md` 다.
+근거는 `.claude/wiki/task_log/2026-08-29-재시도루프-배선-모델스위치.md` 다.
 
 - **`answer_question_with_retries()` 를 `answer_question()` 의 인자 스위치로 접지 않는다.**
   제일 그럴듯한 「중복 제거」인데, 두 함수의 계약이 **반대**다 — 이쪽은 *판정이 답변을 안
@@ -264,7 +264,7 @@
   문맥 초과 실패 0건**이고, 근거 블록은 `top_k` 에 선형이다(5 에서 최대 5,908자 · 10 에서
   11,029자). 그래서 **「자를 값을 정하자」는 제안도 근거가 없다** — 재판정 조건은 둘 다
   관측 가능한 사건이다(생성이 문맥 초과로 실패하거나 `generation_top_k` 를 5~10 밖으로
-  크게 키울 때). 근거는 `verify_log/2026-08-29-근거예산-값.md` 와 `agent/context.py` docstring
+  크게 키울 때). 근거는 `.claude/wiki/verify_log/2026-08-29-근거예산-값.md` 와 `agent/context.py` docstring
 - **화면 재시도 줄에서 `answered` 를 빼지 않는다.** *"실패 사유만 보여주면 된다"* 가
   그럴듯한데, `count > 0` 이면서 `answered` 인 회차가 바로 **다시 찾아 근거를 채운 성공
   사례**다. 빼면 실패한 재시도만 남아 루프가 손해만 보는 것처럼 읽힌다. 반대로 `count == 0`

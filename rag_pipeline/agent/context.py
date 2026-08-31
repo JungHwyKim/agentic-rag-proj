@@ -46,7 +46,7 @@ CLAUDE.md). splitter 의 `max_chunk_chars` 가 문자인 것과 같은 근거다
 
 그래서 **재판정 조건이 둘이고 둘 다 관측 가능한 사건이다**: 생성이 문맥 초과로 한 번이라도
 실패하거나, `generation_top_k` 를 지금 관측된 범위(5~10) 밖으로 크게 키울 때.
-수치는 `verify_log/2026-08-29-근거예산-값.md`.
+수치는 `.claude/wiki/verify_log/2026-08-29-근거예산-값.md`.
 """
 
 from __future__ import annotations

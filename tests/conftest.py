@@ -145,7 +145,7 @@ def offline_config(tmp_path: Path) -> IngestConfig:
     # 모드 한 줄이 기본 pytest 에서 캐시를 켜버린다. **필드를 더한 회차가 이 핀을 함께 넓히지
     # 않으면 핀이 아무 에러 없이 불완전해지는 것**이 요점이고, 그것은 2026-08-25 에
     # EVAL_EMBEDDINGS["baseline"] 이 embedding_provider 로 겪은 일과 같은 종류다
-    # (evaluation/config.py 의 baseline 주석 · plan_log/시맨틱-캐시.md 6회차)
+    # (evaluation/config.py 의 baseline 주석 · .claude/wiki/plan_log/시맨틱-캐시.md 6회차)
     object.__setattr__(
         config,
         "_answer_cache",

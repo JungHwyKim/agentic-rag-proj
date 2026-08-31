@@ -13,21 +13,21 @@
 
   PostToolUse (matcher: Skill|Write|Edit)
     plan-log 스킬이 호출되면 `.git/claude_plan_log_active/<session_id>` 마커를 만든다.
-    "이 세션은 설계 논의 세션"이라는 표시다. `plan_log/` 아래에 쓰면 별도로
+    "이 세션은 설계 논의 세션"이라는 표시다. `.claude/wiki/plan_log/` 아래에 쓰면 별도로
     `claude_plan_log_written` 마커를 만든다 — "이번 세션에 실제로 기록했다"는 표시다.
 
   Stop
     설계 논의 표시가 있는데 기록이 없으면 종료코드 2 로 막는다. **기록 여부는 두 경로로
-    본다** — 위의 마커, 그리고 세션 시작 이후 `plan_log/` 아래 파일의 mtime 이다.
+    본다** — 위의 마커, 그리고 세션 시작 이후 `.claude/wiki/plan_log/` 아래 파일의 mtime 이다.
 
 Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립트로 확인했다 —
 `{"name":"Skill","input":{"skill":"rag-code-review"}}` 형태로 남는다. 즉 tool_name 은
 "Skill", 스킬명은 tool_input.skill 이다.
 
-**기록 여부를 `git status` 로 보지 않는 이유.** 처음에는 `plan_log/` 에 변경이 하나라도
+**기록 여부를 `git status` 로 보지 않는 이유.** 처음에는 `.claude/wiki/plan_log/` 에 변경이 하나라도
 있으면 통과시켰는데, 그 판정은 세션을 구분하지 못한다. 지난 세션이 남긴 미커밋 기록이
 작업트리에 있으면 이번 세션이 한 줄도 안 써도 통과한다. 2026-08-17 에 실제로 그 상태를
-발견했다 — `plan_log/` 에 미커밋 3건이 쌓여 검사가 통째로 무력화돼 있었다. 기록이 밀릴수록
+발견했다 — `.claude/wiki/plan_log/` 에 미커밋 3건이 쌓여 검사가 통째로 무력화돼 있었다. 기록이 밀릴수록
 검사가 더 헐거워지니 방향이 정반대다. 표시를 만드는 수법이 이미 여기 있었으므로 그대로
 한 칸 더 쓴다.
 
@@ -35,7 +35,7 @@ Skill 호출을 PostToolUse 로 잡을 수 있다는 건 실제 트랜스크립�
 같다. 모델에게 시키는 일은 지켜질 때도 있고 아닐 때도 있지만, 훅은 하네스가 돌린다.
 
 **마커만으로는 부족하다는 것이 2026-08-19 에 드러났다.** 기록 마커는 PostToolUse 의
-`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있다. 그래서 `plan_log/` 를
+`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있다. 그래서 `.claude/wiki/plan_log/` 를
 Bash(python heredoc)로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도 막혔다.
 같은 전제가 여기에도 걸린다 — "기록은 Write/Edit 로 쓰라"고 지시해서 고칠 수는 없다.
 그래서 도구가 아니라 **파일이 실제로 바뀌었는가**를 함께 본다(`_hookutil.wrote_under`).
@@ -56,8 +56,8 @@ import _hookutil
 # 이 스킬이 호출된 세션을 설계 논의 세션으로 본다
 SKILL_NAME = "plan-log"
 
-# 기록이 남는 곳
-LOG_PREFIX = "plan_log/"
+# 기록이 남는 곳. 폴더 이름은 그대로이고 뿌리만 `_hookutil.WIKI_ROOT` 가 준다
+LOG_PREFIX = _hookutil.WIKI_ROOT + "plan_log/"
 
 # 설계 논의 세션 표시
 ACTIVE_NS = "claude_plan_log_active"
@@ -100,14 +100,14 @@ _CODE_PHRASES = (
 
 HINT = (
     "[plan-log] 설계를 정하는 질문으로 보입니다. 맞으면 plan-log 스킬로 논의를 진행하고, "
-    "일단락되면 plan_log/<기능>.md 에 회차를 남기세요. "
+    "일단락되면 .claude/wiki/plan_log/<기능>.md 에 회차를 남기세요. "
     "설계 질문이 아니면 이 줄을 무시하세요."
 )
 
 REASON = (
-    "설계 논의를 했는데 plan_log/ 에 기록이 없습니다.\n\n"
-    "plan-log 스킬의 형식대로 plan_log/<기능>.md 에 이번 회차를 덧붙이고 "
-    "맨 위 '확정된 것'과 '미결'을 갱신한 뒤 마치세요. plan_log/INDEX.md 도 함께 손봅니다.\n"
+    "설계 논의를 했는데 .claude/wiki/plan_log/ 에 기록이 없습니다.\n\n"
+    "plan-log 스킬의 형식대로 .claude/wiki/plan_log/<기능>.md 에 이번 회차를 덧붙이고 "
+    "맨 위 '확정된 것'과 '미결'을 갱신한 뒤 마치세요. .claude/wiki/plan_log/INDEX.md 도 함께 손봅니다.\n"
     "제일 중요한 건 **기각한 안과 기각 이유**, 그리고 **아직 못 정한 것과 무엇을 재야 "
     "정해지는지**입니다. 그게 다음 논의의 시작점이 됩니다.\n"
     "남길 논의가 아니었으면 SKIP_PLANLOG=1 로 건너뛸 수 있습니다.\n"
@@ -125,7 +125,7 @@ def _is_plan_log_skill(payload: dict) -> bool:
     return name.rsplit(":", 1)[-1] == SKILL_NAME
 
 
-# 이번 도구 호출이 plan_log/ 아래에 쓴 것인가
+# 이번 도구 호출이 .claude/wiki/plan_log/ 아래에 쓴 것인가
 def _wrote_plan_log(payload: dict) -> bool:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):

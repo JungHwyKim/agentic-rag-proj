@@ -63,7 +63,7 @@ def test_htmx_is_vendored(client: TestClient):
 
 
 # 업로드는 더 이상 목업이 아니다. index_document() 가 store 를 인자로 받게 되면서
-# startup 싱글턴과의 충돌이 풀렸다 (plan_log/backend.md 3회차).
+# startup 싱글턴과의 충돌이 풀렸다 (.claude/wiki/plan_log/backend.md 3회차).
 # 파일을 고르는 즉시 보내므로 트리거가 change 이고, 별도 전송 버튼이 없다
 def test_upload_posts_to_index_endpoint(client: TestClient):
     body = client.get("/").text
@@ -222,7 +222,7 @@ def test_vendored_htmx_never_swaps_on_204():
 
 
 # htmx 는 4xx/5xx 를 기본적으로 swap 하지 않는다 — 이 리스너가 그것을 뒤집는다.
-# 없으면 서버가 오류 조각을 보내도 화면에는 아무것도 안 뜬다 (main.py · plan_log/backend.md 5회차)
+# 없으면 서버가 오류 조각을 보내도 화면에는 아무것도 안 뜬다 (main.py · .claude/wiki/plan_log/backend.md 5회차)
 def test_error_swap_listener_present(client: TestClient):
     body = client.get("/").text
 

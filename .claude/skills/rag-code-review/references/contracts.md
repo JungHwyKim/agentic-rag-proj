@@ -90,7 +90,7 @@ content_hash(blob, salt=f"llamaparse:{tier}:{version}")     # table_llamaparse.p
 
 - **새 유료 단계에 로그가 없다 → Critical.** `usage` 인스턴스를 만들어도 그것을 읽는
   코드가 없으면 비용이 0으로 사라진다. `generation/answer.py` 가 **함수라 인스턴스를 못
-  갖고** 그래서 `verify_log/` 에 *"생성 LLM 2회"* 처럼 횟수만 남았던 자리다
+  갖고** 그래서 `.claude/wiki/verify_log/` 에 *"생성 LLM 2회"* 처럼 횟수만 남았던 자리다
 - **세 상태를 다 남기는가** — `call`·`cache_hit`·`failed`. 성공만 남기면 「얼마 아꼈나」와
   「한도에 막혔나」를 못 낸다. 뒤엣것이 429 사고를 가른 신호다
 - **로컬·무료 갈래는 안 부른다.** 부르면 문서 하나 색인에 수백 줄이 쌓인다

@@ -108,7 +108,7 @@ def test_vector_changing_fields_do_move_the_salt(field: str) -> None:
 
 # **provider 는 어느 쪽도 안 움직인다.** 위 대조는 '같이 움직인다'만 보므로 방향을 못 박는다 —
 # 나중에 둘 다에 provider 를 더하면 위 테스트는 통과하지만 이것이 실패한다.
-# 그때는 이 테스트가 아니라 plan_log/embedding.md 3회차의 결정을 먼저 다시 본다
+# 그때는 이 테스트가 아니라 .claude/wiki/plan_log/embedding.md 3회차의 결정을 먼저 다시 본다
 def test_provider_moves_neither_derivation() -> None:
     indexing = IndexingConfig(qdrant_path=Path("x"))
     base = EmbeddingConfig(openai_api_key=None)

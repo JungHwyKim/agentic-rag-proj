@@ -11,7 +11,7 @@
 | 들어오는 것 | `rag_pipeline/schemas/document.py` (`ParsedDocument`·`Element`) |
 | 나가는 것 | `rag_pipeline/schemas/chunk.py` (`Chunk`) |
 | 앞 단계가 실제로 내놓는 것 | `cleaner.md`, `loader.md` 의 제목 승격 절 |
-| 왜 이 설계인가 | `plan_log/splitter.md`, `task_log/2026-08-17-splitter-청킹단계.md` |
+| 왜 이 설계인가 | `.claude/wiki/plan_log/splitter.md`, `.claude/wiki/task_log/2026-08-17-splitter-청킹단계.md` |
 
 ## 1. 제일 자주 나올 오해 — "자르는 단계"로 읽는 것
 
@@ -45,7 +45,7 @@
 
 근거: `backend/app/api/routes/documents.py` 가 `response_model=ParsedDocument` 로 `ingest()`
 결과를 그대로 반환하므로 반환 타입이 곧 공개 HTTP 응답 스키마다. 자세한 것은
-`plan_log/splitter.md` "합성 지점" 절.
+`.claude/wiki/plan_log/splitter.md` "합성 지점" 절.
 
 **embedding 이 생겼다는 것은 이 결정을 뒤집을 근거가 아니다.** 그쪽도 같은 이유로
 `ingest()` 밖에 있어(`references/embedding.md` 3절) 벡터를 소비할 곳이 없기는 마찬가지다.
@@ -69,11 +69,11 @@
 지적이 아니라 **"확인 필요"** 로 올린다.
 
 - **청크 크기 상한(1200)과 겹침(150)은 임시값이다.** 근거가 생기는 시점은 정답 질의 세트가
-  생길 때다(`plan_log/평가-세트.md`). "512가 낫다" 같은 남의 실측을 근거로 쓰지 않는다
+  생길 때다(`.claude/wiki/plan_log/평가-세트.md`). "512가 낫다" 같은 남의 실측을 근거로 쓰지 않는다
 - ~~크기 단위가 문자다~~ — **닫혔다.** `text-embedding-3-small`(cl100k_base)로 재보니 청크의
   문자/토큰 비율이 중앙값 1.03~1.09 · 최소 0.90 이라 사실상 1:1 이고, 최대 청크가 1,201토큰으로
   모델 입력 상한 8191 에 한참 못 미친다. **문자로 유지한다** — 토큰으로 바꾸자는 제안은
-  근거가 없으니 승인하지 않는다 (`references/embedding.md`, `verify_log/2026-08-18-embedding.md`)
+  근거가 없으니 승인하지 않는다 (`references/embedding.md`, `.claude/wiki/verify_log/2026-08-18-embedding.md`)
 - **표지·간지 장식이 제목으로 승격돼 `heading_path` 에 남는다.** 알려진 미결이고 규칙을
   일부러 안 만들었다 — "첫 쪽 제외"류는 표지가 여러 쪽인 문서에서 깨진다
 - **excel/csv 를 못 쟀다.** CSV 는 파일 전체가 표 하나, Excel 은 시트당 표 하나에

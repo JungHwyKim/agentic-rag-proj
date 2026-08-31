@@ -23,11 +23,23 @@ from openwork import collect as oc
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+# 기록 폴더가 실제로 앉는 자리를 **수집기 상수에서 받는다.**
+#
+# 경로를 베껴 두면 구조가 바뀔 때 이 파일이 통째로 빨개지는데, 그때 깨진 것은 수집기가
+# 아니라 테스트가 베낀 경로다. 상수에서 받으면 이 파일이 잠그는 것이 **경로**가 아니라
+# *"설정된 자리에서 모으고, 어긋나면 소리낸다"* 라는 **동작**이 된다
+def _wiki(root: Path) -> Path:
+    path = root / oc.WIKI_ROOT
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 # 최소한의 기록 저장소를 만든다. 실제 규약과 같은 모양이어야 검사가 뜻을 갖는다
 @pytest.fixture
 def fake_repo(tmp_path: Path) -> Path:
-    plan = tmp_path / "plan_log"
-    task = tmp_path / "task_log"
+    wiki = _wiki(tmp_path)
+    plan = wiki / "plan_log"
+    task = wiki / "task_log"
     plan.mkdir()
     task.mkdir()
     (plan / "INDEX.md").write_text("# 색인\n", encoding="utf-8")
@@ -62,7 +74,7 @@ def fake_repo(tmp_path: Path) -> Path:
 
 # `## 미결` 만 뽑고 이웃 절은 안 딸려 온다. 딸려 오면 확정된 것이 미완으로 뜬다
 def test_section_stops_at_next_heading(fake_repo: Path) -> None:
-    text = (fake_repo / "plan_log" / "검색.md").read_text(encoding="utf-8")
+    text = (oc.folder_path(fake_repo, "plan_log") / "검색.md").read_text(encoding="utf-8")
     section = oc.section_of(text, "미결")
     assert "임계값을 정한다" in section
     assert "여기 것은 안 센다" not in section
@@ -71,7 +83,7 @@ def test_section_stops_at_next_heading(fake_repo: Path) -> None:
 
 # 없는 절은 빈 문자열이다. 예외가 아니라 「그 파일에는 없다」가 맞는 답이다
 def test_missing_section_is_empty(fake_repo: Path) -> None:
-    text = (fake_repo / "plan_log" / "검색.md").read_text(encoding="utf-8")
+    text = (oc.folder_path(fake_repo, "plan_log") / "검색.md").read_text(encoding="utf-8")
     assert oc.section_of(text, "있을 리 없는 절") == ""
 
 
@@ -170,10 +182,13 @@ def test_followup_inherits_feature_from_file_link(fake_repo: Path) -> None:
 
 # 어느 기능도 안 가리키면 **묶음 미상으로 남긴다.** 아무 데나 붙이면 표가 틀린 자리를 가리킨다
 def test_followup_without_any_hint_stays_ungrouped(tmp_path: Path) -> None:
-    (tmp_path / "plan_log").mkdir()
-    (tmp_path / "task_log").mkdir()
-    (tmp_path / "plan_log" / "검색.md").write_text("## 미결\n\n- **a** — 정하려면: b\n", encoding="utf-8")
-    (tmp_path / "task_log" / "2026-08-07-무관.md").write_text(
+    wiki = _wiki(tmp_path)
+    (wiki / "plan_log").mkdir()
+    (wiki / "task_log").mkdir()
+    (wiki / "plan_log" / "검색.md").write_text(
+        "## 미결\n\n- **a** — 정하려면: b\n", encoding="utf-8"
+    )
+    (wiki / "task_log" / "2026-08-07-무관.md").write_text(
         "# 무관\n\n## 7. 남은 것\n\n- **아무것도 안 가리킨다**\n", encoding="utf-8"
     )
     result = oc.collect(tmp_path)
@@ -185,9 +200,20 @@ def test_followup_without_any_hint_stays_ungrouped(tmp_path: Path) -> None:
 # ---- 구조가 어긋났을 때 시끄러운가 ----
 
 
+# **위키 뿌리가 통째로 없으면 폴더 이름이 아니라 뿌리를 사유로 말한다.**
+#
+# 폴더 검사만 있으면 뿌리 하나가 틀렸을 때 사유가 "plan_log, task_log 가 없다"로 나와,
+# 폴더를 찾으러 가게 만든다 — 실제 원인은 그 위 한 칸이다. 구조를 또 정리할 때 제일 먼저
+# 밟는 자리라 사유를 따로 둔다
+def test_missing_wiki_root_raises_about_the_root(tmp_path: Path) -> None:
+    with pytest.raises(oc.OpenWorkConfigError) as excinfo:
+        oc.collect(tmp_path)
+    assert oc.WIKI_ROOT in str(excinfo.value)
+
+
 # **설정된 폴더가 없으면 죽는다.** 조용히 짧은 목록을 내놓는 것이 이 도구의 유일한 실패 모드다
 def test_missing_source_folder_raises(tmp_path: Path) -> None:
-    (tmp_path / "plan_log").mkdir()
+    (_wiki(tmp_path) / "plan_log").mkdir()
     with pytest.raises(oc.OpenWorkConfigError) as excinfo:
         oc.collect(tmp_path)
     assert "task_log" in str(excinfo.value)
@@ -195,7 +221,7 @@ def test_missing_source_folder_raises(tmp_path: Path) -> None:
 
 # 설정에 없는 기록 폴더(INDEX.md 를 품은 디렉터리)가 생기면 경고한다 — 구조 정리의 반대 방향이다
 def test_unknown_record_folder_warns(fake_repo: Path) -> None:
-    new = fake_repo / "design_log"
+    new = _wiki(fake_repo) / "design_log"
     new.mkdir()
     (new / "INDEX.md").write_text("# 색인\n", encoding="utf-8")
     result = oc.collect(fake_repo)
@@ -204,7 +230,7 @@ def test_unknown_record_folder_warns(fake_repo: Path) -> None:
 
 # 일부러 재료가 아닌 폴더는 경고하지 않는다. verify_log 가 매번 뜨면 경고를 안 읽게 된다
 def test_declared_non_source_does_not_warn(fake_repo: Path) -> None:
-    skipped = fake_repo / "verify_log"
+    skipped = _wiki(fake_repo) / "verify_log"
     skipped.mkdir()
     (skipped / "INDEX.md").write_text("# 색인\n", encoding="utf-8")
     assert oc.collect(fake_repo)["warnings"] == []
@@ -212,16 +238,19 @@ def test_declared_non_source_does_not_warn(fake_repo: Path) -> None:
 
 # INDEX.md 가 없는 보통 디렉터리는 기록 폴더가 아니다 — 헛경보는 무력화의 한 형태다
 def test_ordinary_directory_does_not_warn(fake_repo: Path) -> None:
-    (fake_repo / "data").mkdir()
+    (_wiki(fake_repo) / "data").mkdir()
     assert oc.collect(fake_repo)["warnings"] == []
 
 
 # 절 이름이 바뀌어 한 파일에서도 안 잡히면 경고한다. 안 하면 0건이 정상처럼 보인다
 def test_renamed_heading_warns(tmp_path: Path) -> None:
-    (tmp_path / "plan_log").mkdir()
-    (tmp_path / "task_log").mkdir()
-    (tmp_path / "plan_log" / "a.md").write_text("## 열린 질문\n\n- **x**\n", encoding="utf-8")
-    (tmp_path / "task_log" / "2026-08-01-b.md").write_text(
+    wiki = _wiki(tmp_path)
+    (wiki / "plan_log").mkdir()
+    (wiki / "task_log").mkdir()
+    (wiki / "plan_log" / "a.md").write_text(
+        "## 열린 질문\n\n- **x**\n", encoding="utf-8"
+    )
+    (wiki / "task_log" / "2026-08-01-b.md").write_text(
         "## 7. 남은 것\n\n- **y**\n", encoding="utf-8"
     )
     result = oc.collect(tmp_path)
@@ -251,10 +280,13 @@ def test_fold_expands_one_group(fake_repo: Path) -> None:
 
 # 묶음 미상은 맨 뒤로 간다. 실제 저장소에서 제일 큰 덩어리라 앞에 오면 표를 가린다
 def test_ungrouped_sorts_last(tmp_path: Path) -> None:
-    (tmp_path / "plan_log").mkdir()
-    (tmp_path / "task_log").mkdir()
-    (tmp_path / "plan_log" / "히읗.md").write_text("## 미결\n\n- **x**\n", encoding="utf-8")
-    (tmp_path / "task_log" / "2026-08-01-b.md").write_text(
+    wiki = _wiki(tmp_path)
+    (wiki / "plan_log").mkdir()
+    (wiki / "task_log").mkdir()
+    (wiki / "plan_log" / "히읗.md").write_text(
+        "## 미결\n\n- **x**\n", encoding="utf-8"
+    )
+    (wiki / "task_log" / "2026-08-01-b.md").write_text(
         "## 7. 남은 것\n\n- **y**\n", encoding="utf-8"
     )
     folded = oc.fold(oc.collect(tmp_path))
@@ -306,7 +338,7 @@ def test_cli_output_is_utf8_regardless_of_caller_encoding(fake_repo: Path) -> No
 
 # 설정이 어긋나면 CLI 도 조용히 성공하지 않는다
 def test_cli_fails_loudly_on_bad_config(tmp_path: Path) -> None:
-    (tmp_path / "plan_log").mkdir()
+    (_wiki(tmp_path) / "plan_log").mkdir()
     proc = subprocess.run(
         [sys.executable, "-m", "openwork.collect", "--root", str(tmp_path)],
         capture_output=True,

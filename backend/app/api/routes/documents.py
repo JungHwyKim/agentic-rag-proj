@@ -122,7 +122,7 @@ def _shadow(request: Request):  # noqa: ANN202 - tuple[VectorStore, Embedder] | 
 #
 # 부딪힐 때만 붙이는 안은 기각했다. 그러면 이름이 document_id 만으로 계산되지 않아
 # "이 문서의 원본이 어느 파일인가"를 알려면 디스크를 뒤지거나 매핑을 들여야 한다 —
-# 두 번째 진실이 생긴다 (plan_log/backend.md 7회차)
+# 두 번째 진실이 생긴다 (.claude/wiki/plan_log/backend.md 7회차)
 def _stored_name(document_id: str) -> str:
     suffix = "".join(
         "_" if ch in _UNSAFE_NAME_CHARS or ord(ch) < 32 else ch
@@ -300,7 +300,7 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
 #
 # **`{document_id}` 를 불투명 문자열로 받는다.** 지금은 원본 파일명(NFC)이지만 문서
 # 레지스트리가 생기면 명시적 id 로 바뀐다 — 여기서 파일명이라고 전제하지 않으면 그때
-# 공개 URL 이 안 깨진다 (plan_log/backend.md 7회차)
+# 공개 URL 이 안 깨진다 (.claude/wiki/plan_log/backend.md 7회차)
 @router.get("/documents/{document_id}/original")
 async def original_file(document_id: str) -> FileResponse:
     settings = get_settings()
@@ -337,7 +337,7 @@ async def original_file(document_id: str) -> FileResponse:
 #
 # `index_document()` 는 이미 `delete_by_document_id()` -> `upsert()` 순서라, 같은 키로 다시
 # 부르는 것이 곧 재색인이다. 7회차가 원본을 남기게 만들어 **입력도 이미 디스크에 있다.**
-# 여기서 새로 만드는 것은 그 둘을 잇는 입구 하나뿐이다 (plan_log/backend.md 8회차).
+# 여기서 새로 만드는 것은 그 둘을 잇는 입구 하나뿐이다 (.claude/wiki/plan_log/backend.md 8회차).
 #
 # ## 왜 전량이 아니라 문서 하나인가
 #
@@ -397,7 +397,7 @@ async def reindex_document(request: Request, document_id: str) -> Response:
 #
 # **둘을 함께 지우는 것이 계약이다** — 보이는 것과 실제가 어긋나면 사용자가 모르는 잔여물이
 # 생긴다. 디스크를 정리할 수단이 화면에 있어야 한다는 것도 같은 이유다
-# (plan_log/backend.md 7회차 — 상한·자동정리를 안 만든 대신 이 버튼이 있다)
+# (.claude/wiki/plan_log/backend.md 7회차 — 상한·자동정리를 안 만든 대신 이 버튼이 있다)
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(request: Request, document_id: str) -> Response:
     settings = get_settings()

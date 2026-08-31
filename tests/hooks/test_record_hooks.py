@@ -45,11 +45,23 @@ def hook_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+# 기록 폴더를 훅이 **실제로 보는 접두사**로 만든다.
+#
+# 경로 리터럴을 박지 않는 것이 요점이다 — 기록 폴더가 최상위에서 `.claude/wiki/` 아래로
+# 옮겨졌을 때 이 파일이 통째로 빨개졌는데, 그때 깨진 것은 훅이 아니라 테스트가 베껴 둔
+# 경로였다. 접두사를 상수에서 받으면 이 파일이 잠그는 것이 **경로**가 아니라
+# *"설정된 자리에 쓴 기록을 도구와 무관하게 알아보나"* 라는 **동작**이 된다
+def _log_dir(root: Path, prefix: str) -> Path:
+    path = root / prefix
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 # Bash 로 쓴 설계 기록도 기록으로 쳐야 한다. 이것이 2026-08-19 에 오탐을 낸 자리다
 def test_plan_log_written_by_bash_is_recognised(hook_root: Path) -> None:
     _start_session(hook_root)
-    (hook_root / "plan_log").mkdir()
-    (hook_root / "plan_log" / "이미지-경로.md").write_text("3회차", encoding="utf-8")
+    log_dir = _log_dir(hook_root, plan_log_check.LOG_PREFIX)
+    (log_dir / "이미지-경로.md").write_text("3회차", encoding="utf-8")
 
     assert plan_log_check._recorded_this_session(SESSION, trust_mtime=True) is True
 
@@ -57,8 +69,8 @@ def test_plan_log_written_by_bash_is_recognised(hook_root: Path) -> None:
 # 작업 기록 쪽도 같다
 def test_task_log_written_by_bash_is_recognised(hook_root: Path) -> None:
     _start_session(hook_root)
-    (hook_root / "task_log").mkdir()
-    (hook_root / "task_log" / "2026-08-19-무언가.md").write_text("회고", encoding="utf-8")
+    log_dir = _log_dir(hook_root, task_log_check.LOG_PREFIX)
+    (log_dir / "2026-08-19-무언가.md").write_text("회고", encoding="utf-8")
 
     assert task_log_check._recorded_this_session(SESSION, trust_mtime=True) is True
 
@@ -66,8 +78,7 @@ def test_task_log_written_by_bash_is_recognised(hook_root: Path) -> None:
 # 지난 세션이 남긴 미커밋 기록은 통과시키면 안 된다.
 # git status 판정이 정확히 여기서 무력화됐었다(2026-08-17, 미커밋 3건)
 def test_stale_record_from_previous_session_does_not_pass(hook_root: Path) -> None:
-    (hook_root / "plan_log").mkdir()
-    stale = hook_root / "plan_log" / "지난세션.md"
+    stale = _log_dir(hook_root, plan_log_check.LOG_PREFIX) / "지난세션.md"
     stale.write_text("지난 세션이 남긴 것", encoding="utf-8")
     # 세션은 그 파일이 쓰인 **뒤에** 시작한다
     _start_session(hook_root)
@@ -78,7 +89,7 @@ def test_stale_record_from_previous_session_does_not_pass(hook_root: Path) -> No
 # 아무것도 안 썼으면 당연히 False
 def test_no_record_is_not_recognised(hook_root: Path) -> None:
     _start_session(hook_root)
-    (hook_root / "plan_log").mkdir()
+    _log_dir(hook_root, plan_log_check.LOG_PREFIX)
 
     assert plan_log_check._recorded_this_session(SESSION, trust_mtime=True) is False
 
@@ -87,8 +98,9 @@ def test_no_record_is_not_recognised(hook_root: Path) -> None:
 # 모든 파일이 그보다 옛것이 되므로, 종전대로 마커만 본다
 def test_fresh_baseline_is_not_trusted(hook_root: Path) -> None:
     _start_session(hook_root)
-    (hook_root / "plan_log").mkdir()
-    (hook_root / "plan_log" / "새기록.md").write_text("회차", encoding="utf-8")
+    (_log_dir(hook_root, plan_log_check.LOG_PREFIX) / "새기록.md").write_text(
+        "회차", encoding="utf-8"
+    )
 
     assert plan_log_check._recorded_this_session(SESSION, trust_mtime=False) is False
 
@@ -109,9 +121,9 @@ def test_session_start_is_claimed_once(hook_root: Path) -> None:
 
 # 기준 시각이 없으면 판단할 수 없다는 뜻으로 None
 def test_wrote_under_without_baseline_is_unknown(hook_root: Path) -> None:
-    (hook_root / "plan_log").mkdir()
+    _log_dir(hook_root, plan_log_check.LOG_PREFIX)
 
-    assert _hookutil.wrote_under("plan_log/", "sess-no-baseline") is None
+    assert _hookutil.wrote_under(plan_log_check.LOG_PREFIX, "sess-no-baseline") is None
 
 
 # 실제 훅을 서브프로세스로 돌려, Bash 로만 기록한 세션이 Stop 에서 안 막히는지 본다.
@@ -119,7 +131,7 @@ def test_wrote_under_without_baseline_is_unknown(hook_root: Path) -> None:
 def test_stop_does_not_block_when_record_written_outside_write_tool(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
-    (root / "plan_log").mkdir()
+    (root / plan_log_check.LOG_PREFIX).mkdir(parents=True)
 
     hook = Path(_hookutil.__file__).parent / "plan_log_check.py"
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root), "PYTHONIOENCODING": "utf-8"}
@@ -187,7 +199,7 @@ def test_recordable_paths(path: str) -> None:
         # 스킬과 문서는 일부러 뺐다. 문서 갱신은 task-log 5단계 몫이다
         ".claude/skills/task-log/SKILL.md",
         "CLAUDE.md",
-        "plan_log/표-경로.md",
+        _hookutil.WIKI_ROOT + "plan_log/표-경로.md",
         # .py 가 아닌 것은 settings.json 말고 없다
         "rag_pipeline/README.md",
         ".claude/hooks/notes.txt",

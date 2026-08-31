@@ -154,7 +154,7 @@
    자리이고(200 을 먼저 보내면 _STATUS_BY_EXCEPTION 이 죽는다), 대신 여기서 한 번 뒤집는다.
 
    **isError 는 안 건드린다** — false 로 만들면 htmx:responseError 가 안 떠서 콘솔 진단이
-   사라진다. 그릴 것은 그리되 실패는 실패로 남는다 (plan_log/backend.md 5회차) #}
+   사라진다. 그릴 것은 그리되 실패는 실패로 남는다 (.claude/wiki/plan_log/backend.md 5회차) #}
 {# 업로드/색인 진행 표시. htmx 는 xhr 과 xhr.upload **둘 다**에 progress·loadend 를 걸어
    같은 이벤트가 두 번 흐른다 — 그래서 `sending` 플래그로 앞 구간만 퍼센트로 읽고, 첫
    loadend(=업로드 완료)에서 색인 구간으로 넘어간다. loaded>=total 로만 판정하면 파일이

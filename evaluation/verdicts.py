@@ -4,7 +4,7 @@
 
 `run_eval` 이 재는 것은 **순위**다(`hit@k`·`MRR`·`nDCG`). verdict 는 순위를 안 바꾸므로 저쪽
 지표는 판정이 맞든 틀리든 **똑같은 수를 낸다** — 리랭커를 `recall@후보수` 로 재면 차이가
-정의상 0 이던 것과 같은 함정이다(`plan_log/검색-생성.md` 10회차가 이 자를 가르라고 적었다).
+정의상 0 이던 것과 같은 함정이다(`.claude/wiki/plan_log/검색-생성.md` 10회차가 이 자를 가르라고 적었다).
 게다가 `run_eval` 의 리포트 JSON 은 `as_baseline()`·`compare_to_baseline()` 에 물려 있어,
 거기에 판정 지표를 얹으면 그 파일이 무엇을 재는 파일인지가 흐려진다.
 
@@ -256,7 +256,7 @@ def score_verdicts(
         "rewrite_profile": rewrite,
         "evaluator_profile": evaluator_name,
         # **프로필과 함께 프롬프트 판도 싣는다** — 판을 손으로 되돌려 재는 것이 이 축의 방식
-        # 이라(`plan_log/검색-생성.md` 13회차) 프로필 이름만으로는 어느 프롬프트로 잰 표인지
+        # 이라(`.claude/wiki/plan_log/검색-생성.md` 13회차) 프로필 이름만으로는 어느 프롬프트로 잰 표인지
         # 알 수 없다. 캐시 salt 가 이미 이 값으로 갈리므로 표도 같이 갈려야 앞뒤가 맞는다
         "prompt_version": EVALUATOR_PROMPT_VERSION,
         "queries": len(rows),
@@ -266,7 +266,7 @@ def score_verdicts(
         # **회계 게이트를 리포트에서 바로 읽을 수 있어야 한다.** 유료 갈래는
         # `rerank_calls + rerank_cache_hits == 질의 수` 인데 로컬 갈래는 그 둘이 **늘 0** 이라
         # `rerank_reranked / rerank_candidates + rerank_cache_hits` 를 봐야 하고, 그것도
-        # **등식이 아니라 하한**이다 (CLAUDE.md · verify_log/2026-08-28-…-localgpu.md 3-1)
+        # **등식이 아니라 하한**이다 (CLAUDE.md · .claude/wiki/verify_log/2026-08-28-…-localgpu.md 3-1)
         "rerank_calls": rerank_usage.api_calls if rerank_usage else None,
         "rerank_cache_hits": rerank_usage.cache_hits if rerank_usage else None,
         "rerank_reranked": rerank_usage.reranked if rerank_usage else None,

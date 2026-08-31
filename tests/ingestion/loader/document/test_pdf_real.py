@@ -41,7 +41,7 @@ AI_GUIDE_MARK_CELLS = 74
 # 그 74칸이 전부 **같은 벡터 경로**다. Vision 을 서명당 한 번만 부르는 근거다
 AI_GUIDE_MARK_SIGNATURES = 1
 # 17쪽 표의 행 라벨. 표 bbox 안(y=229.7)인데 `find_tables()` 가 그 자리에 셀 사각형을 안 내
-# 어느 청크에도 안 실리던 것이다(plan_log/표-경로.md 9회차 미결, 14회차에서 닫힘)
+# 어느 청크에도 안 실리던 것이다(.claude/wiki/plan_log/표-경로.md 9회차 미결, 14회차에서 닫힘)
 AI_GUIDE_LOST_ROW_LABEL = "책임성"
 AI_GUIDE_LOST_LABEL_PAGE = 17
 

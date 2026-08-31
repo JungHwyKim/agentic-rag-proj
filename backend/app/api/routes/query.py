@@ -124,7 +124,7 @@ def _reranker(app: FastAPI):  # noqa: ANN202 - Reranker 를 라우트 시그니�
 # 임베딩 캐시도 리랭크 캐시도 **텍스트로 키를 만든다.** 고정 문자열을 쓰면 워밍업이
 # **자기 입력을 캐시에 넣고**, 다음 기동부터는 그 캐시에 걸려 **모델을 안 올린다** —
 # 그런데 예외가 없어서 `warmup_errors` 는 빈 채이고 첫 질의만 다시 21.8초를 문다.
-# 실제로 그렇게 만들었다가 잡았다(`task_log/2026-08-26-기동-워밍업.md` 4절).
+# 실제로 그렇게 만들었다가 잡았다(`.claude/wiki/task_log/2026-08-26-기동-워밍업.md` 4절).
 #
 # 대가는 기동당 캐시 항목 2건(질문 벡터 1 · 점수 1)이고, 서버 재시작 수만큼만 쌓인다.
 #
@@ -149,7 +149,7 @@ def _warmup_candidates(text: str) -> list[RetrievedChunk]:
 #
 # **객체를 만드는 것으로는 아무것도 안 데워진다** — `get_embedder()`·`get_reranker()` 자체는
 # 0.002초이고 가중치는 **첫 사용**에 올라온다. 그래서 버리는 인코딩·채점을 실제로 돌린다.
-# 회수되는 것은 첫 질의 21.8초 중 약 19초다 (verify_log/2026-08-26-첫질의-대표값.md).
+# 회수되는 것은 첫 질의 21.8초 중 약 19초다 (.claude/wiki/verify_log/2026-08-26-첫질의-대표값.md).
 #
 # **저장소는 안 건드린다.** `embed_query()` 도 `rerank()` 도 qdrant 를 안 열어서, lifespan 이
 # 일부러 남겨 둔 게으름(*"색인이 아직 없으면 서버가 아예 안 뜬다"*)이 그대로 유지된다.
@@ -203,7 +203,7 @@ async def ask(request: Request, query: str = Form(...)) -> HTMLResponse:
         text,
         store=request.app.state.store,
         # **임베더도 threadpool 로 넘긴다** — 리랭커와 같은 이유인데 이쪽이 더 크다.
-        # 워밍업이 꺼져 있으면 첫 인코딩이 11.8~14.7초이고(verify_log/2026-08-26-첫질의-대표값.md)
+        # 워밍업이 꺼져 있으면 첫 인코딩이 11.8~14.7초이고(.claude/wiki/verify_log/2026-08-26-첫질의-대표값.md)
         # 그동안 이벤트 루프에서 하면 **서버 전체가 그만큼 멈춘다**
         embedder=await run_in_threadpool(embedder_for, request.app),
         config=cfg,
@@ -304,7 +304,7 @@ async def server_status(request: Request) -> HTMLResponse:
 async def document_list(request: Request) -> HTMLResponse:
     store = request.app.state.store
     # list_documents() 는 Protocol 이 아니라 QdrantStore 에만 있다 — backend 가 구체 타입을
-    # 아는 유일한 자리이고, 그 판단의 근거는 plan_log/backend.md 에 있다.
+    # 아는 유일한 자리이고, 그 판단의 근거는 .claude/wiki/plan_log/backend.md 에 있다.
     # 없는 구현체가 끼면 목록만 빈다(화면은 산다)
     lister = getattr(store, "list_documents", None)
     documents = await run_in_threadpool(lister) if lister is not None else []
@@ -379,7 +379,7 @@ def _mark_missing_originals(documents: list[dict]) -> list[dict]:
 #
 # **상한도 자동 정리도 안 만든 대신 이 숫자를 보여준다** — 값을 지금 정하면 관측 없는
 # 숫자가 되고, 자동 삭제는 사용자가 모르는 사이 원문만 사라지는 상태를 만든다.
-# 대신 얼마나 쓰는지 보이고 삭제 버튼을 손에 쥐어 준다 (plan_log/backend.md 7회차).
+# 대신 얼마나 쓰는지 보이고 삭제 버튼을 손에 쥐어 준다 (.claude/wiki/plan_log/backend.md 7회차).
 #
 # 폴더가 없으면 0 이다 — 아직 아무것도 안 올린 상태가 정상이라 예외로 만들지 않는다
 def _originals_megabytes() -> float:

@@ -3,7 +3,7 @@
   "무엇인가": "dense 검색의 기준값. 이후 모든 검색 비교가 이 값과의 차이로 판정된다.",
   "재는 방법": "python -m evaluation.run_eval --dense --format pdf --k 20 --report-k 10 --save-baseline",
   "설정": "settings 블록이 그 실행의 고정 설정이다 (evaluation/config.py).",
-  "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. --save-baseline 없이 돌리면 질의별 승·패·무가 나오므로 그것을 읽고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다.",
+  "갱신 규칙": "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. --save-baseline 없이 돌리면 질의별 승·패·무가 나오므로 그것을 읽고, 의도한 변화일 때만 갱신하며 근거를 .claude/wiki/task_log/ 에 남긴다.",
   "주의": "입력 파일은 tests/fixtures/ 에 있고 gitignore 다 — 파일이 없는 환경에서는 재현할 수 없다. 그리고 image_handler=hybrid 라 .cache/content 를 지우면 Vision 응답이 달라져 이 값이 조용히 흔들린다. indexed 의 vision_calls 를 함께 보는 이유다.",
   "갱신 이력": []
  },

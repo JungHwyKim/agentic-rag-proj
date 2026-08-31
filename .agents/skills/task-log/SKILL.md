@@ -1,6 +1,6 @@
 ---
 name: task-log
-description: agentic-rag-proj 의 작업 기록을 task_log/ 에 남긴다. 설계 결정(고른 것과 **버린 것과 버린 이유**), 실패 분석(잘못 짚었다가 되돌린 시도), 그리고 그 결정의 근거가 된 실측값을 정해진 형식으로 적는다. 사용자가 "작업 기록", "기록 남겨", "정리해줘", "task_log 써줘", "이번 작업 문서로 남겨", "무슨 결정 했는지 적어둬" 같은 말을 할 때 쓴다. 검증에서 나온 **측정값 자체**(ruff·pytest·파싱 실측표·비용)를 남기는 것은 `verify-log` 이고, 이 스킬은 2단계에서 그것을 부른 뒤 3절에 링크한다. Stop 훅(task_log_check.py)이 "소스를 고쳤는데 task_log/ 에 기록이 없습니다"라며 종료를 막았을 때도 반드시 이 스킬을 쓴다. rag_pipeline/ 또는 backend/ 를 고친 작업, 그리고 하네스 동작부(.Codex/hooks/ · settings.json)를 고친 작업을 마무리할 때, 특히 접근을 한 번 되돌렸거나 실측으로 수치를 얻었을 때 쓴다.
+description: agentic-rag-proj 의 작업 기록을 .claude/wiki/task_log/ 에 남긴다. 설계 결정(고른 것과 **버린 것과 버린 이유**), 실패 분석(잘못 짚었다가 되돌린 시도), 그리고 그 결정의 근거가 된 실측값을 정해진 형식으로 적는다. 사용자가 "작업 기록", "기록 남겨", "정리해줘", "task_log 써줘", "이번 작업 문서로 남겨", "무슨 결정 했는지 적어둬" 같은 말을 할 때 쓴다. 검증에서 나온 **측정값 자체**(ruff·pytest·파싱 실측표·비용)를 남기는 것은 `verify-log` 이고, 이 스킬은 2단계에서 그것을 부른 뒤 3절에 링크한다. Stop 훅(task_log_check.py)이 "소스를 고쳤는데 .claude/wiki/task_log/ 에 기록이 없습니다"라며 종료를 막았을 때도 반드시 이 스킬을 쓴다. rag_pipeline/ 또는 backend/ 를 고친 작업, 그리고 하네스 동작부(.Codex/hooks/ · settings.json)를 고친 작업을 마무리할 때, 특히 접근을 한 번 되돌렸거나 실측으로 수치를 얻었을 때 쓴다.
 ---
 
 # task-log
@@ -9,7 +9,7 @@ description: agentic-rag-proj 의 작업 기록을 task_log/ 에 남긴다. 설�
 그래서 이 기록의 값어치는 대부분 2절(설계 결정)과 4절(실패 분석)에서 나온다. "무엇을
 했는가"는 `git log` 로 알 수 있으니 거기에 분량을 쓰지 않는다.
 
-견본은 `task_log/routing-diff-시행령개정안.md` 다. 형식이 헷갈리면 그 파일을 읽는다.
+견본은 `.claude/wiki/task_log/routing-diff-시행령개정안.md` 다. 형식이 헷갈리면 그 파일을 읽는다.
 
 ## 1단계 — 범위를 확정한다
 
@@ -37,7 +37,7 @@ git diff HEAD
 코드가 또 바뀌었을 수 있고, 기록에 틀린 숫자가 박히면 기록 전체를 못 믿게 된다.
 
 `Skill` 도구로 **`verify-log`** 를 부른다. 재는 절차와 기록 형식은 거기 있고 **여기
-복제하지 않는다.** 그쪽이 `verify_log/YYYY-MM-DD-<주제>.md` 를 만들고, 이 기록의 3절은
+복제하지 않는다.** 그쪽이 `.claude/wiki/verify_log/YYYY-MM-DD-<주제>.md` 를 만들고, 이 기록의 3절은
 그 파일을 링크한다 — 같은 작업이면 **파일명을 맞춰 둔다.**
 
 측정값이 저쪽에 사는 이유는 회차 때문이다. 이 기록은 작업당 하나라 회차 간 비교가 사람
@@ -53,7 +53,7 @@ git diff HEAD
 
 ## 3단계 — 파일을 쓴다
 
-경로: `task_log/YYYY-MM-DD-<주제>.md`
+경로: `.claude/wiki/task_log/YYYY-MM-DD-<주제>.md`
 (예: `2026-08-16-hwpx-가로쪽-기하보정.md`)
 
 주제는 파일명만 보고 무슨 작업인지 알 수 있게 짓는다. `작업정리`, `수정사항` 같은
@@ -86,7 +86,7 @@ git diff HEAD
 
 ## 3. 지표
 
-전문은 [verify_log/YYYY-MM-DD-<주제>.md](../verify_log/YYYY-MM-DD-<주제>.md) 에 있다.
+전문은 [.claude/wiki/verify_log/YYYY-MM-DD-<주제>.md](../verify_log/YYYY-MM-DD-<주제>.md) 에 있다.
 여기에는 **이 작업을 대표하는 수치 한두 개**만 남긴다.
 
 - pytest 268 -> 337 / 회귀 기준선 documents 6건 동일
@@ -137,7 +137,7 @@ git diff HEAD
 
 ## 4단계 — INDEX.md 에 한 줄 추가
 
-`task_log/INDEX.md` 최신 항목이 위로 오게 한 줄 추가하고 끝낸다.
+`.claude/wiki/task_log/INDEX.md` 최신 항목이 위로 오게 한 줄 추가하고 끝낸다.
 
 ```markdown
 - [2026-08-16-hwpx-가로쪽-기하보정.md](2026-08-16-hwpx-가로쪽-기하보정.md) — 가로 쪽에서 본문 높이를 width 에서 얻도록 수정. 쪽 58->61

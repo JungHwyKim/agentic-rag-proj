@@ -25,7 +25,7 @@ Evaluator(근거가 충분한가)는 2026-08-26 에 들어왔고 **꺼진 채 �
   — `prompts.py` docstring
 - 모킹 이음새(`_make_client`) — `answer.py` · `evaluate.py` docstring
 - `GenerationError` 가 왜 예외 계열인가 — `rag_pipeline/exceptions.py`
-- 답변을 무엇으로 재나(아직 못 잰다) — `plan_log/backend.md` 미결
+- 답변을 무엇으로 재나(아직 못 잰다) — `.claude/wiki/plan_log/backend.md` 미결
 - 판정이 왜 `retrieve()` 안이 아닌가 / 실패가 왜 제3의 상태인가 / 왜 Protocol 이 없나
   — `evaluate.py` docstring
 - 판정 프롬프트가 왜 답을 안 쓰게 하나 / 하위 규칙을 왜 안 넣나 — `prompts.py` docstring

@@ -29,7 +29,7 @@ from evaluation.scoring import score_query
 # 사람이 쓴 질의 세트. 부정 예시가 사는 곳이라 기본 세트와 갈라 본다
 HUMAN_SET_PATH = QA_SET_PATH.parent / "qa_set_human.jsonl"
 
-# 세트 규모의 하한. `plan_log/평가-세트.md` 2회차의 50~80 중 아래쪽이고 **임시값이다** —
+# 세트 규모의 하한. `.claude/wiki/plan_log/평가-세트.md` 2회차의 50~80 중 아래쪽이고 **임시값이다** —
 # 비교 축이 여섯이라 이보다 적으면 축마다 유의성을 못 낸다는 것이 근거의 전부다
 MIN_ITEMS = 50
 
@@ -281,7 +281,7 @@ def test_must_labels_default_to_empty():
 
 
 # jsonl 에 적힌 라벨이 실제로 실린다. **둘이 따로 실린다는 것**이 요점이다 —
-# 한 칸으로 접으면 결정적인 값 축이 LLM 판정에 섞인다(`plan_log/평가-세트.md` 13회차)
+# 한 칸으로 접으면 결정적인 값 축이 LLM 판정에 섞인다(`.claude/wiki/plan_log/평가-세트.md` 13회차)
 def test_must_labels_are_read_from_json():
     item = QAItem.from_json({
         "query_id": "x-11", "query": "질문", "source_doc": "시행령-개정안-안내서",
@@ -295,7 +295,7 @@ def test_must_labels_are_read_from_json():
 
 # **13회차 결정을 잠그는 테스트다 — `must_*` 는 `reviewed_hash` 를 안 건드린다.**
 # 넣었으면 이미 검수된 43건의 도장이 전부 깨져 재검수를 강요하는데, 그것이
-# `plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"*
+# `.claude/wiki/plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"*
 # 며 라벨을 안 건드린 자리다. 도장이 둘인 것은 실수가 아니라 그 이유로 고른 것이다
 def test_must_labels_do_not_disturb_the_span_review_stamp():
     base = {
@@ -356,6 +356,62 @@ def test_moving_a_string_into_must_not_claim_is_caught_by_the_stamp():
 
     assert apart(kept) != apart(moved)
     assert bundled(kept) == bundled(moved), "묶은 지문은 이 편집을 못 잡는다"
+
+
+# **골든 답변 라벨의 도장도 `--check` 가 본다**(2026-08-29). 도장이 셋인 것은 되풀이가 아니라
+# 사람이 판단한 것이 셋이기 때문이다 — 여기서는 «필수 사실» 쪽을 고치고 도장을 안 고친 것을 잡는다
+def test_the_must_stamp_breaks_when_the_label_changes():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    original = next(i for i in items if i.must_points and i.must_reviewed_by == "human")
+
+    tampered = [dataclasses.replace(original, must_points=["몰래 바꾼 필수 사실"])]
+    problems = validate_items(tampered)
+    assert problems, "라벨을 바꿨는데 도장이 그대로 통과했다"
+    assert "필수 사실 라벨이 바뀌었다" in problems[0]
+
+
+# 같은 규칙이 「단정 금지」쪽에도 있고, **지문이 서로 독립이라 한쪽만 움직인다.**
+# 묶었다면 여기서 두 도장이 함께 깨져 무엇이 바뀌었는지 못 읽는다
+def test_the_must_not_claim_stamp_moves_alone():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    original = next(i for i in items if i.must_not_claim and i.must_points)
+
+    tampered = dataclasses.replace(original, must_not_claim=["몰래 바꾼 금지 항목"])
+    problems = validate_items([tampered])
+    assert len(problems) == 1, problems
+    assert "단정 금지 라벨이 바뀌었다" in problems[0]
+
+    # 같이 갱신하면 통과한다 — 막는 것이 목적이지 못 고치게 하는 것이 아니다(6회차)
+    fixed = dataclasses.replace(
+        tampered, must_not_claim_reviewed_hash=content_hash(tampered.query, tampered.must_not_claim)
+    )
+    assert not validate_items([fixed])
+
+
+# **부정 예시에 골든 답변 라벨을 달면 막는다.** 13회차가 «달면 *답할 수 없다* 가 두 곳에
+# 적힌다» 로 정한 것인데 **결정만 기록에 있고 코드가 안 보던 자리**였다
+def test_a_negative_may_not_carry_golden_answer_labels():
+    problems = validate_items([_negative(must_points=["담아야 할 것"])])
+    assert any("골든 답변 라벨이 달려 있다" in p for p in problems)
+
+    problems = validate_items([_negative(must_not_claim=["단정하면 안 되는 것"])])
+    assert any("골든 답변 라벨이 달려 있다" in p for p in problems)
+
+
+# **`pending` 은 문제가 아니다** — 기계가 제안하고 사람이 거르는 절차라 검수 대기가 정상이다.
+# 여기서 막으면 라벨을 제안하는 순간 `--check` 가 죽어 제안 자체를 못 한다
+def test_a_pending_label_is_not_a_problem():
+    item = QAItem(
+        query_id="x-14", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로쪽": 1},
+        reviewed_by="pending", must_not_claim=["아직 안 읽은 항목"],
+    )
+
+    assert not [p for p in validate_items([item]) if "단정 금지" in p]
 
 
 # 라벨이 붙은 레코드는 **자기 도장을 갖는다.** 사람이 안 본 라벨이 커밋되는 것과, 검수 뒤에

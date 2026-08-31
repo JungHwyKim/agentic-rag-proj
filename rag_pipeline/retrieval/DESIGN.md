@@ -1,6 +1,6 @@
 # Retrieval & Generation Pipeline — 설계서
 
-> **이 문서는 외부에서 가져온 원안이다.** 확정된 설계는 `plan_log/검색-생성.md` 이고,
+> **이 문서는 외부에서 가져온 원안이다.** 확정된 설계는 `.claude/wiki/plan_log/검색-생성.md` 이고,
 > 거기서 이 원안의 일부가 이미 기각됐다(평가 세트를 Phase 0 으로 올림 · tool 목록에서
 > Vision·LlamaParse 제외). 어긋나면 그쪽이 맞다.
 
@@ -10,7 +10,7 @@ Agentic RAG 시스템의 retrieval & generation 파트에 대한 설계 문서. 
 
 이 문서는 "왜 이렇게 설계했는지"만 다룬다. "어떻게 구현하는지"(코드, 라이브러리, 클래스 구조)는 `IMPLEMENTATION_SPEC.md`에, 스키마 그림은 `SCHEMA.html`에 있다.
 
-> **2026-08-22 정정.** 초안을 저장소의 기존 계약과 대조해 여섯 곳을 고쳤다 — 저장소(ChromaDB→qdrant), 평가 세트 순서(Phase 0 신설), tool 목록(Vision·LlamaParse 제외), `RetrievedChunk` 필드, 질의 시점 비용, 하네스 5곳. 무엇을 왜 골랐고 무엇을 기각했는지는 `plan_log/검색-생성.md` 1회차에 있다.
+> **2026-08-22 정정.** 초안을 저장소의 기존 계약과 대조해 여섯 곳을 고쳤다 — 저장소(ChromaDB→qdrant), 평가 세트 순서(Phase 0 신설), tool 목록(Vision·LlamaParse 제외), `RetrievedChunk` 필드, 질의 시점 비용, 하네스 5곳. 무엇을 왜 골랐고 무엇을 기각했는지는 `.claude/wiki/plan_log/검색-생성.md` 1회차에 있다.
 
 ## 2. 전체 아키텍처
 
@@ -38,7 +38,7 @@ Retriever 안에서 dense(qdrant)와 BM25(저장소 밖 인덱스)가 나뉘고 
 
 | 블록 | Phase | 근거 |
 |---|---|---|
-| **A0. 측정 기반** | **0. 정답 질의 세트** | **Phase 2·4·10 의 DoD 셋이 전부 라벨링 QA셋을 요구하는데 없었다.** 세트 없이는 hybrid 가 dense 보다 나은지, 리랭커가 값을 하는지를 못 잰다 — 근거 없는 값이 그대로 굳는다. `plan_log/평가-세트.md` 2회차 |
+| **A0. 측정 기반** | **0. 정답 질의 세트** | **Phase 2·4·10 의 DoD 셋이 전부 라벨링 QA셋을 요구하는데 없었다.** 세트 없이는 hybrid 가 dense 보다 나은지, 리랭커가 값을 하는지를 못 잰다 — 근거 없는 값이 그대로 굳는다. `.claude/wiki/plan_log/평가-세트.md` 2회차 |
 | A. 파운데이션 | 1. Core Contract/Schema | 이후 모든 phase가 이 계약에 맞춰 입출력을 주고받음. 가장 먼저 고정 |
 | B. Retrieval Quality Loop | 2. Retriever → 3. Reranker → 4. Evaluator → 5. Rewriter | 서로 강하게 얽힌 하나의 서브시스템. Agent/tool 레이어 없이도 독립적으로 Hit Rate@k, Recall@k 측정 가능 |
 | C. Agent 레이어 | 6. Tool Interface → 7. Agent State → 8. Planner/Router | 검증된 retrieval loop를 tool로 감싸고, 상태를 정의하고, 그 상태를 보고 판단하는 라우터를 순서대로 구성. Router는 Tool Interface와 Agent State 둘 다에 의존 |

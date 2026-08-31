@@ -35,13 +35,12 @@ original_files/
 .vscode/
 .idea/
 .codex/
-frontend/
 output/
 
 # 로컬 작업 지침과 프로젝트 컨텍스트
 /AGENTS.md
 /project_context/
-/plan_log/프로젝트-컨텍스트.md
+/.claude/wiki/plan_log/프로젝트-컨텍스트.md
 
 # backend/preview.py 산출물. 템플릿을 고치면 곧바로 낡아 어느 시점의 화면인지 알 수 없게 된다
 /preview.html

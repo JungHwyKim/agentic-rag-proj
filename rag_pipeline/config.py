@@ -52,14 +52,14 @@ class ContentRoutingConfig(BaseSettings):
 
     # --- 표 라우팅 ---
     # PDF/이미지의 표를 무엇으로 파싱할지. llamaparse 실패 시 항상 pymupdf로 폴백된다
-    # 기본값이 pymupdf 인 이유는 실측이다(2026-08-18, plan_log/표-경로.md 1회차).
+    # 기본값이 pymupdf 인 이유는 실측이다(2026-08-18, .claude/wiki/plan_log/표-경로.md 1회차).
     # 같은 문서를 두 경로로 청킹해 보니 LlamaParse 는 마크다운이 아니라 HTML 을 돌려주고,
     # 그러면 metadata["rows"] 를 못 얻어 splitter 가 헤더 반복을 못 하고 태그 한가운데를
     # 글자 단위로 자른다 — 시행령 PDF 표청크가 24→62 로 불고 그중 16개가 여는 태그 없는
     # 조각이었다. 무과금 pymupdf 쪽이 유효한 마크다운 표에 rows 까지 갖고 있다.
     # llamaparse 경로는 지우지 않았다. HTML→rows 복원이 붙으면 다시 볼 값이다.
     #
-    # `hybrid` 는 **승급**이다(2026-08-22, plan_log/표-경로.md 11회차). pymupdf 로 뽑되
+    # `hybrid` 는 **승급**이다(2026-08-22, .claude/wiki/plan_log/표-경로.md 11회차). pymupdf 로 뽑되
     # 빈 칸에 벡터 드로잉이 있는 표만 Vision 으로 올려 **그 빈 칸만** 채운다. 표를 다시
     # 읽는 것이 아니라 메우는 것이라 병합 셀·되붙이기·쪽 경계 결과가 그대로 남는다.
     # 신호가 필요한 이유: 체크 표시가 이미지도 텍스트도 아니라 extract() 로는 원리적으로
@@ -83,7 +83,7 @@ class ContentRoutingConfig(BaseSettings):
     # 12.8x15.2pt 장식 글리프가 115x127px 로 저장돼 픽셀 필터를 그냥 통과한다(실측).
     # 20pt 는 "16.7 이하가 전부 OCR 0~1자"에서, 8:1 은 진짜 내용 최대 5.9:1 과 띠 최소
     # 10.0:1 사이 1.7배 틈에서 나왔다. 두 신호가 각자 다른 것을 잡는다 — 20pt 는 정사각
-    # 글리프를, 비율은 크고 납작한 제목 띠를 잡는다. 근거는 plan_log/이미지-경로.md 2회차
+    # 글리프를, 비율은 크고 납작한 제목 띠를 잡는다. 근거는 .claude/wiki/plan_log/이미지-경로.md 2회차
     min_image_display_pt: float = 20.0
     max_image_aspect_ratio: float = 8.0
 
@@ -106,7 +106,7 @@ class ContentRoutingConfig(BaseSettings):
     #
     # **8은 한계값이 아니라 무릎이다.** 실측(2026-08-24, 47쪽 전면 스캔본)으로 워커를 늘릴 때
     # 직전 대비 -102.1/-62.1/-23.8/**-9.5**초이고, 16이 42.3초로 8(51.8초)보다 18% 빠르지만
-    # 같은 uvicorn 이 질의도 받는다. 근거는 `verify_log/2026-08-24-ocr-병렬화.md`.
+    # 같은 uvicorn 이 질의도 받는다. 근거는 `.claude/wiki/verify_log/2026-08-24-ocr-병렬화.md`.
     #
     # **전에는 일부러 안 열었다** — 그때 근거가 *"합법값이 실제로 갈리는 두 번째 경로가
     # 생긴 뒤에 연다"* 였다. 2026-08-26 에 그 경로가 생겼다: **발열**이다. Tesseract 는
@@ -168,7 +168,7 @@ class SplitterConfig(BaseSettings):
     # 청크 한 개의 상한. **임시값이고 실측 전이다.**
     # 실측상 텍스트 요소는 제일 긴 것이 554자라 이 상한이 텍스트에서는 거의 발화하지 않는다.
     # 실제로 걸리는 곳은 표다(시행령 안내서의 67행 표가 3,243자). 근거 있는 값으로 바꾸려면
-    # 정답 질의 세트가 필요하다 — plan_log/평가-세트.md
+    # 정답 질의 세트가 필요하다 — .claude/wiki/plan_log/평가-세트.md
     max_chunk_chars: int = 1200
 
     # 상한을 넘겨 쪼갠 구간에만 주는 겹침. **섹션 경계에는 주지 않는다** —
@@ -194,7 +194,7 @@ class EmbeddingConfig(BaseSettings):
     openai_api_key: str | None = None
 
     # 어느 구현체로 임베딩하나. **구현체가 둘이 되어서 여는 설정이다** — 하나뿐일 때는
-    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(plan_log/embedding.md 3회차).
+    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(.claude/wiki/plan_log/embedding.md 3회차).
     # `local` 은 sentence-transformers 경로다.
     #
     # **기본값이 `local` 인 것이 이 설정의 위험한 쪽이다** — 로컬 갈래는 **키가 없어도 돌아서**
@@ -206,7 +206,7 @@ class EmbeddingConfig(BaseSettings):
     # **실측으로 고른 값이다.** 같은 정답 세트 60건에서 `hit@10` 이 KURE-v1 **0.8500** vs
     # `text-embedding-3-small` **0.4833** 이고(miss 9 vs 31, `MRR` 0.5078 vs 0.2530),
     # 그래서 2026-08-25 에 갈아탔다 — 전에 여기 적혀 있던 *"임시값이고 실측 전"* 은 끝났다.
-    # 수치는 `verify_log/2026-08-25-융합-되돌리기.md`, 판단은 `plan_log/embedding.md` 5회차.
+    # 수치는 `.claude/wiki/verify_log/2026-08-25-융합-되돌리기.md`, 판단은 `.claude/wiki/plan_log/embedding.md` 5회차.
     # `provider="local"` 이라 HuggingFace 리포지터리 이름이다
     embedding_model: str = "nlpai-lab/KURE-v1"
 
@@ -222,7 +222,7 @@ class EmbeddingConfig(BaseSettings):
     # 생겨 예약해 뒀던 측정을 했다: 실제 청크 414개를 두 장치로 인코딩해 `1-cos` 최대
     # **1.354e-09** · 성분 최대 절대차 5.728e-06 · 노름 양쪽 1.0000000 이다(합성 입력
     # 200개에서는 `1-cos` 가 정확히 0이었다 — 실제 청크에서는 0이 아니지만 float32 오차
-    # 수준인 것은 같다). 그래서 **넣지 않는 것이 확정**이고, `verify_log/2026-08-26-
+    # 수준인 것은 같다). 그래서 **넣지 않는 것이 확정**이고, `.claude/wiki/verify_log/2026-08-26-
     # 스레드-발열-GPU.md` 가 근거다.
     #
     # 넣었다면 GPU 로 옮기는 순간 임베딩 캐시가 전량 미스가 되고 컬렉션이 갈려 옛 색인이
@@ -284,7 +284,7 @@ class RetrievalConfig(BaseSettings):
     )
 
     # 각 경로(dense·BM25)에서 뽑아 RRF 로 합칠 후보 수. **임시값이고 실측 전이다** —
-    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(plan_log/검색-생성.md 2회차).
+    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(.claude/wiki/plan_log/검색-생성.md 2회차).
     # 50 은 새로 지어낸 수가 아니라 schemas/retrieval.py docstring 이 이미 쓴 수이고,
     # 문서당 청크가 45~104개이므로 대략 한 문서치다.
     # **두 경로에 같은 값을 쓴다** — 한쪽만 길면 RRF 가 긴 쪽에 유리해져, 기울기가 숫자가
@@ -328,7 +328,7 @@ class RerankConfig(BaseSettings):
     # 무슨 모델로. **기본값이 없는 것이 설계다** — 비어 있으면 `get_reranker()` 가 None 을
     # 돌려줘 리랭커가 통째로 꺼진다(`answer_cache_threshold` 와 같은 모양).
     # 여기서 켜는 순간 **질의당 LLM 호출이 1회에서 2회가 되므로**, 값을 하는지 재기 전에
-    # 과금이 먼저 붙는 것을 막는다. 재는 방법은 plan_log/검색-생성.md 5회차.
+    # 과금이 먼저 붙는 것을 막는다. 재는 방법은 .claude/wiki/plan_log/검색-생성.md 5회차.
     # `provider="openai"` 면 `gpt-4.1-mini` 꼴, `local` 이면 HuggingFace 리포지터리 이름이다
     rerank_model: str | None = None
 
@@ -340,7 +340,7 @@ class RerankConfig(BaseSettings):
     # 후보를 몇 개까지 먹이나. **`candidate_k` 와 같은 수지만 축이 다르다** — 저쪽은 각 경로가
     # *뽑는* 폭이고 이쪽은 리랭커가 *보는* 폭이다. 지금 같은 값인 것은 우연이 아니라
     # "풀 전부를 먹인다"가 결정이어서다: 20으로 자르면 실측으로 후보 #30·#26 에 있던 정답을
-    # 버린다(verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
+    # 버린다(.claude/wiki/verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
     rerank_candidates: int = 50
 
     # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다.
@@ -367,7 +367,7 @@ class RerankConfig(BaseSettings):
 
 # 1차 검색 결과를 보고 질의를 다시 쓰는 설정(PRF). RerankConfig·EvaluatorConfig 와 같은
 # 모양인 이유도 같다: 켜지는 순간 질의당 LLM 호출이 하나 늘어, 값을 하는지 재기 전에 과금이
-# 먼저 붙는 것을 막는 자리가 똑같다 (plan_log/검색-생성.md 22회차)
+# 먼저 붙는 것을 막는 자리가 똑같다 (.claude/wiki/plan_log/검색-생성.md 22회차)
 class RewriteConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -387,7 +387,7 @@ class RewriteConfig(BaseSettings):
     #
     # `fuse` 는 원 질의 갈래를 남기고 재작성 갈래를 RRF 에 더한다(7회차 로드맵).
     # `replace` 는 재작성 질의로만 검색한다 — **21회차 프로브가 잰 것이 이쪽이다**
-    # (verify_log/2026-08-27-라벨-전수검수-재작성프로브.md 7절: *"프로브는 질의 문자열만
+    # (.claude/wiki/verify_log/2026-08-27-라벨-전수검수-재작성프로브.md 7절: *"프로브는 질의 문자열만
     # 바꾼 것"*). 즉 `sih-07` 102위 → 2위 는 `replace` 의 수치이고 `fuse` 의 것이 아니다.
     # 둘을 다 만든 이유가 그것이다 — 어느 쪽이 나은지를 추측이 아니라 측정으로 답한다
     rewrite_mode: Literal["fuse", "replace"] = "fuse"
@@ -429,7 +429,7 @@ class GenerationConfig(BaseSettings):
     openai_api_key: str | None = None
 
     # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
-    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(plan_log/backend.md).
+    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(.claude/wiki/plan_log/backend.md).
     # Vision 과 같은 모델을 쓰는 것은 우연이 아니라 싼 쪽에서 시작한다는 같은 판단이다
     generation_model: str = "gpt-4.1-mini"
 
@@ -454,7 +454,7 @@ class GenerationConfig(BaseSettings):
 
     # 컨텍스트에 실을 청크 수. **임시값이다** — baseline 이 hit@1 0.150 / @5 0.400 /
     # @10 0.483 / @20 0.617 이라 늘리면 오르는 것은 알지만, 대가(컨텍스트 토큰·답변 품질)를
-    # 재는 쪽이 없어 값을 못 정한다. plan_log/indexing.md 의 top_k 미결과 한 줄이다
+    # 재는 쪽이 없어 값을 못 정한다. .claude/wiki/plan_log/indexing.md 의 top_k 미결과 한 줄이다
     generation_top_k: int = 5
 
 
@@ -484,21 +484,21 @@ class AnswerCacheConfig(BaseSettings):
     #
     # **`exact` 는 임계값 없이도 켜진다** — 이 축에는 정할 값이 없기 때문이다.
     # 기본값이 `semantic` 이라 `.env` 를 안 건드리면 지금까지와 글자 그대로 같다
-    # (임계값이 비어 있어 캐시가 통째로 꺼진 상태). 근거는 plan_log/시맨틱-캐시.md 6회차
+    # (임계값이 비어 있어 캐시가 통째로 꺼진 상태). 근거는 .claude/wiki/plan_log/시맨틱-캐시.md 6회차
     answer_cache_mode: Literal["semantic", "exact"] = "semantic"
 
     # 이 값 이상이면 "같은 질문"으로 본다. **기본값이 없는 것이 설계다.**
     # None 이면 get_answer_cache() 가 None 을 돌려줘 캐시가 통째로 꺼진다 — 이 저장소의
     # 임계값은 전부 분포의 틈에서 나왔는데(표 되붙이기 12pt, 표시 면적비 0.08 vs 1.00)
     # 이 축은 아직 안 쟀다. 근거 없는 수를 기본값으로 두면 그 사실이 조용히 묻힌다.
-    # 재는 방법은 plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
+    # 재는 방법은 .claude/wiki/plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
     answer_cache_threshold: float | None = None
 
 
 # 검색된 근거가 질문에 답하기에 충분한지 판정할 때 쓰는 설정. **켜는 축은 모델 이름 하나다** —
 # 비면 get_evaluator() 가 None 을 돌려주고 그것이 곧 꺼진 상태다. RerankConfig 와 같은 모양인
 # 이유도 같다: 켜지는 순간 질의당 LLM 호출이 1회에서 2회가 되므로, 값을 하는지 재기 전에
-# 과금이 먼저 붙는 것을 막는 자리가 똑같다 (plan_log/검색-생성.md 11회차)
+# 과금이 먼저 붙는 것을 막는 자리가 똑같다 (.claude/wiki/plan_log/검색-생성.md 11회차)
 class EvaluatorConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -709,7 +709,7 @@ class RuntimeConfig(BaseSettings):
     # torch 가 쓸 CPU 스레드 수(intra-op). **None 이면 torch 기본값을 안 건드린다** —
     # 그 기본값은 물리 코어 수다.
     #
-    # **기본을 낮추지 않는 것이 결정이다.** `verify_log/` 의 모든 벽시계와
+    # **기본을 낮추지 않는 것이 결정이다.** `.claude/wiki/verify_log/` 의 모든 벽시계와
     # `regression/baseline.json` 이 8스레드에서 잰 값이라, 기본을 바꾸면 과거 수치가
     # **조용히 비교 불가**가 된다. `embedding_device` 가 자동 감지를 안 하는 것과 같은
     # 잣대이고, 발열을 줄이려면 사용자가 `.env` 에서 명시로 내린다.

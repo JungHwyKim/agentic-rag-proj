@@ -15,7 +15,7 @@ BM25 가 붙는 순간 "이 청크가 어느 경로에서 몇 등이었나"를 �
 **출처 인용의 유일한 근거다.** `page` · `page_end` · `heading_path` · `source_name` 이 전부
 여기 들어 있고(`vector.py` 참고), 이걸 버리면 답변에 "무슨 문서 몇 쪽"을 붙일 수 없다.
 검색 결과를 사람이 되짚는 것이 `metadata` 를 저장하기로 한 본래 이유이기도 하다
-(`plan_log/indexing.md` 1회차 — 필터는 안 만들되 metadata 는 싣는다).
+(`.claude/wiki/plan_log/indexing.md` 1회차 — 필터는 안 만들되 metadata 는 싣는다).
 
 ## 왜 경로별 점수가 `float | None` 인가
 

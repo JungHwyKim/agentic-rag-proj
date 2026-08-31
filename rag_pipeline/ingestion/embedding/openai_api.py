@@ -5,7 +5,7 @@
 `table_llamaparse` 와 `image_vision` 은 실패해도 빈 리스트를 돌려주고 라우터의 폴백에
 맡긴다. **여기서는 그러지 않는다.** 그 규약은 내려갈 층이 있어서 성립하는 것이고
 (LlamaParse -> PyMuPDF, Vision -> OCR) 임베딩에는 없다. 빈 벡터를 돌려주면 그 청크는
-영원히 검색되지 않는데 아무도 모른다. 근거는 plan_log/embedding.md 의 "실패 계약" 절.
+영원히 검색되지 않는데 아무도 모른다. 근거는 .claude/wiki/plan_log/embedding.md 의 "실패 계약" 절.
 
 그래서 **`len(반환) == len(입력)` 이 이 모듈의 계약이고, 못 지키게 되는 모든 경우가
 `EmbeddingError` 다.** 배치 응답이 요청보다 적게 와도 조용히 짧은 목록을 돌려주지 않는다 —

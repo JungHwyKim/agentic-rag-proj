@@ -8,7 +8,7 @@
 
 이 저장소가 한 번 크게 물린 자리다 — Cohere Trial 키의 분당 10회 한도로 60건 중 30건이
 429 로 떨어졌는데, 지표 여덟 개가 전부 **그럴듯하게 나빴다.** 가른 것은 `rerank_calls` 가
-60이 아니라 30이었다는 사실 하나였다(`verify_log/2026-08-27-리랭커-cohere.md`).
+60이 아니라 30이었다는 사실 하나였다(`.claude/wiki/verify_log/2026-08-27-리랭커-cohere.md`).
 
 `evaluation/run_eval.py` 의 `usage` 블록과 `answer_eval._print()` 의 회계 게이트가 그 사고에
 이미 답했지만 **둘 다 그 리포트 안에서만 산다.** 서버 질의도, 손으로 돌린 프로브도, 에이전트
@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     if CHECKED_ON is None:
         print(
             "\n⚠ **단가표를 아직 사람이 확인하지 않았습니다** (`cost/pricing.py:CHECKED_ON`).\n"
-            "  공급자 가격 페이지와 대조한 뒤 날짜를 넣으세요. 그 전의 금액은 verify_log/ 에\n"
+            "  공급자 가격 페이지와 대조한 뒤 날짜를 넣으세요. 그 전의 금액은 .claude/wiki/verify_log/ 에\n"
             "  수치로 옮기면 안 됩니다 — 호출 수와 토큰은 관측이라 그대로 써도 됩니다."
         )
     else:

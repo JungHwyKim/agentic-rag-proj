@@ -5,7 +5,7 @@
 리랭커는 **후보 집합을 안 바꾸고 순서만 바꾼다.** 그래서 `recall@후보수` 로 재면 차이가
 **정의상 0** 이고, `hit@10` 으로 재도 바닥이 좋으면 여지가 실제보다 작아 보인다. 바닥은
 `hit@1` 이고 천장은 `hit@후보수` 다 — 주지표는 `nDCG@5`·`precision@3`·`recall@5` 다
-(`evaluation/README.md`, `plan_log/검색-생성.md` 1·5회차).
+(`evaluation/README.md`, `.claude/wiki/plan_log/검색-생성.md` 1·5회차).
 
 ## 실패는 예외가 아니라 폴백이다 — 다만 전부 아니면 전무다
 

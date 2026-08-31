@@ -11,7 +11,7 @@
 | 들어오는 것 | `rag_pipeline/schemas/chunk.py` (`Chunk`) — 다만 **`Embedder` 는 `Chunk` 를 모른다** |
 | 앞 단계가 실제로 내놓는 것 | `splitter.md` |
 | 예외 매핑 | `backend.md` |
-| 왜 이 설계인가 | `plan_log/embedding.md`, `task_log/2026-08-18-embedding-단계.md` |
+| 왜 이 설계인가 | `.claude/wiki/plan_log/embedding.md`, `.claude/wiki/task_log/2026-08-18-embedding-단계.md` |
 
 ## 1. 제일 자주 나올 오해 — `contracts.md` 2절 위반으로 읽는 것
 
@@ -54,7 +54,7 @@
 - **`embedding_device` 를 salt 에 더하자는 제안은 기각이다 — 실측으로 닫혔다.** 그럴듯한
   제안이고 `rerank_cache_salt_for()` 가 `rerank_device` 를 싣고 있어 **비대칭으로 보인다.**
   2026-08-26 에 쟀다: 실제 청크 414개에서 CPU/GPU 벡터가 `1−cos` 최대 **1.354e-09** ·
-  성분 최대 절대차 5.728e-06 이다(`verify_log/2026-08-26-스레드-발열-GPU.md`).
+  성분 최대 절대차 5.728e-06 이다(`.claude/wiki/verify_log/2026-08-26-스레드-발열-GPU.md`).
   더하면 `.cache/embedding` 이 전량 미스가 되고 `.qdrant` 컬렉션이 고아가 되는 대가만 치른다.
   리랭커 쪽이 싣는 이유는 저쪽이 **순위만** 대조했고 점수는 안 봤기 때문이다 —
   *같다는 것을 확인한 것*과 *다를 수 없다는 것*은 다르다
@@ -97,7 +97,7 @@ loader 관심사가 샌다. 대신 `EmbeddingUsage` 가 인스턴스에 붙어 �
 지적이 아니라 **"확인 필요"** 로 올린다.
 
 - **모델(`text-embedding-3-small`)과 차원은 임시값이다.** 모델 간 한국어 검색 품질은 정답
-  질의 세트가 없어 못 잰다(`plan_log/평가-세트.md`). **비용이 싸다는 것은 품질 근거가 아니다**
+  질의 세트가 없어 못 잰다(`.claude/wiki/plan_log/평가-세트.md`). **비용이 싸다는 것은 품질 근거가 아니다**
 - **`provider` 설정이 없는 것은 의도다.** 구현체가 하나면 합법값이 하나뿐인 죽은 설정이다.
   추상화(`Embedder` Protocol + `get_embedder()`)만 두고 설정은 로컬 구현체와 함께 더한다
 - **캐시가 청크마다 파일 하나다.** 102청크 문서가 3MB 쯤 된다. 지금은 문제가 아니고,

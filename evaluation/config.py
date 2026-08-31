@@ -2,7 +2,7 @@
 
 ## 왜 `.env` 를 안 타나
 
-`run_eval` 의 dense 실행은 *"이후 모든 비교의 기준선"* 이다(`plan_log/평가-세트.md` 2회차).
+`run_eval` 의 dense 실행은 *"이후 모든 비교의 기준선"* 이다(`.claude/wiki/plan_log/평가-세트.md` 2회차).
 그런데 `IngestConfig()` 를 그냥 만들면 개발자 `.env` 를 그대로 타므로 **같은 명령이 머신마다
 다른 수치를 낸다.** 그러면 나중에 수치가 달라졌을 때 *검색이 변한 것인지 설정이 변한 것인지*
 가릴 수 없고, 기준선이라는 목적 자체가 성립하지 않는다.
@@ -56,7 +56,7 @@
 모델·장치로 재졌는지를 파일이 못 말한다. `local` 옆의 `local-gpu`, `kure-v1` 옆의
 `kure-v1-gpu`, `mini` 옆의 `luna` 가 전부 같은 판단이다.
 
-**`--config-env` 처럼 설정을 통째로 푸는 것과는 다르다**(`plan_log/평가-세트.md` 가 기각한
+**`--config-env` 처럼 설정을 통째로 푸는 것과는 다르다**(`.claude/wiki/plan_log/평가-세트.md` 가 기각한
 그 안이다). 여기서 고를 수 있는 값은 **저장소에 커밋된 닫힌 집합**이라, `baseline.json` 만
 보고도 어느 설정으로 잰 값인지 안다는 성질이 그대로 산다. 기각 사유였던 *"합법값이 하나뿐인
 죽은 설정"* 에도 안 걸린다 — 값이 둘 이상 실재할 때만 이 축이 뜻을 갖는다.
@@ -66,7 +66,7 @@
 ## 캐시를 켠 채로 두는 것은 의도다
 
 `image_handler="hybrid"` 는 Vision 을 부르고 **Vision 응답은 실행마다 다르다**(실측:
-`plan_log/표-경로.md` 12회차 — 같은 쪽을 1회차 호출은 10/10, 2회차는 6/10 으로 잡았다).
+`.claude/wiki/plan_log/표-경로.md` 12회차 — 같은 쪽을 1회차 호출은 10/10, 2회차는 6/10 으로 잡았다).
 `ResultCache` 가 첫 응답을 얼려 주는 것이 여기서는 **재현성의 일부**다.
 
 **그래서 `.cache/content` 를 지우면 baseline 이 조용히 흔들린다.** 막을 방법이 없어서
@@ -140,7 +140,7 @@ EVAL_EMBEDDINGS: dict[str, dict[str, Any]] = {
         "embedding_cache_enabled": True,
     },
     # 로컬 한국어 모델. **모델 비교의 실험군이고 운영 기본값이 아니다** — 갈아탈지는
-    # 60건·20건을 **겹침 구간별로** 읽은 뒤 사람이 정한다(plan_log/embedding.md 3회차).
+    # 60건·20건을 **겹침 구간별로** 읽은 뒤 사람이 정한다(.claude/wiki/plan_log/embedding.md 3회차).
     #
     # 고른 근거는 순위표가 아니라 모델 카드의 사실이다 — 1024차원 · 8192컨텍스트 · 2.27GB ·
     # MIT · 접두사 없음(`prompts: {}`) · bge-m3 를 한국어 검색으로 파인튜닝.
@@ -229,7 +229,7 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
     },
     # 무료 갈래. **모델 이름은 탐침값이다** — 한국어 cross-encoder 를 견줘본 적이 없다.
     # 대안은 `Dongjin-kr/ko-reranker` 이고, 로컬이라 견주는 데 과금이 없다
-    # (`plan_log/검색-생성.md` 5회차 미결)
+    # (`.claude/wiki/plan_log/검색-생성.md` 5회차 미결)
     "local": {
         "rerank_provider": "local",
         "rerank_model": "BAAI/bge-reranker-v2-m3",
@@ -242,7 +242,7 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
     # 말하지 못한다(`kure-v1` 이 `embedding_device` 를 못 박은 것과 같은 잣대다).
     #
     # **재려는 것은 품질이 아니라 지연이다** — 로컬 CE 는 품질로는 무료 칸 넷 중 최고인데
-    # CPU 에서 질의당 51초라 화면에 못 쓴다(verify_log/2026-08-25-리랭커-2x2-무료칸.md 3-8).
+    # CPU 에서 질의당 51초라 화면에 못 쓴다(.claude/wiki/verify_log/2026-08-25-리랭커-2x2-무료칸.md 3-8).
     # 그 탈락 사유가 장치 때문인지 모델 때문인지가 안 갈려 있었다.
     #
     # **점수도 함께 읽어야 한다** — `rerank_device` 가 존재하는 이유가 *"CPU 와 GPU 가 미세하게
@@ -257,7 +257,7 @@ EVAL_RERANKERS: dict[str, dict[str, Any]] = {
     },
     # 전용 리랭킹 API 갈래. **재려는 것은 품질 향상이 아니라 「GPU 를 비워도 동률인가」다** —
     # `local-gpu` 가 품질로는 최고인데 적재와 GPU 를 다투어, 리랭커를 올려 둔 채 색인하면
-    # 같은 181청크 임베딩이 46.28 → 206.92초가 된다(verify_log/2026-08-27-임베딩-지연-리랭커경합.md).
+    # 같은 181청크 임베딩이 46.28 → 206.92초가 된다(.claude/wiki/verify_log/2026-08-27-임베딩-지연-리랭커경합.md).
     # 그래서 대조군은 `off` 가 아니라 **`local-gpu`** 이고, 볼 칸은 넷이다 —
     # `nDCG@10`(기준 0.7327) · `hit@1`(0.5833) · **폴백률**(0/60) · 질의당 지연(2.988초).
     #
@@ -343,7 +343,7 @@ DEFAULT_REWRITE_PROFILE = "off"
 # `temperature=0.0` 을 400 으로 거부하고 기본값(1)만 받는다. 지금까지의 판정 수치(v1·v2·v3)는
 # 전부 `gpt-4.1-mini` · temperature 0 이라, luna 수치와 **나란히 놓으면 차이에 모델과
 # 샘플링이 함께** 들어간다 — 그래서 이 축으로 재는 것은 *모델 간 절대 비교* 가 아니라
-# **한 모델 안에서의 프롬프트 비교**다(`plan_log/검색-생성.md` 13회차).
+# **한 모델 안에서의 프롬프트 비교**다(`.claude/wiki/plan_log/검색-생성.md` 13회차).
 #
 # 새 프로필을 더할 때 **`evaluator_model` 만 바꾸면 안 되는 경우가 있다** — gpt-5 계열이면
 # `evaluator_temperature: None` 을 함께 적는다. 빠뜨리면 43건이 전부 400 으로 죽는다.

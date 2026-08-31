@@ -3,7 +3,7 @@
 여기서 잠그는 것은 둘이다. **기대 verdict 가 세트가 아니라 그 실행의 순위에서 나오는 것**과
 **실패가 혼동행렬 칸이 아니라 열로 세어지는 것.** 앞을 놓치면 이 표가 Evaluator 가 아니라
 검색기를 재고, 뒤를 놓치면 죽은 Evaluator 가 부정 예시에서 만점을 받는다
-(plan_log/검색-생성.md 10·11회차).
+(.claude/wiki/plan_log/검색-생성.md 10·11회차).
 
 **셋째가 47회차에 붙었다** — 재작성 축이 실제로 검색에 닿는 것과, 리포트 이름이 리랭커·재작성으로
 갈리는 것. 뒤엣것을 놓치면 계단으로 잰 세 판이 **에러 없이 서로를 덮는다.**
@@ -280,7 +280,7 @@ def test_balanced_is_none_when_a_class_is_empty() -> None:
 
 
 # **`--rewrite` 가 실제로 검색에 닿아야 한다** — 인자만 받고 안 쓰면 계단 세 판이 같은 실행이
-# 되는데 표는 멀쩡해 보인다 (plan_log/검색-생성.md 47회차)
+# 되는데 표는 멀쩡해 보인다 (.claude/wiki/plan_log/검색-생성.md 47회차)
 def test_rewrite_profile_reaches_retrieve(mocker, qa_path) -> None:
     _wire(mocker, _FakeEvaluator({}), {})
     rewriter = _FakeRewriter(api_calls=2, cache_hits=1)

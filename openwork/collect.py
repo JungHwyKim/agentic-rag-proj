@@ -1,7 +1,7 @@
 """기록 폴더에서 아직 안 끝난 것을 모아 JSON 으로 낸다.
 
 **왜 스킬이 아니라 스크립트인가** — 세 기록 폴더 전체가 4.36MB(약 145만 자, 파일 251개)라
-"모델이 다 읽는다"가 원리적으로 막힌다(`plan_log/프로젝트-컨텍스트.md` 가 *"세 INDEX와 전체
+"모델이 다 읽는다"가 원리적으로 막힌다(`.claude/wiki/plan_log/프로젝트-컨텍스트.md` 가 *"세 INDEX와 전체
 로그를 기본 문맥으로 읽는 것"* 을 같은 이유로 이미 기각했다). 반면 재료는 규약으로 서 있어
 (`## 미결` 19/19 파일 · `## 7. 남은 것` 98/102 파일) **뽑는 일이 판단이 아니다.** 그래서 수집은
 여기서 결정적으로 하고, 묶기·선행 순서·설명은 `openwork` 스킬이 한다.
@@ -9,19 +9,26 @@
 **닫힌 것을 판정하지 않는다 — 취소선만 공짜로 뺀다.** 실측(2026-08-29)으로 `## 미결` 불릿 232개
 중 **72개(31%)** 가 `~~취소선~~` 으로 닫힘을 표시하고 모양이 `~~**제목**~~ → **N회차에서
 닫혔다.**` 로 일정하다. 규약이 이미 있고 지켜지므로 문자열로 뺀다(호출마다 같은 답). 그 밖의
-닫힘은 판정하지 않는다 — `plan_log/frontend.md` 의 *"배선은 여전히 미결"* 이 다른 파일의 회차로
+닫힘은 판정하지 않는다 — `.claude/wiki/plan_log/frontend.md` 의 *"배선은 여전히 미결"* 이 다른 파일의 회차로
 이미 닫혔듯, **다른 파일이 닫은 것은 이쪽에 안 따라온다.** 그 비율은 아직 모른다. 그래서 이
 도구가 내는 것은 「열린 것」이 아니라 **「열린 채로 적힌 것」**이고, 모든 항목이 출처·회차·날짜를
 달고 나가 사람이 되짚는다.
 
-**`verify_log/` 는 재료가 아니다** — `## 남은…` 절이 **0/129** 다. 수치만 담는 곳이라 미완이
+**`.claude/wiki/verify_log/` 는 재료가 아니다** — `## 남은…` 절이 **0/129** 다. 수치만 담는 곳이라 미완이
 원래 안 적히고, 넣어도 0건이다. 축이 없는 것을 재료로 넣지 않는다.
 
 **경로·절 이름이 여기 상수 한 자리에 있고, 어긋나면 양방향으로 시끄럽다.** 폴더 이름이 산문에
 박히면 구조 정리 때 표가 **조용히 짧아진다**(에러가 안 난다). 그래서 ① 설정된 폴더가 없으면
-`OpenWorkConfigError` 로 죽고 ② 설정에 없는 기록 폴더(= `INDEX.md` 를 품은 최상위 디렉터리)가
+`OpenWorkConfigError` 로 죽고 ② 설정에 없는 기록 폴더(= `INDEX.md` 를 품은 위키 하위 디렉터리)가
 생기면 경고하고 ③ 설정된 절 이름이 한 파일에서도 안 나오면 경고한다. 한 방향만 막으면 새 폴더가
 생겼을 때 그대로 재현된다.
+
+**그 구조 정리가 2026-08-31 에 실제로 일어났고, 그래서 뿌리와 폴더 이름을 갈라 두었다.** 세
+폴더가 최상위에서 `WIKI_ROOT` 아래로 내려갔는데 **`Source.folder` 는 여전히 맨 이름이다** —
+`feature_of_file()` 이 세는 것이 파일 경로가 아니라 **기록 산문에 쓰인 `plan_log/<기능>.md`**
+라서다. 산문 914건은 그때 쓰인 그대로 두는 것이 옳고(그때의 사실이다), 뿌리까지 `folder` 에
+넣었으면 그 세기가 전량 0이 되어 **기능 묶음이 조용히 무너진다.** 출력의 `folder` 키가 맨
+이름인 것도 같은 이유다.
 """
 
 from __future__ import annotations
@@ -35,6 +42,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 기록 세 폴더를 담은 위키의 뿌리. `Source.folder` 는 이 아래의 **맨 이름**이다 —
+# 가른 이유는 위 docstring 마지막 문단에 있다(산문의 `plan_log/<기능>.md` 세기).
+# 훅 쪽 짝은 `.claude/hooks/_hookutil.py` 의 `WIKI_ROOT` 이고, 두 상수가 어긋나는 방향이
+# 서로 반대다 — 저쪽은 늘 막는 쪽으로, 이쪽은 조용히 짧아지는 쪽으로 고장 난다
+WIKI_ROOT = ".claude/wiki"
 
 # 불릿 원문을 이만큼까지만 싣는다. 중앙값이 미결 180자·남은 것 97자라 대부분 온전히 들어가고,
 # 최대 1,840자짜리 하나가 출력을 통째로 흔드는 것만 막는다
@@ -268,24 +281,41 @@ def _items_in_file(
     return items, closed, True
 
 
+# 기록 폴더 하나의 실제 자리. 뿌리와 맨 이름을 잇는 **유일한** 자리다
+def folder_path(root: Path, folder: str) -> Path:
+    return root / WIKI_ROOT / folder
+
+
 # 설정이 저장소와 어긋났는지 본다. 없는 폴더는 죽고, 모르는 기록 폴더와 사라진 절은 경고다
 def check_config(root: Path) -> list[str]:
-    missing = [s.folder for s in SOURCES if not (root / s.folder).is_dir()]
+    # 뿌리 자체가 없으면 아래 폴더 검사가 전부 걸려 사유가 세 줄이 된다. 원인은 하나이므로
+    # 먼저 가려내 한 줄로 말한다 — 사유가 길면 진짜 원인이 안 읽힌다
+    wiki = root / WIKI_ROOT
+    if not wiki.is_dir():
+        raise OpenWorkConfigError(
+            f"위키 뿌리가 없습니다: {WIKI_ROOT}/. "
+            "구조를 정리했다면 openwork/collect.py 의 WIKI_ROOT 를 함께 고치세요 — "
+            "그러지 않으면 목록이 조용히 짧아집니다."
+        )
+
+    missing = [s.folder for s in SOURCES if not folder_path(root, s.folder).is_dir()]
     if missing:
         raise OpenWorkConfigError(
-            f"설정된 기록 폴더가 없습니다: {', '.join(missing)}. "
+            f"설정된 기록 폴더가 없습니다: {', '.join(missing)} (아래: {WIKI_ROOT}/). "
             "구조를 정리했다면 openwork/collect.py 의 SOURCES 를 함께 고치세요 — "
             "그러지 않으면 목록이 조용히 짧아집니다."
         )
 
     configured = {s.folder for s in SOURCES} | set(NOT_A_SOURCE)
     warnings: list[str] = []
-    for child in sorted(root.iterdir()):
+    # 훑는 곳이 저장소 최상위가 아니라 **위키 안**이다. 최상위를 계속 훑으면 새 기록 폴더가
+    # 위키 안에 생겼을 때 이 경고가 한 번도 안 뜬다 — 그것이 이 검사의 존재 이유였다
+    for child in sorted(wiki.iterdir()):
         if not child.is_dir() or child.name in configured:
             continue
         if (child / "INDEX.md").is_file():
             warnings.append(
-                f"기록 폴더로 보이는데 설정에 없습니다: {child.name}/ "
+                f"기록 폴더로 보이는데 설정에 없습니다: {WIKI_ROOT}/{child.name}/ "
                 "(INDEX.md 를 갖고 있습니다). SOURCES 나 NOT_A_SOURCE 에 넣으세요."
             )
     return warnings
@@ -298,14 +328,19 @@ def collect(root: Path | None = None) -> dict:
 
     features = sorted(
         p.stem
-        for p in (root / SOURCES[0].folder).glob("*.md")
+        for p in folder_path(root, SOURCES[0].folder).glob("*.md")
         if p.name != "INDEX.md"
     )
 
     items: list[Item] = []
     stats: list[dict] = []
     for source in SOURCES:
-        files = sorted(p for p in (root / source.folder).glob("*.md") if p.name != "INDEX.md")
+        # **비재귀 glob 이다.** 하위 폴더로 내린 파일은 0건으로 조용히 빠지고, 일부만
+        # 내리면 `with_section` 이 0이 아니라 경고조차 안 뜬다 — 그래서 기록 폴더 안은
+        # 평평하게 유지한다(나누려면 파일이 아니라 INDEX.md 를 나눈다)
+        files = sorted(
+            p for p in folder_path(root, source.folder).glob("*.md") if p.name != "INDEX.md"
+        )
         closed_total = 0
         with_section = 0
         before = len(items)

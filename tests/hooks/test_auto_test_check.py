@@ -84,8 +84,8 @@ def test_editing_a_test_file_runs_that_file():
     "path",
     [
         "CLAUDE.md",
-        "plan_log/하네스-확장.md",
-        "task_log/phase1.md",
+        ".claude/wiki/plan_log/하네스-확장.md",
+        ".claude/wiki/task_log/phase1.md",
         "regression/baseline.json",
         ".claude/skills/rag-code-review/SKILL.md",
     ],
@@ -107,7 +107,7 @@ def test_absolute_path_is_normalized():
 
 # 한국어 경로가 깨지지 않아야 한다. 이 저장소는 한국어 파일명이 흔하다
 def test_korean_path_does_not_crash():
-    assert auto_test_check.test_target_for("plan_log/평가-세트.md") is None
+    assert auto_test_check.test_target_for(".claude/wiki/plan_log/평가-세트.md") is None
     assert auto_test_check.test_target_for("tests/fixtures/시행령 개정안.hwpx") is None
 
 

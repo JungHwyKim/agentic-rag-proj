@@ -9,7 +9,7 @@ contracts 2절("외부 API 는 예외를 안 던지고 빈 결과 + `warn()`")�
 않는다.** 그 규약은 내려갈 층이 있어서 성립한다(LlamaParse -> PyMuPDF, Vision -> OCR).
 여기에는 없다 — 저장에 실패한 청크를 조용히 넘기면 그 청크는 영원히 검색되지 않는데 아무도
 모른다. embedding 이 한 칸 앞에서 같은 판단을 했고 근거도 같다
-(`plan_log/embedding.md` · `plan_log/indexing.md` 의 "실패 계약").
+(`.claude/wiki/plan_log/embedding.md` · `.claude/wiki/plan_log/indexing.md` 의 "실패 계약").
 
 ## 비용 카운터가 없는 이유
 
@@ -44,7 +44,7 @@ embedding 과 같다. 구현체가 하나면 `indexing.provider` 는 합법값�
 
 `search(filters=...)` 와 backend 색인 엔드포인트는 **일부러 없다.** 필터로 쓸 축이
 `document_id` 뿐이고 `page` 는 못 쓴다(HWPX 쪽 수가 문서에 따라 부풀어 있다 — CLAUDE.md 의
-함정 절). 근거는 `plan_log/indexing.md`.
+함정 절). 근거는 `.claude/wiki/plan_log/indexing.md`.
 """
 
 from __future__ import annotations

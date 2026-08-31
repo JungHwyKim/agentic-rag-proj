@@ -3,7 +3,7 @@
 ## 왜 네 번째 도구인가
 
 `answer_eval.py` 는 한 조건의 답변을 채점한다. 그런데 43회차가 물은 것은 조건 **둘**의 차다 —
-*"검색 지표가 소수점까지 같은데 답도 같은가"*(`plan_log/검색-생성.md` E-2). 한 리포트만 보면
+*"검색 지표가 소수점까지 같은데 답도 같은가"*(`.claude/wiki/plan_log/검색-생성.md` E-2). 한 리포트만 보면
 그 물음에 못 답하고, 두 리포트를 눈으로 견주면 **합계 하나로 읽게 된다.**
 
 `rerank_diff.py` 는 순위를, `retry_diff.py` 는 회차를 짝짓는다. 둘 다 **답변 본문과 그 답변이
@@ -23,7 +23,7 @@
 
 `answer_eval` 은 컬렉션을 열어 **검색을 다시 돌린다.** 그러니 그 순위가 원래 실행의 순위와
 같다는 보장이 저절로 생기지는 않는다. 확인할 수 있는 것이 하나 있다 — 「근거 같음」의 **수**다.
-35회차가 리랭킹 후 상위 n 의 일치 수를 이미 쟀으므로(`verify_log/2026-08-28-재작성-리랭커-조합.md`
+35회차가 리랭킹 후 상위 n 의 일치 수를 이미 쟀으므로(`.claude/wiki/verify_log/2026-08-28-재작성-리랭커-조합.md`
 3-4절: 상위 5에서 49/60 · 상위 10에서 34/60), 그 수가 나오면 같은 순위를 밟은 것이다.
 
 `--expect-same` 로 그 값을 준다. **기대값을 도구에 못 박지 않는 것이 요점이다** — 그것은 세트와
@@ -182,6 +182,55 @@ def split_by_evidence(pairs: list[PairedRow]) -> dict[str, list[PairedRow]]:
     }
 
 
+# 단정 금지 후보를 짝으로 모은다. **이 도구가 그 목록을 «읽는 자리» 다**
+# (`.claude/wiki/plan_log/평가-세트.md` 16회차가 «자[尺]는 만들었고 읽는 습관이 없다» 로 열어 둔 자리).
+#
+# **견주는 단위가 문장이 아니라 (질의, 금지 항목) 인 것이 요점이다.** 온도 0.2 라 같은 근거를
+# 줘도 문장은 다르게 쓰이므로(실측: 근거가 같아도 글자까지 같은 답변은 41%뿐) 문장으로 견주면
+# 전부 «갈렸다» 가 된다 — 모듈 docstring 의 *「답변 문자열로 재지 않는다」* 를 여기에도 쓴다.
+#
+# **수치를 안 낸다.** 후보에는 부정문이 섞여 있어(`answer_eval.score_must_not_claim`) 어떤
+# 분수를 내도 «오류율» 로 읽히고 제일 좋은 답변이 분자에 앉는다. 내놓는 것은 읽을 목록이다
+def claim_delta(pairs: list[PairedRow], *, group: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        fired: dict[str, dict[str, list[str]]] = {}
+        for side in ("a", "b"):
+            row = getattr(pair, side)
+            # **`None` 은 «라벨이 없다» 이지 «후보가 없다» 가 아니다** — 한쪽만 라벨이 있으면
+            # 견줄 것이 없어 통째로 건너뛴다(옛 리포트에는 이 칸이 아예 없다)
+            if row.get("must_not_claim_total") is None:
+                continue
+            hits: dict[str, list[str]] = {}
+            for hit in row.get("must_not_claim_candidates") or []:
+                hits.setdefault(hit["entry"], []).append(hit["sentence"])
+            fired[side] = hits
+        if len(fired) < 2:
+            continue
+        for entry in sorted(set(fired["a"]) | set(fired["b"])):
+            rows.append(
+                {
+                    "query_id": pair.query_id,
+                    "group": group,
+                    "entry": entry,
+                    "a": fired["a"].get(entry, []),
+                    "b": fired["b"].get(entry, []),
+                }
+            )
+    return rows
+
+
+# 라벨이 **양쪽에 다 있는** 짝. `claim_delta()` 가 견주는 분모이고, 후보가 0일 때 «라벨이
+# 없었다» 와 «걸린 것이 없다» 를 가르는 유일한 수다
+def claim_labeled(pairs: list[PairedRow]) -> list[PairedRow]:
+    return [
+        pair
+        for pair in pairs
+        if pair.a.get("must_not_claim_total") is not None
+        and pair.b.get("must_not_claim_total") is not None
+    ]
+
+
 # 리포트의 dict 행을 `AnswerRow` 로 되돌린다. **모르는 키가 오면 TypeError 로 그 자리에서
 # 죽는다** — 리포트 형식이 바뀐 것을 조용히 지나치지 않는 성질을 그대로 쓴다
 def _as_rows(raw: list[dict[str, Any]]) -> list[AnswerRow]:
@@ -212,6 +261,35 @@ def _line(bucket: dict[str, Any]) -> str:
         f"최대 대비 {vs_shown} · "
         f"인용 없음 {bucket['citation_missing']} · 범위 밖 {bucket['citation_out_of_range']}"
     )
+
+
+# 단정 금지 후보를 찍는다. **읽을 목록이지 수치가 아니다.**
+#
+# **후보 0 을 조용히 지나가지 않는다** — 라벨이 붙었는데 아무것도 안 걸린 것과 라벨이 아예
+# 없는 것은 전혀 다른 뜻이라, 앞엣것은 ««오류 없음» 이 아니다» 를 달아 찍는다
+def _print_claim_delta(
+    groups: dict[str, list[PairedRow]], *, a_name: Any, b_name: Any
+) -> None:
+    labeled = 0
+    rows: list[dict[str, Any]] = []
+    for key, korean in (("same", "근거 같음"), ("changed", "근거 갈림")):
+        labeled += len(claim_labeled(groups[key]))
+        rows += claim_delta(groups[key], group=korean)
+    if not labeled:
+        return
+
+    print(f"\n[단정 금지 후보] 라벨이 양쪽에 다 있는 질의 {labeled}건")
+    if not rows:
+        print("  후보 0 — 어느 쪽에서도 안 걸렸다. 이것은 «오류 없음» 이 아니다")
+        return
+    print("  후보는 오류가 아니다 — 단정이냐 부정이냐는 읽어서 가른다")
+    for row in rows:
+        only = "" if (row["a"] and row["b"]) else " · **한쪽만**"
+        print(f"  {row['query_id']} [{row['entry']}] · {row['group']}{only}")
+        for name, side in ((a_name, "a"), (b_name, "b")):
+            for sentence in row[side] or ["—"]:
+                shown = sentence if len(sentence) <= 84 else sentence[:84] + "…"
+                print(f"      {name:>7}: {shown}")
 
 
 # 게이트를 먼저, 지표를 나중에 찍는다 (`answer_eval._print()` 와 같은 규약)
@@ -260,6 +338,8 @@ def _print(
                 bucket = summary[bucket_key]
                 if bucket["queries"]:
                     print(f"    {name:>7} · {label} — {_line(bucket)}")
+
+    _print_claim_delta(groups, a_name=a_name, b_name=b_name)
 
     if show:
         print("\n[근거가 갈린 질의]")

@@ -12,7 +12,7 @@
 | 나가는 것 | `rag_pipeline/schemas/vector.py` (`VectorRecord`·`SearchResult`) |
 | 앞 단계가 실제로 내놓는 것 | `splitter.md` · `embedding.md` |
 | 예외 매핑 | `backend.md` |
-| 왜 이 설계인가 | `plan_log/indexing.md` |
+| 왜 이 설계인가 | `.claude/wiki/plan_log/indexing.md` |
 
 ## 1. 제일 자주 나올 오해 — `contracts.md` 2·3절 위반으로 읽는 것
 
@@ -77,7 +77,7 @@
 보이지만 소비자가 밖에 있다 — 평가 러너(`evaluation/run_eval.py`)가 `vision_calls`·
 `ocr_applied`·`warnings` 를 리포트에 실어, 검색 수치가 움직였을 때 **검색이 변한 것인지
 적재가 변한 것인지**를 가른다. 호출부가 `ingest()` 를 한 번 더 불러 얻으면 안 된다:
-Vision 은 LLM 이라 응답이 실행마다 달라(`plan_log/표-경로.md` 12회차) 그 두 번째 파싱이
+Vision 은 LLM 이라 응답이 실행마다 달라(`.claude/wiki/plan_log/표-경로.md` 12회차) 그 두 번째 파싱이
 실제로 색인된 것과 다를 수 있고, **다른 파싱의 카운터는 애초에 쓸모가 없다.**
 
 ## 4. 설정 3곳 + 저장 경로
@@ -135,7 +135,7 @@ Vision 은 LLM 이라 응답이 실행마다 달라(`plan_log/표-경로.md` 12�
   꺼지는 것이 설계다 — *같은 뜻 다른 말* 쌍이 아직 0쌍이라(`qa_set.jsonl` 60 ·
   `qa_set_human.jsonl` 20 의 `gold_spans` 교집합 0) 분포의 틈을 못 봤고, **임계값은 임베딩
   모델에 딸린 값**이라 모델이 바뀌면 다시 재야 한다. 근거는
-  `task_log/2026-08-24-답변캐시.md`
+  `.claude/wiki/task_log/2026-08-24-답변캐시.md`
 
 ## 5. 테스트에서 보는 것
 

@@ -44,7 +44,7 @@ from rag_pipeline.config import EmbeddingConfig
 # **여기 들어가는 것은 벡터를 바꾸는 설정 전부다.** 지금 실재하는 축은 (모델, 차원) 둘뿐이고
 # 나머지 필드(배치 크기·토큰 상한·캐시 on/off·키)는 같은 입력에 같은 벡터를 준다.
 #
-# **provider 는 안 들어간다 — 미결이 아니라 결정이다**(3회차, plan_log/embedding.md).
+# **provider 는 안 들어간다 — 미결이 아니라 결정이다**(3회차, .claude/wiki/plan_log/embedding.md).
 # 로컬 구현체가 생겨 축은 살아났지만, provider 는 **모델 이름을 통해서만** 벡터를 바꾼다:
 # OpenAI 는 `text-embedding-*`, 로컬은 `org/name` 꼴이라 두 이름 공간이 안 겹쳐 같은 자리를
 # 볼 수 없다. 넣었다면 얻는 것 없이 `.cache/embedding` 이 전량 미스가 되고 개발자 `.qdrant`

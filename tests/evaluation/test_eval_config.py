@@ -353,7 +353,7 @@ def test_rewrite_profiles_with_a_model_pin_their_mode(profile: str) -> None:
 
 
 # 두 모드가 **둘 다 실재해야** 이 축이 뜻을 갖는다. 하나만 남기면 *프로브 수치가 재현되나*
-# 와 *로드맵이 옳았나* 중 하나를 영원히 못 묻는다 (plan_log/검색-생성.md 22회차)
+# 와 *로드맵이 옳았나* 중 하나를 영원히 못 묻는다 (.claude/wiki/plan_log/검색-생성.md 22회차)
 def test_both_merge_modes_exist() -> None:
     modes = {
         block["rewrite_mode"]

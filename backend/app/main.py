@@ -59,7 +59,7 @@ def _status_for(exc: RagPipelineError) -> int:
 # **가르는 축이 헤더인 이유**: 라우트마다 try/except 로 갈랐다면 415 를 던지는
 # `_reject_unsupported_extension()` 이 try **이전**이라 거기까지 감싸야 하고, 상태코드를
 # 알려면 아래 `_status_for()` 를 라우트가 끌어써 매핑의 두 번째 진실이 생긴다.
-# 헤더면 아래 두 핸들러가 같은 규칙 한 줄을 나눠 쓴다 (plan_log/backend.md 5회차)
+# 헤더면 아래 두 핸들러가 같은 규칙 한 줄을 나눠 쓴다 (.claude/wiki/plan_log/backend.md 5회차)
 def _is_htmx(request: Request) -> bool:
     return request.headers.get("HX-Request") is not None
 
@@ -149,7 +149,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
     # CORS 미들웨어는 없다. 화면을 이 앱이 직접 서빙하므로 브라우저가 교차 출처 요청을
-    # 아예 안 낸다 — 되살릴 조건은 plan_log/backend.md "안 하기로 한 것" 에 있다
+    # 아예 안 낸다 — 되살릴 조건은 .claude/wiki/plan_log/backend.md "안 하기로 한 것" 에 있다
     app.include_router(documents.router, prefix=settings.api_prefix)
     app.include_router(query.router, prefix=settings.api_prefix)
     # 화면 라우터에는 api_prefix 를 안 붙인다 — 사람이 여는 주소이지 API 가 아니다

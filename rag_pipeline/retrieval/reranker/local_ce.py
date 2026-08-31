@@ -7,7 +7,7 @@
 스위치라 유료든 무료든 기본 테스트가 안 깨진다), *"torch 를 안 들인다"* 는 임베더가 로컬로
 가며 `torch`·`sentence-transformers` 가 본체 의존성이 되어 지워졌다. 그래서 순서가 뒤집혀
 OpenAI 가 먼저 붙고 이쪽이 뒤에 왔다 — **둘 다 만들어 같은 세트로 견주는 것**이 결론이다
-(1회차가 세운 비교 축 6번, `plan_log/검색-생성.md` 5회차).
+(1회차가 세운 비교 축 6번, `.claude/wiki/plan_log/검색-생성.md` 5회차).
 
 ## 비용의 축이 다르다
 
@@ -100,7 +100,7 @@ class LocalCrossEncoderReranker:
         return self._usage
 
     # **여기만 True 다.** 첫 질의가 무는 가중치 적재 6.2초를 기동으로 옮기는 것이
-    # 워밍업의 값어치이고(verify_log/2026-08-26-첫질의-대표값.md), 그것이 있는 갈래는 이것뿐이다
+    # 워밍업의 값어치이고(.claude/wiki/verify_log/2026-08-26-첫질의-대표값.md), 그것이 있는 갈래는 이것뿐이다
     @property
     def needs_warmup(self) -> bool:
         return True

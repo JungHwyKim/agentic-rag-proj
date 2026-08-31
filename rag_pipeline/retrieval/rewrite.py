@@ -2,7 +2,7 @@
 
 `retrieve()` 안에서 1차 검색 뒤·합류 앞에 선다. 밖이 아니라 안인 이유는 리랭커와 같다 —
 `answer_question()` 에 붙이면 `run_eval` 이 `retrieve()` 를 직접 부르므로 **평가가 그 경로를
-안 밟아 재작성을 영원히 못 잰다**(`plan_log/검색-생성.md` 7회차 기각 항목).
+안 밟아 재작성을 영원히 못 잰다**(`.claude/wiki/plan_log/검색-생성.md` 7회차 기각 항목).
 
 ## 왜 코퍼스가 아니라 1차 검색 결과를 보나
 
@@ -90,7 +90,7 @@ from rag_pipeline.schemas.retrieval import RetrievedChunk
 __all__ = ["QueryRewriter", "RewriteUsage", "get_rewriter"]
 
 # 프롬프트를 고치면 **반드시 올린다** — 안 올리면 옛 응답이 새 프롬프트의 답인 척 돌아오는데
-# 에러가 아니라 수치로만 드러난다 (plan_log/표-경로.md 14회차가 값을 치른 자리다)
+# 에러가 아니라 수치로만 드러난다 (.claude/wiki/plan_log/표-경로.md 14회차가 값을 치른 자리다)
 _PROMPT_VERSION = "v1"
 
 _SYSTEM = (

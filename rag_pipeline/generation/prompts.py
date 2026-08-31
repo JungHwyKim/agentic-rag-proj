@@ -8,7 +8,7 @@
 숫자를 고르면 이미지 표시 크기 50pt 를 탐침값으로 박았다가 되돌린 일을 되풀이한다.
 
 대신 `RetrievedChunk.dense_score` 가 답변에 실려 나가므로 **분포는 저절로 모인다.**
-그것이 쌓이면 임계값 논의를 실측으로 할 수 있다(`plan_log/backend.md` 미결).
+그것이 쌓이면 임계값 논의를 실측으로 할 수 있다(`.claude/wiki/plan_log/backend.md` 미결).
 
 ## 왜 청크에 번호를 다나
 
@@ -58,11 +58,11 @@ K=5 에서는 `hai-02`·`hai-06` 까지 더 고쳐 v1·v2 를 **2건 앞선다.*
 수 있는데, v2 에서는 두 K 모두 **한 건도 안 깎였다**(오판 목록이 글자까지 동일).
 
 **후보 둘 중 하나는 애초에 안 넣었다** — *"제목 머리만 있으면 불충분"* 은 이 코퍼스에
-**정답 span 이 제목 머리에만 있는 청크가 실재해서**다(`plan_log/검색-생성.md` —
+**정답 span 이 제목 머리에만 있는 청크가 실재해서**다(`.claude/wiki/plan_log/검색-생성.md` —
 `sih-06`·`sih-14`). 박으면 그 건들이 판정 오류로 세어지는데 그것은 Evaluator 의 잘못이
 아니라 세트의 축 문제다.
 
-수치는 `verify_log/2026-08-27-프롬프트-{v2,v3}.md` 다.
+수치는 `.claude/wiki/verify_log/2026-08-27-프롬프트-{v2,v3}.md` 다.
 
 ## 판정 프롬프트를 고치면 캐시가 갈린다
 
@@ -101,7 +101,7 @@ NO_EVIDENCE_ANSWER = "문서에서 찾지 못했습니다."
 #
 # **캐시 지문(`answer_cache/fingerprint.py`)에는 일부러 안 넣었다** — 넣으면 `qa_cache_*` 가
 # 전량 미스가 되는데, 지금 `exact` 캐시는 *"적중률 5% 미만이면 끈다"* 의 표본을 모으는 중이다
-# (`evaluation/README.md` 8절). 별개 결정이라 `plan_log/검색-생성.md` 미결에 있다
+# (`evaluation/README.md` 8절). 별개 결정이라 `.claude/wiki/plan_log/검색-생성.md` 미결에 있다
 GENERATION_PROMPT_VERSION = "v1"
 
 SYSTEM_PROMPT = f"""당신은 한국어 공문서를 읽고 질문에 답하는 도우미입니다.

@@ -131,7 +131,7 @@
 ## 5. 게으른 getter와 기동 워밍업 — 되돌리면 조용히 깨지는 것 여섯
 
 `routes/query.py` 의 `_embedder`·`_bm25`·`_reranker` 와 `warm_up()`, `main.py` 의 lifespan
-스레드에 적용한다. 근거는 `verify_log/2026-08-26-{첫질의-대표값,기동-워밍업}.md` 다.
+스레드에 적용한다. 근거는 `.claude/wiki/verify_log/2026-08-26-{첫질의-대표값,기동-워밍업}.md` 다.
 
 - **`warmup_on_startup` 의 기본값을 켜짐으로 바꾸지 않는다.** `tests/api` 의 일부가
   `with TestClient(...)` 로 **lifespan 을 진짜로 돌린다**(`test_query_route.py` ·
@@ -164,7 +164,7 @@
 ## 6. 판정(verdict)이 화면·로그로 나가는 길 — 되돌리면 조용히 깨지는 것 셋
 
 `routes/query.py:ask()` · `core/query_log.py` · `templates/_answer.html` 에 적용한다.
-근거는 `task_log/2026-08-27-판정-화면배선.md` 다.
+근거는 `.claude/wiki/task_log/2026-08-27-판정-화면배선.md` 다.
 
 - **Evaluator 를 `app.state` 싱글턴으로 "정리"하지 않는다.** 위 5절의 셋과 달리 여기는
   **질의마다** 만드는 것이 결정이다 — 가중치가 없어 만드는 값이 사실상 0 이고, 싱글턴이면

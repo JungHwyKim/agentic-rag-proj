@@ -31,7 +31,7 @@ PDF 경로가 한국어 낱말 사이 공백을 자주 잃는다(실측: `템에
 
 **캐시 키가 파일명뿐이라 설정이 바뀌어도 옛 캐시를 그대로 쓴다.** 즉 지금 디스크에 있는
 캐시가 어느 설정으로 만들어졌는지 이 파일은 모른다. `--dense` 는 이 캐시를 안 타므로
-baseline 은 안전하고, 영향받는 것은 span 검증뿐이다 — 미결로 `plan_log/평가-세트.md` 에 있다.
+baseline 은 안전하고, 영향받는 것은 span 검증뿐이다 — 미결로 `.claude/wiki/plan_log/평가-세트.md` 에 있다.
 """
 
 from __future__ import annotations

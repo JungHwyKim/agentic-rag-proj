@@ -11,7 +11,7 @@ qdrant 로컬 파일 모드가 저장 디렉터리에 배타 잠금을 건다. `
 
 섞으면 `iter_chunks()`(BM25 가 전량 훑는다)와 `list_documents()`(사이드바)가 **캐시 항목을
 문서 청크로 센다.** 필터로 가르는 길은 없다 — `search(filters=...)` 를 안 만들기로 한 것이
-`plan_log/indexing.md` 의 확정이다.
+`.claude/wiki/plan_log/indexing.md` 의 확정이다.
 
 ## 왜 답과 질문이 한 point 인가
 
@@ -215,7 +215,7 @@ class QdrantAnswerCache:
         # **`_drop()` 을 안 부른다** — 지문 불일치는 *설정이 되돌아오면 다시 유효해지는*
         # 조건부 사망이라, 근거가 실제로 사라진 위 판정의 확정 사망과 다르다. `exact` 갈래는
         # put() 이 같은 point id 를 덮어써 저절로 정리되고, `semantic` 에 남는 항목은
-        # 상한·퇴거(plan_log/시맨틱-캐시.md 미결)가 맡을 몫이다.
+        # 상한·퇴거(.claude/wiki/plan_log/시맨틱-캐시.md 미결)가 맡을 몫이다.
         #
         # 옛 형식(키가 아예 없는 항목)은 여기서 공짜로 걸러진다 — None 은 어느 지문과도 다르다
         if payload.get("pipeline") != fingerprint:
@@ -227,7 +227,7 @@ class QdrantAnswerCache:
     # 그래서 미스 경로의 임베딩이 2회가 아니라 1회다(모듈 docstring 의 감수 사항이 여기서 준다).
     #
     # 점수가 1.0 인 것은 임의값이 아니다 — 같은 정규화 문자열이면 같은 벡터이고, 이 컬렉션의
-    # 벡터는 단위 길이라 자기 자신과의 내적이 1.0 이다(plan_log/시맨틱-캐시.md 4회차 실측)
+    # 벡터는 단위 길이라 자기 자신과의 내적이 1.0 이다(.claude/wiki/plan_log/시맨틱-캐시.md 4회차 실측)
     def _exact(self, text: str) -> tuple[Any, float] | None:
         point = self._by_id(cache_point_id_for(text))
         return None if point is None else (point, 1.0)
@@ -298,7 +298,7 @@ class QdrantAnswerCache:
 
     # 컬렉션이 없으면 만들고, 있으면 **차원이 맞는지 본다.** 거리 척도가 Dot 인 것은 문서
     # 컬렉션과 같은 이유다 — 벡터가 단위 길이라 Cosine 과 순위가 같고 더 싸다
-    # (plan_log/embedding.md 실측). **그래서 임계값을 코사인 유사도로 읽어도 된다**
+    # (.claude/wiki/plan_log/embedding.md 실측). **그래서 임계값을 코사인 유사도로 읽어도 된다**
     #
     # **차원을 확인하지 않으면 캐시가 조용히 죽는다** — 어긋난 채 upsert 하면 qdrant 에서
     # 실패하고 put() 의 except 가 삼켜 *"저장하지 못했습니다"* 라는 **원인 없는 경고 하나**로
