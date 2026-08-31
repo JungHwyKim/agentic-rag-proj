@@ -203,6 +203,13 @@ def test_recordable_paths(path: str) -> None:
         # .py 가 아닌 것은 settings.json 말고 없다
         "rag_pipeline/README.md",
         ".claude/hooks/notes.txt",
+        # **하위 CLAUDE.md 는 `SOURCE_PREFIXES` 안에 산다**(2026-08-31 에 함정 절이 폴더별로
+        # 내려갔다). 뿌리 CLAUDE.md 와 달리 이름으로 빠지는 게 아니라 `.py` 필터 하나로만
+        # 빠지므로, 그 필터를 느슨하게 하면 **문서 한 줄 고칠 때마다 회고를 요구**하게
+        # 되는데 아무 에러도 안 난다. 그 한 겹을 여기서 잠근다
+        "rag_pipeline/ingestion/loader/CLAUDE.md",
+        "backend/CLAUDE.md",
+        "evaluation/CLAUDE.md",
         # 세트 자체와 러너 문서는 .py 가 아니라 안 걸린다. 질의 한 줄 고칠 때마다 회고를
         # 요구하면 SKIP_TASKLOG=1 이 습관이 된다
         "evaluation/qa_set.jsonl",

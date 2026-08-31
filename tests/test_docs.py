@@ -33,16 +33,31 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# 검사할 문서. 모델이 실제로 지시로 따르는 것만이다
-DOC_PATHS: tuple[Path, ...] = (
-    PROJECT_ROOT / "CLAUDE.md",
-    *sorted((PROJECT_ROOT / ".claude" / "skills").rglob("*.md")),
-    *sorted((PROJECT_ROOT / ".claude" / "agents").glob("*.md")),
-)
-
 # 저장소를 훑을 때 건너뛸 디렉터리
 _SKIP_DIRS = frozenset(
     {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
+)
+
+
+# 하위 디렉터리의 `CLAUDE.md`. **뿌리와 같은 신분이라 여기 있어야 한다** — 2026-08-31 에
+# 뿌리 147,014자 중 51%였던 함정 절을 폴더별 `CLAUDE.md` 로 내리기 시작했는데, 이 훑기가
+# 없으면 옮겨간 인용이 검사에서 **조용히 빠진다.** 이 저장소가 반복해 경계하는 fail-open
+# 이다. 이름 목록이 아니라 훑기인 것은 **새 폴더가 생겨도 저절로 걸리게** 하기 위해서다
+def _nested_claude_md() -> list[Path]:
+    root_doc = PROJECT_ROOT / "CLAUDE.md"
+    return sorted(
+        p
+        for p in PROJECT_ROOT.rglob("CLAUDE.md")
+        if p != root_doc and not (_SKIP_DIRS & set(p.relative_to(PROJECT_ROOT).parts))
+    )
+
+
+# 검사할 문서. 모델이 실제로 지시로 따르는 것만이다
+DOC_PATHS: tuple[Path, ...] = (
+    PROJECT_ROOT / "CLAUDE.md",
+    *_nested_claude_md(),
+    *sorted((PROJECT_ROOT / ".claude" / "skills").rglob("*.md")),
+    *sorted((PROJECT_ROOT / ".claude" / "agents").glob("*.md")),
 )
 
 # 백틱 안의 파일 경로. **한글을 넣는다** — `plan_log/검색-생성.md` 같은 실제 경로가
@@ -207,6 +222,50 @@ def test_every_exception_states_a_reason(group: str, path: str) -> None:
     assert len(reason.strip()) >= 20, (
         f"{group} 의 {path} 사유가 너무 짧다: {reason!r} — "
         "**왜 없는 것이 옳은지**를 다음 사람이 읽고 판단할 수 있어야 한다"
+    )
+
+
+# 함정 항목의 제목. `- **제목**` 꼴에서 첫 굵은 글씨다
+_TRAP_TITLE = re.compile(r"^- \*\*(.+?)\*\*", re.MULTILINE)
+
+
+# **한 사실은 한 파일에만 산다.** 2026-08-31 에 함정을 폴더별 `CLAUDE.md` 로 내리며 정한
+# 규칙이고, 이 검사가 그것을 잠근다.
+#
+# 뿌리에 «요약» 한 줄을 남기고 싶어지는데, 그 줄은 본문이 고쳐져도 안 따라가 **두 번째
+# 진실**이 된다 — CLAUDE.md 의 `## 이 문서에 쓰지 않는 것` 이 이미 같은 이유로 스냅샷을
+# 금지한다. 여기서 재는 것은 내용이 아니라 **제목 문자열**이다: 같은 함정을 두 곳에 적으면
+# 제목이 같을 수밖에 없고, 제목까지 바꿔 적었다면 그건 이미 다른 항목이다
+def test_no_trap_title_appears_in_two_claude_files() -> None:
+    seen: dict[str, str] = {}
+    clashes: list[str] = []
+
+    for doc in (PROJECT_ROOT / "CLAUDE.md", *_nested_claude_md()):
+        rel = doc.relative_to(PROJECT_ROOT).as_posix()
+        for title in sorted(set(_TRAP_TITLE.findall(doc.read_text(encoding="utf-8")))):
+            if title in seen:
+                clashes.append(f"  {title}\n    {seen[title]}\n    {rel}")
+            else:
+                seen[title] = rel
+
+    assert not clashes, (
+        "같은 항목 제목이 두 CLAUDE.md 에 있습니다 — 한 사실은 한 파일에만 삽니다:\n"
+        + "\n".join(clashes)
+        + "\n\n뿌리에는 «어느 폴더에 있나»만 두고 본문도 요약도 두지 마세요."
+    )
+
+
+# 하위 `CLAUDE.md` 를 실제로 찾고 있나. 없으면 위 두 검사가 **0건을 훑고 조용히 통과한다** —
+# `test_documents_to_check_are_present` 와 같은 자리이고, 그 실패 모드가 이 파일이 애초에
+# 생긴 이유다. 첫 사례는 loader 이고, 앞으로 폴더가 늘면 이 하한만 올라간다
+def test_nested_claude_files_are_discovered() -> None:
+    found = {p.relative_to(PROJECT_ROOT).as_posix() for p in _nested_claude_md()}
+
+    assert "rag_pipeline/ingestion/loader/CLAUDE.md" in found, (
+        f"하위 CLAUDE.md 를 못 찾았다: {sorted(found)} — 훑기가 어긋났나"
+    )
+    assert all(p in DOC_PATHS for p in _nested_claude_md()), (
+        "하위 CLAUDE.md 가 DOC_PATHS 에 안 들어가 인용 검사를 안 탄다"
     )
 
 

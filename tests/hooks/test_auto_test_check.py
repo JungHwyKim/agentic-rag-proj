@@ -84,6 +84,10 @@ def test_editing_a_test_file_runs_that_file():
     "path",
     [
         "CLAUDE.md",
+        # 하위 CLAUDE.md 는 `SOURCE_PREFIXES` 안에 살아 이름이 아니라 `.py` 필터로만 빠진다
+        # (2026-08-31, 함정 절이 폴더별로 내려갔다). 느슨해지면 문서를 고칠 때마다 그 영역
+        # 테스트가 도는데, 위 문단이 말하는 "못 쓴다"가 바로 그 상태다
+        "rag_pipeline/ingestion/loader/CLAUDE.md",
         ".claude/wiki/plan_log/하네스-확장.md",
         ".claude/wiki/task_log/phase1.md",
         "regression/baseline.json",
