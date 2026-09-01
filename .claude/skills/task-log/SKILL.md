@@ -149,10 +149,10 @@ git diff HEAD
 ## 5단계 — 문서 점검
 
 **기록을 남겼다고 끝이 아니다.** CLAUDE.md 는 매 세션 컨텍스트에 로드되고, 리뷰 기준
-(`.claude/skills/rag-code-review/references/*.md`)은 리뷰할 때마다 읽힌다. 낡은 한 줄이
+(`.claude/wiki/knowledge/**/*.md`)은 리뷰할 때마다 읽힌다. 낡은 한 줄이
 다음 세션의 판단을 통째로 틀어놓는다. 실제로 두 번 다 겪었다 — cleaner 1차 때는 CLAUDE.md 가
 "현재 1단계(loader)까지 구현됐다"로 한 커밋 내내 남아 있었고, 2차 때는 CLAUDE.md 는 고쳤는데
-`references/cleaner.md` 가 `characters.py` 만 아는 채로 남아 반복 머리말 제거를 **가정법으로
+`.claude/wiki/knowledge/ingestion/cleaner.md` 가 `characters.py` 만 아는 채로 남아 반복 머리말 제거를 **가정법으로
 쓰인 절**로 리뷰할 뻔했다.
 
 1단계에서 이미 잡아둔 `git diff HEAD` 로 세 가지만 묻는다. 문서를 다시 쓰는 게 아니다.
@@ -166,7 +166,7 @@ git diff HEAD
 옮겨두면 두 곳에서 각자 낡는다.
 
 **셋 — 리뷰 기준이 이 변경을 아는가.**
-`rag_pipeline/` 또는 `backend/` 를 고쳤으면 그 영역의 `references/*.md` 를 같이 본다. 어느
+`rag_pipeline/` 또는 `backend/` 를 고쳤으면 그 영역의 `.claude/wiki/knowledge/**/*.md` 를 같이 본다. 어느
 파일인지는 `rag-code-review` 스킬의 라우팅 표가 알려준다. 볼 것은 둘이다.
 
 - **가정법으로 쓰인 절이 현실이 됐나.** "나중에 이런 규칙을 넣는다면" 이 실제로 들어왔으면

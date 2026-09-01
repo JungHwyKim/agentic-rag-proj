@@ -16,11 +16,12 @@ model: opus
 
 | 만지는 곳 | 읽을 것 |
 |---|---|
-| (항상) | `.claude/skills/rag-code-review/references/contracts.md` |
-| `ingestion/loader/**` | `references/loader.md` |
-| `ingestion/cleaner/**` | `references/cleaner.md` |
-| `ingestion/{splitter,embedding,indexing,retriever}/**` | `references/next-stages.md` |
-| `backend/**`, `exceptions.py` | `references/backend.md` |
+| (항상) | `.claude/wiki/knowledge/contracts.md` |
+| `ingestion/loader/**` | `.claude/wiki/knowledge/ingestion/loader.md` |
+| `ingestion/cleaner/**` | `.claude/wiki/knowledge/ingestion/cleaner.md` |
+| `ingestion/{splitter,embedding,indexing}/**` | 같은 이름의 `.claude/wiki/knowledge/ingestion/<단계>.md` |
+| `retrieval/**`, `generation/**` | `.claude/wiki/knowledge/query/` |
+| `backend/**`, `exceptions.py` | `.claude/wiki/knowledge/backend.md` |
 | 포맷별 함정 | `CLAUDE.md` 의 "알고 있어야 할 함정" |
 
 **reference 와 실제 코드가 다르면 실제 코드가 맞다.** 문서를 근거로 멀쩡한 코드를 고치지 않는다.
@@ -116,9 +117,11 @@ qdrant 연결 실패 시 적재를 멈출지 폴백할지, 부분 색인 허용 
 
 ## 다 만든 뒤
 
-1. **승격을 제안한다** — `references/next-stages.md` 에서 그 단계를 빼 `references/<stage>.md` 로
-   옮기고, `rag-code-review/SKILL.md` 의 라우팅 표와 `plan-log/SKILL.md` 의 "읽을 곳" 표
-   **양쪽**에 줄을 추가한다. 두 스킬이 같은 `references/` 를 공유한다. cleaner 가 이 경로를 밟았다
+1. **지식 문서를 만들거나 채운다** — `.claude/wiki/knowledge/` 아래 그 단계의 `<stage>.md`
+   에 계약과 «되돌리면 조용히 깨지는 것» 을 적고, `rag-code-review/SKILL.md` 의 라우팅 표와
+   `plan-log/SKILL.md` 의 "읽을 곳" 표 **양쪽**에 줄을 추가한다. 두 스킬이 같은
+   `.claude/wiki/knowledge/` 를 공유한다. cleaner 가 이 경로를 밟았고, 질의 경로는
+   2026-09-01 에 `knowledge/query/` 로 갔다
 2. **`task-log` 스킬로 기록을 남긴다** — 고른 것뿐 아니라 **버린 것과 버린 이유**, 잘못 짚었다가
    되돌린 시도가 제일 값나간다
 

@@ -33,8 +33,8 @@ description: agentic-rag-proj 에서 **무엇을 만들지 / 어떤 규칙으로
 
 | 무엇을 논의하나 | 읽을 곳 |
 |---|---|
-| (항상) | `.claude/skills/rag-code-review/references/contracts.md` |
-| 아직 없는 단계 전반 | `.claude/skills/rag-code-review/references/next-stages.md` |
+| (항상) | `.claude/wiki/knowledge/contracts.md` |
+| 질의 경로(검색·생성·에이전트) | `.claude/wiki/knowledge/query/README.md` (거기서 `retriever.md`·`generation.md` 로 간다) |
 | 앞 단계가 넘겨주는 것 | `rag_pipeline/schemas/document.py` (`ParsedDocument`·`Element`) |
 | 단계 합성 지점 | `rag_pipeline/ingestion/pipeline.py` |
 | 포맷별 함정 | `CLAUDE.md` 의 "알고 있어야 할 함정" |

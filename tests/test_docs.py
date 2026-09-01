@@ -46,10 +46,17 @@ _SKIP_DIRS = frozenset(
 # 셸로 읽으면 그것이 안 걸려 훅으로 메워야 하고 그 훅의 파이프(호출당 10,000자)가 좁아
 # **전사 재생 실측으로 (세션,폴더) 짝의 15.9%가 전문을 못 받았다.** 뿌리 한 파일은 세션
 # 시작에 통째로 실려 그 사슬이 아예 없다. 근거는 `.claude/wiki/plan_log/문서-최신성.md` 15회차
+#
+# **위키의 `overview/`·`knowledge/` 는 넣고 기록 3폴더는 안 넣는다**(2026-09-01). 기록 안의
+# 옛 경로는 «그때의 사실» 이라 안 고치기로 한 것이라 넣으면 전량 거짓 실패가 되고, 앞 둘은
+# **지금 따르는 지시**라 참이어야 한다 — CLAUDE.md 가 *"스킬·이 문서·소스 주석은 기록이
+# 아니라 지금 따르는 지시라 참이어야 해서 그때 함께 고쳤다"* 로 이미 그은 선이다
 DOC_PATHS: tuple[Path, ...] = (
     PROJECT_ROOT / "CLAUDE.md",
     *sorted((PROJECT_ROOT / ".claude" / "skills").rglob("*.md")),
     *sorted((PROJECT_ROOT / ".claude" / "agents").glob("*.md")),
+    *sorted((PROJECT_ROOT / ".claude" / "wiki" / "overview").rglob("*.md")),
+    *sorted((PROJECT_ROOT / ".claude" / "wiki" / "knowledge").rglob("*.md")),
 )
 
 # 백틱 안의 파일 경로. **한글을 넣는다** — `plan_log/검색-생성.md` 같은 실제 경로가
@@ -73,14 +80,6 @@ _CITATION = re.compile(
 
 # ① 앞으로 만들 파일. **생기면 이 예외를 빼야 한다** — 아래 반대 방향 테스트가 강제한다
 PLANNED_FILES: dict[str, str] = {
-    "references/retriever.md": (
-        "`next-stages.md` 의 「승격 규칙」이 만들 파일. 검색 설계의 «켤 조합» 이 확정되면 승격한다"
-    ),
-    "retriever.md": (
-        "바로 위 `references/retriever.md` 를 짧게 가리킨 같은 파일이다 — "
-        "승격 절차 문장이 두 표기를 섞어 쓴다"
-    ),
-    "generation.md": "같은 승격 규칙의 생성 쪽 몫. 검색과 한 파일로 둘지가 아직 미결이다",
     "sitecustomize.py": (
         "저장소 파일이 아니라 **만드는 방법**이다 — 선택 의존성이 없는 머신을 흉내 내려고 "
         "`sys.meta_path` 에 파인더를 끼울 때 그 자리에 놓는다(CLAUDE.md 의 "
@@ -248,3 +247,92 @@ def test_exception_groups_do_not_overlap() -> None:
         for path in entries:
             assert path not in seen, f"{path} 가 {seen[path]} 와 {group} 에 겹쳐 있다"
             seen[path] = group
+# --- 크기: Knowledge·Overview 문서는 `Read` 한 번에 들어와야 한다 ---
+#
+# `Read` 는 **호출당 25,000토큰**에서 자른다(실측: `.claude/wiki/plan_log/INDEX.md` 99,048자가
+# `88160 tokens, cap 25000` 으로 잘렸다 = **1.124 자/토큰**). 잘리면 **그 신호가 사람에게 안
+# 가고** 모델이 앞부분만 읽고 답한다 — Knowledge 계층의 목적(*필요한 문서만 골라 읽는다*)이
+# 조용히 깨지는 자리다.
+#
+# **20,000자를 고른 것은 환산비가 틀려도 버티기 때문이다.** 관측점이 하나뿐이라 1.124 를 그대로
+# 믿지 않는다 — 20,000자는 관측비에서 17,801토큰(캡의 71%)이고, 비가 **0.8 자/토큰까지
+# 나빠져도 정확히 캡**이다. CLAUDE.md 의 *"한국어 청크는 문자 ≈ 토큰이다"* 는 cl100k_base
+# (임베딩용) 기준이라 **다른 토크나이저인데**, 관측값이 같은 자리에 떨어졌다.
+#
+# **범위를 두 폴더로 좁힌 것도 결정이다.** 기록 3폴더는 «파일이 곧 세션/기능» 이라 크기로 못
+# 가르고(`plan_log/검색-생성.md` 270,017자), 코드 옆 README(`evaluation/README.md` 47,376자)는
+# 코드 소유라 축이 다르다. 저장소 전체에 걸면 예외 목록이 상시가 되어 아무도 안 읽는다 —
+# 이 저장소가 `SKIP_*=1` 을 두고 반복해 경계하는 모양이다.
+#
+# **넘겼을 때의 처방은 폴더 승격이다** — `x.md` → `x/README.md` + 갈래별 파일. 갈래는 크기가
+# 아니라 **의미**로 고른다. 승격으로 깨지는 링크는 위 `test_cited_paths_exist` 가 이미 잡는다
+MAX_DOC_CHARS = 20_000
+
+WIKI_DOC_ROOTS: tuple[Path, ...] = (
+    PROJECT_ROOT / ".claude" / "wiki" / "overview",
+    PROJECT_ROOT / ".claude" / "wiki" / "knowledge",
+)
+
+# **상한을 넘기는데 일부러 그런 문서.** 사유가 비면 아래 테스트가 죽는다 —
+# `PLANNED_FILES` · `openwork.NOT_A_SOURCE` · `auto_test_check.UNMAPPED_BY_DESIGN` 과 같은 자리다
+OVERSIZED_BY_DESIGN: dict[str, str] = {}
+
+
+# 검사할 문서를 실제로 찾았는지. **없으면 이 테스트가 0건을 훑고 조용히 통과한다** —
+# 지금 상한을 넘는 문서가 하나도 없어(제일 큰 것이 `knowledge/query/retriever.md`) 이 게이트는
+# 순전히 예방이고, 그래서 «대상이 0개면 죽는다» 가 유일한 무장 확인이다.
+# `test_documents_to_check_are_present` 와 같은 모양이다
+def test_wiki_docs_are_present() -> None:
+    found = [p for root in WIKI_DOC_ROOTS for p in root.rglob("*.md")]
+
+    assert found, (
+        f"{[str(r) for r in WIKI_DOC_ROOTS]} 아래에 `.md` 가 하나도 없습니다 — "
+        "폴더가 사라졌거나 이름이 바뀌었고, 그러면 아래 크기 게이트가 아무것도 안 재면서 통과합니다."
+    )
+
+
+# **본 검사.** Knowledge·Overview 문서가 `Read` 한 번에 들어오는가
+def test_wiki_docs_fit_one_read() -> None:
+    too_big: list[str] = []
+    for root in WIKI_DOC_ROOTS:
+        for p in sorted(root.rglob("*.md")):
+            rel = p.relative_to(PROJECT_ROOT).as_posix()
+            if rel in OVERSIZED_BY_DESIGN:
+                continue
+            n = len(p.read_text(encoding="utf-8"))
+            if n > MAX_DOC_CHARS:
+                too_big.append(f"  {rel}  {n:,}자 (상한 {MAX_DOC_CHARS:,})")
+
+    assert not too_big, (
+        "`Read` 한 번에 안 들어오는 문서가 있습니다:\n"
+        + "\n".join(too_big)
+        + "\n\n파일을 폴더로 승격하세요 — `x.md` → `x/README.md` + 갈래별 파일. "
+        "갈래는 크기가 아니라 **의미**로 고릅니다(loader 면 포맷, reranker 면 구현체). "
+        "일부러 큰 것이면 `OVERSIZED_BY_DESIGN` 에 **사유와 함께** 적으세요."
+    )
+
+
+# **반대 방향.** 크기 예외에 적힌 문서가 상한 아래로 내려왔으면 그 예외는 죽은 것이다
+def test_oversize_exceptions_are_still_needed() -> None:
+    dead: list[str] = []
+    for rel, _ in OVERSIZED_BY_DESIGN.items():
+        p = PROJECT_ROOT / rel
+        if not p.is_file():
+            dead.append(f"  {rel}  (파일이 없다)")
+        elif len(p.read_text(encoding="utf-8")) <= MAX_DOC_CHARS:
+            dead.append(f"  {rel}  (이제 상한 아래다)")
+
+    assert not dead, (
+        "크기 예외가 더 이상 필요 없습니다 — 지우세요:\n" + "\n".join(dead)
+    )
+
+
+# 크기 예외에도 사유가 있어야 한다
+def test_every_oversize_exception_states_a_reason() -> None:
+    thin = [rel for rel, why in OVERSIZED_BY_DESIGN.items() if len(why.strip()) < 20]
+
+    assert not thin, (
+        "`OVERSIZED_BY_DESIGN` 사유가 없거나 너무 짧습니다: "
+        + ", ".join(thin)
+        + " — **왜 가르지 않는 것이 옳은지**를 다음 사람이 읽고 판단할 수 있어야 합니다."
+    )

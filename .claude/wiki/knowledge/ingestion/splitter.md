@@ -48,7 +48,7 @@
 `.claude/wiki/plan_log/splitter.md` "합성 지점" 절.
 
 **embedding 이 생겼다는 것은 이 결정을 뒤집을 근거가 아니다.** 그쪽도 같은 이유로
-`ingest()` 밖에 있어(`references/embedding.md` 3절) 벡터를 소비할 곳이 없기는 마찬가지다.
+`ingest()` 밖에 있어(`.claude/wiki/knowledge/ingestion/embedding.md` 3절) 벡터를 소비할 곳이 없기는 마찬가지다.
 반환 형태는 indexing 이 생길 때 한 번에 정한다.
 
 `ingest(split=True)` 같은 **플래그로 반환 타입을 가르는 제안도 기각된 안**이다 —
@@ -73,7 +73,7 @@
 - ~~크기 단위가 문자다~~ — **닫혔다.** `text-embedding-3-small`(cl100k_base)로 재보니 청크의
   문자/토큰 비율이 중앙값 1.03~1.09 · 최소 0.90 이라 사실상 1:1 이고, 최대 청크가 1,201토큰으로
   모델 입력 상한 8191 에 한참 못 미친다. **문자로 유지한다** — 토큰으로 바꾸자는 제안은
-  근거가 없으니 승인하지 않는다 (`references/embedding.md`, `.claude/wiki/verify_log/2026-08-18-embedding.md`)
+  근거가 없으니 승인하지 않는다 (`.claude/wiki/knowledge/ingestion/embedding.md`, `.claude/wiki/verify_log/2026-08-18-embedding.md`)
 - **표지·간지 장식이 제목으로 승격돼 `heading_path` 에 남는다.** 알려진 미결이고 규칙을
   일부러 안 만들었다 — "첫 쪽 제외"류는 표지가 여러 쪽인 문서에서 깨진다
 - **excel/csv 를 못 쟀다.** CSV 는 파일 전체가 표 하나, Excel 은 시트당 표 하나에

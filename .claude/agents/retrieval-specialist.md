@@ -30,7 +30,8 @@ model: opus
 
 **코드부터 짜지 않는다.** `Skill` 도구로 **`plan-log`** 를 호출해 사용자와 무엇을 만들지 정한다.
 
-이 저장소가 세 곳에서 같은 말을 못박아 뒀다 — `references/next-stages.md`, `plan-log` 스킬,
+이 저장소가 세 곳에서 같은 말을 못박아 뒀다 — `.claude/wiki/knowledge/query/README.md`,
+`plan-log` 스킬,
 그리고 `code_reviewer_plan.md` §0. **셋째는 작업트리에 없다** — 실행이 끝난 지시서라
 2026-08-17 에 «커밋한 뒤 삭제» 했다(루트에 *"이렇게 만들어라"* 가 있으면 아직 안 한 일로
 착각한다는 이유다). 읽으려면 `git show 3e291e7:code_reviewer_plan.md` 다.
@@ -45,8 +46,8 @@ model: opus
   **고치기 전에 재고 고친 뒤에 다시 잰다** — `--save-baseline` 없이 돌리면 질의별 승·패·무가 나온다.
   **수치 하나로 판정하지 않는 것**이 이 세트의 규약이다(진 질의를 직접 읽는다)
 - `.claude/wiki/plan_log/INDEX.md` — 그 사이 다른 세션이 정한 것이 있을 수 있다
-- `.claude/skills/rag-code-review/references/contracts.md`
-- `.claude/skills/rag-code-review/references/next-stages.md`
+- `.claude/wiki/knowledge/contracts.md`
+- `.claude/wiki/knowledge/query/README.md` — 거기서 `retriever.md`·`generation.md` 로 간다
 - `rag_pipeline/schemas/document.py` — 앞 단계가 넘겨주는 타입
 
 ## 지금도 확실히 아는 계약
@@ -78,20 +79,25 @@ model: opus
 
 ## 승격 — 이 파일을 두껍게 만들 때
 
-**조건**: 코드는 이미 `rag_pipeline/retrieval/` 에 있으므로 남은 것은 설계 쪽이다 —
-`.claude/wiki/plan_log/검색-생성.md` 의 *"켤 조합"* 이 «확정» 으로 닫혔을 때.
-**그 전에 승격하면 곧 낡을 값을 리뷰 기준으로 만든다**(`references/next-stages.md` 의
-「승격 규칙」이 같은 이유로 두 번 미뤘다).
+**지식 문서 쪽 승격은 2026-09-01 에 끝났다** — `references/next-stages.md` 가
+`.claude/wiki/knowledge/query/{README,retriever,generation}.md` 셋으로 갈렸고, 그 파일이
+자기 「승격 규칙」에 적어 둔 기본안(*`retriever.md` · `generation.md` 로 가른다*)과
+「다시 볼 조건」(*재작성 첫 유료 측정이 끝나 `fuse`/`replace` 가 정해질 때* — 2026-08-27 에
+충족)을 그대로 따랐다. 두 스킬의 라우팅 표도 그때 함께 고쳤다.
+
+**남은 것은 이 에이전트 파일 자신이다.**
+
+**조건**: `.claude/wiki/plan_log/검색-생성.md` 의 *"켤 조합"* 이 «확정» 으로 닫혔을 때.
+**그 전에 두껍게 쓰면 곧 낡을 값을 리뷰 기준으로 만든다**(`next-stages.md` 의 「승격 규칙」이
+같은 이유로 두 번 미뤘고, 그 이유는 지식 문서가 갈린 뒤에도 이 파일에 그대로 남는다).
 
 **할 일**:
 1. 이 파일을 `.claude/agents/ingestion-specialist.md` 수준으로 채운다 — 건드릴 곳 목록,
    깨면 안 되는 것, 실측 방법
-2. `references/next-stages.md` 에서 retriever 를 빼 `references/retriever.md` 로 승격하고,
-   `rag-code-review/SKILL.md` 라우팅 표와 `plan-log/SKILL.md` "읽을 곳" 표 **양쪽**에 줄을 추가
-3. `.claude/hooks/auto_test_check.py` 매핑 표에 테스트 경로를 추가
+2. `.claude/hooks/auto_test_check.py` 매핑 표에 테스트 경로를 추가
    (안 하면 `tests/hooks/test_auto_test_check.py` 가 실패한다)
 
-cleaner 가 이 경로를 그대로 밟아 `references/cleaner.md` 로 갔다.
+cleaner 가 이 경로를 그대로 밟아 `.claude/wiki/knowledge/ingestion/cleaner.md` 로 갔다.
 
 ## 보고
 

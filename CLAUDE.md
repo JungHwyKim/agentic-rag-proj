@@ -204,6 +204,29 @@ cleaner가 실제로 밟은 경로다.
 5. 외부 API를 부르는 단계라면 `tests/conftest.py` 의 `offline_config` 에 그것을 끄는 설정을 넣는다. 기본 테스트는 키 없이 통과해야 한다. **`ingest()` 에 안 끼운 단계도 마찬가지다** — 설정 객체가 `.env` 를 직접 읽으므로 안 지우면 개발자 머신의 실키가 픽스처에 실린다
 6. `.claude/hooks/auto_test_check.py` 의 매핑 표에 그 단계의 테스트 경로를 추가한다. 빠뜨리면 **그 단계만 자동 테스트가 안 도는데 아무 에러도 안 난다** — 그래서 `tests/hooks/test_auto_test_check.py` 가 검사한다. 매핑을 넣거나, 부분 실행이 무의미한 이유를 `UNMAPPED_BY_DESIGN` 에 적거나 둘 중 하나여야 통과한다
 
+## 위키 — 어디서 무엇을 찾나
+
+`.claude/wiki/` 가 세 계층으로 갈려 있다. 진입점은 `.claude/wiki/README.md` 다.
+
+| 계층 | 답하는 물음 | 어디 |
+|---|---|---|
+| Overview | 어디에 무엇이 있나 | `.claude/wiki/overview/` (`README`·`architecture`·`glossary`) |
+| Knowledge | **지금 어떻게 동작하나** | `.claude/wiki/knowledge/` — 컴포넌트 단위 |
+| History | 왜 이렇게 됐나 | `plan_log/` · `task_log/` · `verify_log/` (아래 「기록」 절) |
+
+**Knowledge 는 `rag-code-review` 스킬의 `references/*.md` 가 2026-09-01 에 옮겨 온 것이다** —
+리뷰어가 읽는 기준과 사람이 읽는 지식이 **같은 문서**이고, 스킬 라우팅 표가 그쪽을 가리킨다.
+`rag_pipeline/` 이나 `backend/` 를 고칠 때는 그 영역의 knowledge 문서를 먼저 읽는다.
+
+**`history/` 디렉터리는 없다 — 기록 3폴더가 그 계층이고 이름·자리를 안 바꾼다.** 경로 참조가
+2,102건이고, `task_log` 121개 중 **117개가 「설계 결정」과 「실패 분석」을 한 파일에** 가져
+파일이 «결정» 도 «실패» 도 아닌 **세션**이라 못 가른다. 근거는 `.claude/wiki/README.md`.
+
+**`overview/`·`knowledge/` 문서는 20,000자 상한이 있다**(`Read` 가 호출당 25,000토큰에서
+자르는데 **잘렸다는 신호가 안 온다**). 넘기면 파일을 폴더로 승격하고, 갈래는 크기가 아니라
+**의미**로 고른다. 검사는 `tests/test_docs.py:test_wiki_docs_fit_one_read` 다. **기록 3폴더는
+이 상한 밖이다** — 파일이 곧 세션/기능이라 크기로 못 가른다.
+
 ## 기록
 
 성공한 코드는 저장소에 남지만 **기각된 대안·되돌린 시도·아직 못 정한 것은 안 남는다.** 기록의 값어치는 대부분 거기서 나온다. 시점에 따라 둘로 나뉜다.
