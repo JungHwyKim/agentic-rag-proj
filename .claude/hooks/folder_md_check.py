@@ -94,10 +94,14 @@
 **0자**다 — 훅은 정상으로 돌고 아무 에러도 안 난다. **auto mode 가 지시하는 것이 정확히
 `grep`·`ls` 라 이 구멍이 제일 자주 밟히는 자리였다.**
 
-**`Grep`·`Glob` *도구* 는 이 판에서 안 덮었다.** 그쪽은 `tool_input` 에 `command` 키가 아예
-없어 matcher 만 붙이면 **무동작**이고(먹여서 확인했다), 「경로 없음 = 저장소 전체」를 무엇으로
-대우할지가 **새 결정**이다 — 모든 폴더에서 조각을 하나씩 집으면 한 호출이 예산을 통째로
-태운다. 근거와 미결은 `.claude/wiki/plan_log/문서-최신성.md` 13회차에 있다.
+**`Grep` 도구는 2026-09-01 에 덮었고 `Glob` 은 아직이다.** `Grep` 은 `tool_input` 에 `command`
+키가 **아예 없어** matcher 에 이름만 더하면 **무동작**이라, `main()` 이 도구별로 갈라 `path` 를
+읽는다. 「경로 없음 = 저장소 전체」를 어떻게 대우할지가 걸려 있었는데 **전사로 세어 풀었다** —
+그 갈래가 **19.6%**(안 줌 5.4% + 뿌리 14.2%)뿐이라 **«안 좁혔으면 아무것도 안 싣는다»** 로
+정하고 나머지 **80.4%**를 얻었다. 「모든 폴더에서 조각 하나씩」을 아예 설계 안 해도 됐다.
+**`Glob` 은 축이 다르다** — 폴더 신호가 `path` 가 아니라 `pattern` 에 살고(앞머리에 폴더가
+있는 것 71.1%) 지침을 여는 것이 8건뿐이라 `Grep`(52건)의 6분의 1이다. 둘을 한 줄로 묶어
+두었던 것이 틀렸다. 근거는 `.claude/wiki/plan_log/문서-최신성.md` 13·14회차.
 
 **그 구멍이 「`Grep` 도구에 훅이 안 붙는다」로 기록돼 있었는데 이름이 틀렸다.** 12회차 3차
 시험이 빠진 곳은 `.claude/wiki/` 인데 **거기엔 `CLAUDE.md` 가 없어** 어떤 폴더 지침 훅으로도
@@ -238,6 +242,41 @@ def paths_in(command: str) -> list[Path]:
         found.append(resolved)
 
     return found
+
+
+# `Grep` 도구가 **좁힌** 폴더. 안 좁혔으면 빈 목록이다.
+#
+# **`path` 는 명령 문자열이 아니라 구조화된 필드라 위 구분자 판별자를 여기 쓰면 안 된다** —
+# 저기서 맨낱말을 버린 이유가 «검색어와 못 가른다» 인데, 여기서는 그 값이 경로라는 것이
+# 확실하다. 그래서 셸의 `ls backend` 는 못 잡아도 `Grep path=backend` 는 잡는다.
+#
+# **«안 좁혔으면 아무것도 안 싣는다»가 이 판의 결정이다.** `path` 를 안 주거나 저장소 뿌리를
+# 주면 어느 폴더인지 안 좁힌 것인데, 그때 모든 폴더에서 조각을 하나씩 집으면 **한 호출이
+# 예산을 통째로 태운다**(일곱 폴더 55,150자). 실측(2026-09-01, 전사 163개 · `Grep` 148건)으로
+# 그 갈래는 **19.6%**(안 줌 5.4% + 뿌리 14.2%)뿐이라, 버리고 나머지 **80.4%**를 얻는 쪽이 싸다.
+# 값어치는 **호출 하나가 지침을 실을 확률 35.1%**(52/148)이고 그 전이 전부 0이었다.
+#
+# **실사용 경로는 절대 경로다**(`C:\agentic-rag-proj\tests`). 그것을 안 다루면 한 건도 안
+# 걸리는데, 세는 쪽에서 실제로 그 버그로 `0/140` 이 나와 «Grep 은 지침을 여는 일이 없다» 로
+# 읽힐 뻔했다. 근거는 `.claude/wiki/plan_log/문서-최신성.md` 14회차
+def grep_paths(tool_input: dict) -> list[Path]:
+    raw = str(tool_input.get("path") or "").strip().strip("'\"")
+    if not raw:
+        return []
+
+    candidate = Path(raw)
+    path = candidate if candidate.is_absolute() else PROJECT_ROOT / raw
+    try:
+        if not path.exists():
+            return []
+        resolved = path.resolve()
+        if resolved == PROJECT_ROOT:
+            return []  # 뿌리를 준 것은 «안 좁혔다» 와 같다
+        resolved.relative_to(PROJECT_ROOT)
+    except (OSError, ValueError):
+        return []
+
+    return [resolved]
 
 
 # 그 경로들이 속한 폴더의 `CLAUDE.md` 전부. **뿌리 것은 뺀다** — 늘 로드된다.
@@ -414,11 +453,18 @@ def main() -> None:
     if not isinstance(tool_input, dict):
         sys.exit(0)
 
-    command = str(tool_input.get("command") or "")
-    if not command:
-        sys.exit(0)
+    # 도구마다 경로가 사는 자리가 다르다. `Grep` 은 `tool_input` 에 `command` 키가 **아예
+    # 없어서**, matcher 에 이름만 더하면 여기서 조용히 빠진다(무동작). `Glob` 은 폴더 신호가
+    # `path` 가 아니라 `pattern` 에 살고 값어치가 6분의 1이라 이 판에서 안 덮었다(14회차)
+    if str(payload.get("tool_name") or "") == "Grep":
+        paths = grep_paths(tool_input)
+    else:
+        command = str(tool_input.get("command") or "")
+        if not command:
+            sys.exit(0)
+        paths = paths_in(command)
 
-    context = compose(folder_docs_for(paths_in(command)), session_id)
+    context = compose(folder_docs_for(paths), session_id)
     if context:
         emit(context)
 

@@ -226,6 +226,96 @@ def test_a_bare_directory_argument_is_a_known_miss(session: str):
     assert out is None, "이 누락이 사라졌으면 판별자가 바뀐 것이다 — 오탐 쪽을 다시 재라"
 
 
+# --- `Grep` 도구 ---
+#
+# **matcher 에 이름만 더하면 무동작이다** — `Grep` 의 `tool_input` 에는 `command` 키가 아예
+# 없어 `main()` 이 조용히 빠진다. 그래서 이 절은 **판정 함수가 아니라 훅을 실제로 돌려** 잰다.
+#
+# 「안 좁혔으면 안 싣는다」는 전사 실측에서 나왔다(2026-09-01, `Grep` 148건) — 안 좁힌 호출이
+# **19.6%** 뿐이라 그것을 버리고 80.4%를 얻는 쪽이 싸고, 「모든 폴더에서 조각 하나씩」을 아예
+# 설계 안 해도 된다. `plan_log/문서-최신성.md` 14회차.
+
+
+# `Grep` payload 하나
+def grep(tool_input: dict, session_id: str) -> dict:
+    return {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Grep",
+        "tool_input": tool_input,
+        "session_id": session_id,
+    }
+
+
+# 폴더를 좁히면 그 폴더 지침이 실린다. **`path` 는 구조화된 필드라 구분자를 안 요구한다** —
+# 셸의 `ls backend` 는 못 잡아도(검색어와 못 가른다) 여기서는 그 값이 경로인 것이 확실하다
+def test_grep_with_a_narrowed_path_injects(session: str):
+    out, code = run_hook(grep({"pattern": "retrieve", "path": "rag_pipeline/retrieval"}, session))
+
+    assert code == 0
+    assert is_whole(context_of(out), FITS_DOC)
+
+
+# **실사용 경로는 절대 경로다.** 이걸 안 다루면 한 건도 안 걸리는데, 세는 쪽에서 실제로 그
+# 버그가 `0/140` 을 내 «Grep 은 지침을 여는 일이 없다» 로 읽힐 뻔했다(14회차)
+def test_grep_accepts_an_absolute_path(session: str):
+    absolute = str(folder_md_check.PROJECT_ROOT / "rag_pipeline" / "retrieval")
+
+    out, _ = run_hook(grep({"pattern": "retrieve", "path": absolute}, session))
+
+    assert is_whole(context_of(out), FITS_DOC)
+
+
+# 파일을 주면 그 조상 폴더가 걸린다. 훅의 나머지 규칙과 같은 자리다
+def test_grep_with_a_file_path_uses_its_ancestors(session: str):
+    out, _ = run_hook(grep({"pattern": "x", "path": FITS_FILE}, session))
+
+    assert is_whole(context_of(out), FITS_DOC)
+
+
+# **안 좁힌 호출에는 아무것도 안 싣는다.** `path` 를 안 주는 것과 저장소 뿌리를 주는 것은
+# 훅 입장에서 같다 — 키 유무로만 가르면 실측 19.6% 중 절반(뿌리 14.2%)이 «좁혔다» 로 샌다
+@pytest.mark.parametrize(
+    "tool_input",
+    [
+        {"pattern": "retrieve"},
+        {"pattern": "retrieve", "path": ""},
+        {"pattern": "retrieve", "path": "."},
+        {"pattern": "retrieve", "path": str(folder_md_check.PROJECT_ROOT)},
+    ],
+)
+def test_grep_without_a_narrowed_path_is_silent(tool_input: dict, session: str):
+    out, code = run_hook(grep(tool_input, session))
+
+    assert code == 0
+    assert out is None, "안 좁힌 호출에 실으면 한 번에 예산을 태운다"
+
+
+# 저장소 밖과 없는 경로는 무시한다
+@pytest.mark.parametrize("value", ["없는폴더", "C:/Windows", "../"])
+def test_grep_ignores_paths_outside_or_missing(value: str, session: str):
+    out, code = run_hook(grep({"pattern": "x", "path": value}, session))
+
+    assert code == 0
+    assert out is None, value
+
+
+# **`Glob` 은 이 판에서 안 덮었다.** 폴더 신호가 `path` 가 아니라 `pattern` 에 살고 값어치가
+# `Grep` 의 6분의 1이다(지침을 여는 것 8건 대 52건). 「비대칭이니 통일하자」로 여기를 열면
+# 안 잰 축을 잰 것처럼 다루게 된다 — 14회차 미결이다
+def test_glob_is_deliberately_not_covered(session: str):
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Glob",
+        "tool_input": {"pattern": "rag_pipeline/retrieval/**/*.py"},
+        "session_id": session,
+    }
+
+    out, code = run_hook(payload)
+
+    assert code == 0
+    assert out is None
+
+
 # --- 예산과 이어싣기 ---
 #
 # **이 절이 이 훅의 두 번째 실패를 잠근다.** 첫 판은 «실었다» 까지는 맞았는데 하네스가 큰
