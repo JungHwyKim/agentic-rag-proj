@@ -2,7 +2,8 @@
 
 **이 도구의 실패는 예외가 아니라 「짧은 목록」이다.** 절 이름이 바뀌거나 폴더가 옮겨가면 0건이
 나오는데 아무 에러도 안 난다. 그래서 여기서 잠그는 것은 대부분 *조용히 틀리는* 자리다 —
-① 취소선이 실제로 빠지나 ② 절·폴더가 어긋나면 시끄러운가 ③ 인용과 요약이 안 섞이나.
+① 취소선이 실제로 빠지나 ② 절·폴더가 어긋나면 시끄러운가 ③ 인용과 요약이 안 섞이나
+④ 커밋 상태는 빠지는데 **커밋을 언급하는 진짜 일감은 안 빠지나**.
 
 가상 데이터로 규칙을 고립시키고(임계값을 정하는 데는 못 쓴다), 실제 저장소 대조는 마지막 절에
 따로 둔다 — 합성 문서는 만든 사람의 기대를 그대로 갖고 있어 자기 확인이 되기 때문이다.
@@ -112,6 +113,73 @@ def test_open_items_are_not_second_guessed(fake_repo: Path) -> None:
     whats = [i["what"] for i in result["items"]]
     assert "임계값을 정한다" in whats
     assert "캐시를 안 붙였다" in whats
+
+
+# ---- 커밋 상태 ----
+
+
+# 커밋 불릿만 넣은 최소 저장소. 아래 셋이 재는 축이 **머리 판정 하나**라 다른 재료를 안 섞는다
+def _repo_with_followups(root: Path, bullets: str) -> Path:
+    wiki = _wiki(root)
+    (wiki / "plan_log").mkdir()
+    (wiki / "task_log").mkdir()
+    (wiki / "plan_log" / "검색.md").write_text("## 미결\n\n- **a** — 정하려면: b\n", encoding="utf-8")
+    (wiki / "task_log" / "2026-08-07-세션.md").write_text(
+        f"# 세션\n\n## 7. 남은 것\n\n{bullets}", encoding="utf-8"
+    )
+    return root
+
+
+# 커밋 상태는 빠지고 **닫힘과 따로 세어진다.** 한 칸에 합치면 「닫힌 것」과 「애초에 일감이
+# 아니던 것」이 섞여 무엇이 줄었는지 못 읽는다
+def test_commit_state_items_are_dropped_and_counted(tmp_path: Path) -> None:
+    root = _repo_with_followups(
+        tmp_path, "- **커밋 안 했다.** 사용자 결정이다\n- **캐시를 안 붙였다** 다음에 잰다\n"
+    )
+    result = oc.collect(root)
+    whats = [i["what"] for i in result["items"]]
+    assert "커밋 안 했다." not in whats
+    assert "캐시를 안 붙였다" in whats
+    stats = {s["folder"]: s for s in result["sources"]}
+    assert stats["task_log"]["commit_state_skipped"] == 1
+    assert stats["task_log"]["closed_skipped"] == 0
+
+
+# **커밋을 언급할 뿐인 진짜 일감은 안 빠진다.** 불릿 본문까지 훑으면 이 넷이 전부 걸리는데,
+# 실제 저장소에서 눈으로 확인한 여섯 중 넷이 이 모양이다 — 덜 거르는 쪽이 안전한 방향이다
+def test_items_that_merely_mention_commits_survive(tmp_path: Path) -> None:
+    root = _repo_with_followups(
+        tmp_path,
+        "- **세트를 커밋할지** — 정하려면: 크기와 갱신 주기를 본다\n"
+        "- **`pre_commit_check` 를 실제 커밋 경로로 안 돌렸다.**\n"
+        "- **`baseline.json` 은 커밋되는데 입력은 gitignore 다**\n"
+        "- 다른 세션의 미커밋 변경이 트리에 많다\n",
+    )
+    result = oc.collect(root)
+    assert len(result["items"]) == 4 + 1  # 뒷정리 넷 + plan_log 미결 하나
+    stats = {s["folder"]: s for s in result["sources"]}
+    assert stats["task_log"]["commit_state_skipped"] == 0
+
+
+# 실측으로 나온 변형 전부. `커밋` 하나만 보면 `미커밋`·`push` 가 새고, 그 둘이 실제로 있다
+@pytest.mark.parametrize(
+    "bullet",
+    [
+        "- **커밋 안 했다.**",
+        "- **커밋은 안 했다.** 같은 트리에 피어 세션이 붙어 있다",
+        "- **커밋하지 않았다.**",
+        "- **커밋 안 함** — 사용자가 시킬 때만 한다",
+        "- **커밋** — 도구·기록은 `d78fb60` 이다",
+        "- **커밋은 이 회차 몫만 담는다**(다른 세션이 동시에 돌고 있다)",
+        "- **미커밋** — 세션 내내 다른 세션의 미커밋이 트리에 있었다",
+        "- **push** — 이 세션은 커밋만 했다",
+        # 커밋 낱말과 부정 사이에 다른 말이 낀다. 첫 판이 이것을 놓쳤다
+        "- **커밋만 했고 푸시는 안 했다**",
+    ],
+)
+def test_commit_state_variants_are_all_caught(tmp_path: Path, bullet: str) -> None:
+    result = oc.collect(_repo_with_followups(tmp_path, bullet + "\n"))
+    assert [i["kind"] for i in result["items"]] == ["decision"]
 
 
 # ---- 뭔지 / 왜 ----
@@ -255,6 +323,36 @@ def test_renamed_heading_warns(tmp_path: Path) -> None:
     )
     result = oc.collect(tmp_path)
     assert any("plan_log" in w and "미결" in w for w in result["warnings"])
+
+
+# **파일 하나가 절을 빠뜨린 것도 시끄럽다.** 폴더 전체가 0건일 때만 경고하면 한 파일의
+# 남은 일이 통째로 0건으로 조용히 빠진다 — `2026-08-29-리랭커-점수분포.md` 가 절 번호를
+# `5. 남은 것` 으로 달아 5건을 한 달 동안 숨기고 있었고, 이 검사가 그것을 잡았다
+def test_file_without_the_section_warns(fake_repo: Path) -> None:
+    task = oc.folder_path(fake_repo, "task_log")
+    (task / "2026-08-08-번호가-밀렸다.md").write_text(
+        "# 밀린 기록\n\n## 5. 남은 것\n\n- **안 보이는 일**\n", encoding="utf-8"
+    )
+    result = oc.collect(fake_repo)
+    assert any("2026-08-08-번호가-밀렸다.md" in w for w in result["warnings"])
+
+
+# 일부러 규약 밖인 파일은 경고하지 않는다. 면제가 없으면 경고가 상시가 되어 아무도 안 읽는다
+def test_sectionless_by_design_does_not_warn(fake_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    name = "2026-08-08-일부러-다르다.md"
+    monkeypatch.setitem(oc.SECTIONLESS_BY_DESIGN, name, "핸드오프 형식이라 절 구성이 다르다")
+    (oc.folder_path(fake_repo, "task_log") / name).write_text(
+        "# 핸드오프\n\n## 0. 트리와 대조한다\n\n- 본문\n", encoding="utf-8"
+    )
+    assert oc.collect(fake_repo)["warnings"] == []
+
+
+# 면제 목록의 파일이 실재하는지 본다. **사라진 이름이 남으면 그 자리는 죽은 면제이고,
+# 같은 이름의 파일이 나중에 생기면 그때부터 조용히 안 걸린다**
+def test_sectionless_exemptions_all_exist() -> None:
+    task = oc.folder_path(PROJECT_ROOT, "task_log")
+    missing = [name for name in oc.SECTIONLESS_BY_DESIGN if not (task / name).is_file()]
+    assert missing == []
 
 
 # ---- 접기 ----

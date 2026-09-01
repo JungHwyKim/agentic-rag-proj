@@ -14,6 +14,14 @@
 도구가 내는 것은 「열린 것」이 아니라 **「열린 채로 적힌 것」**이고, 모든 항목이 출처·회차·날짜를
 달고 나가 사람이 되짚는다.
 
+**빠지는 갈래가 하나 더 있고, 그것은 닫힘이 아니라 「애초에 일감이 아니다」다** — 커밋·푸시
+상태다(`_COMMIT_STATE`). `task-log` 7절이 요구하는 것은 *"다음에 할 일 · 확인 못 한 것 ·
+사용자에게 필요한 것"* 인데 커밋 여부가 관행으로 쌓여, 실측(2026-09-01)으로 열린 불릿 726개
+중 **39개**가 그것이었다. **기록을 안 고치고 여기서 거른다** — 그 문장은 쓸 때는 사실이었고
+CLAUDE.md 가 기록의 불변을 못 박아 뒀다. 지우면 원칙이 깨지고 두면 표가 39건만큼 거짓말한다.
+**두 갈래를 `closed_skipped`·`commit_state_skipped` 로 따로 센다** — 한 칸에 합치면 「닫힌 것」과
+「일감이 아니던 것」이 섞여 무엇이 줄었는지 못 읽는다.
+
 **`.claude/wiki/verify_log/` 는 재료가 아니다** — `## 남은…` 절이 **0/129** 다. 수치만 담는 곳이라 미완이
 원래 안 적히고, 넣어도 0건이다. 축이 없는 것을 재료로 넣지 않는다.
 
@@ -85,7 +93,49 @@ NOT_A_SOURCE: dict[str, str] = {
     "verify_log": "수치만 담는 곳이라 미완이 안 적힌다 — 실측으로 '## 남은…' 절이 0/129 파일",
 }
 
+# **미완 절이 없는데 일부러 그런 파일.** 폴더 전체가 0건일 때만 시끄러우면 **파일 하나가 절을
+# 빠뜨린 것은 조용하고**, 그 파일의 남은 일이 통째로 0건으로 빠진다 — 실측으로
+# `2026-08-29-리랭커-점수분포.md` 가 절 번호를 `5. 남은 것` 으로 달아 5건을 한 달 동안
+# 숨기고 있었다(고쳤다). 그래서 파일별로도 경고한다.
+#
+# **면제 목록이 없으면 경고가 상시가 되어 아무도 안 읽는다** — `NOT_A_SOURCE` ·
+# `auto_test_check.UNMAPPED_BY_DESIGN` 과 같은 역할이고, "빠뜨린 게 아님"을 사유와 함께
+# 적는 자리다. **여기 적힌 파일은 고치지 않기로 한 것이지 규약을 지킨 것이 아니다.**
+# 키는 파일 이름이다 — 폴더까지 적을 만큼 이름이 겹치지 않는다
+SECTIONLESS_BY_DESIGN: dict[str, str] = {
+    "phase1.md": "형식 규약(2026-08-17 .md 전환) 이전의 1단계 완료 보고문. 알맹이(OCR PSM 6 · "
+    "600px 임계값 · preserve_interword_spaces)는 loader/content/image_ocr.py 에 살아 있다",
+    "routing-diff-시행령개정안.md": "2026-08-14 실파일 라우팅 검증. 규약 이전이고 "
+    "성격은 verify_log 쪽이라 7절이 설 자리가 없다",
+    "2026-08-27-임베딩-지연-핸드오프.md": "다음 세션에 넘기는 핸드오프 형식이라 절 구성이 "
+    "다르다. 머리말이 스스로 «닫혔다 (2026-08-27)» 를 적어 뒀다",
+}
+
 _CLOSED = "~~"
+
+# **커밋·푸시 상태는 일감이 아니라 세션 상태다.** `task-log` 7절이 요구하는 것은 *"다음에 할
+# 일 · 확인 못 한 것 · 사용자에게 필요한 것"* 인데 커밋 여부가 관행으로 쌓였고(실측 2026-09-01:
+# 열린 불릿 726개 중 **39개**), **쓴 그날이 지나면 낡는다** — `2026-08-22-표-격자구멍.md` 의
+# *"커밋 안 했다"* 는 `86a84ca` 로 이미 커밋된 뒤다. 그런데도 표에는 영원히 열린 일로 선다.
+#
+# **기록을 안 고치고 여기서 거른다.** 그 문장은 쓸 때는 사실이었고, CLAUDE.md 가
+# *"기록 파일 안의 옛 경로는 앞으로도 안 고친다 — 그것은 그때의 사실이다"* 로 불변을 못 박아
+# 뒀다. 지우면 원칙이 깨지고 두면 표가 39건만큼 거짓말하는데, 거르면 둘 다 안 잃는다.
+#
+# **`what_of()` 가 낸 머리만 본다.** 불릿 본문까지 훑으면 커밋을 *언급하는* 정상 항목이 함께
+# 걸린다 — 실측으로 여섯이 그 자리다(`세트를 커밋할지` · `regression/baseline.json 은
+# 커밋되는데 입력은 gitignore 다` · `pre_commit_check 를 실제 커밋 경로로 안 돌렸다` 등).
+# **덜 거르는 쪽이 안전한 방향**이라 그 여섯은 일부러 남는다(헛무는 것 0건).
+#
+# **갈래가 둘인 것은 실측이 시켰다.** 첫 판은 앞줄(조사 + 부정)뿐이었는데, 재는 사이에 피어가
+# 커밋한 기록이 `커밋만 했고 푸시는 안 했다` 를 들고 나왔다 — 커밋 낱말과 부정 사이에 다른
+# 말이 낀다. 둘째 줄이 그 자리이고, **넓혀도 위 여섯은 그대로 남는 것을 다시 쟀다**
+_COMMIT_STATE = re.compile(
+    r"^(미?커밋|스테이징|푸시|push)"
+    r"((은|는|도|만|하지)?\s*(안|않|이 |없|—|\.|$)"  # 커밋 안 했다 · 커밋하지 않았다 · 커밋
+    r"|.*?(안 했|안 함|않았|안 한다))"  # 커밋만 했고 푸시는 안 했다
+)
+
 _BOLD_HEAD = re.compile(r"^\*\*(.+?)\*\*")
 _WHY = re.compile(r"정하려면\s*[:：]|—\s*이유\s*[:：]|이유\s*[:：]")
 _ROUND_HEAD = re.compile(r"^##\s*(\d+)회차\s*—\s*(\d{4}-\d{2}-\d{2})")
@@ -221,14 +271,15 @@ def group_for_followup(
     return None, None
 
 
-# 한 파일에서 열린 항목을 뽑는다. 취소선이 달린 것은 여기서 빠지고 그 수를 함께 돌려준다
+# 한 파일에서 열린 항목을 뽑는다. **빠지는 갈래가 둘이고 각각 세어 돌려준다** —
+# 세지 않으면 표가 조용히 짧아지는데, 그것이 이 도구의 유일한 실패 모드다
 def _items_in_file(
     path: Path, source: Source, features: list[str]
-) -> tuple[list[Item], int, bool]:
+) -> tuple[list[Item], int, int, bool]:
     text = path.read_text(encoding="utf-8")
     section = section_of(text, source.heading)
     if not section:
-        return [], 0, False
+        return [], 0, 0, False
 
     dates = round_dates(text)
     latest = dates[max(dates)] if dates else None
@@ -241,9 +292,13 @@ def _items_in_file(
 
     items: list[Item] = []
     closed = 0
+    commit_state = 0
     for index, bullet in enumerate(bullets_of(section)):
         if _CLOSED in bullet:
             closed += 1
+            continue
+        if _COMMIT_STATE.match(what_of(bullet)):
+            commit_state += 1
             continue
 
         round_no: int | None = None
@@ -278,7 +333,7 @@ def _items_in_file(
                 raw_truncated=len(bullet) > RAW_LIMIT,
             )
         )
-    return items, closed, True
+    return items, closed, commit_state, True
 
 
 # 기록 폴더 하나의 실제 자리. 뿌리와 맨 이름을 잇는 **유일한** 자리다
@@ -342,13 +397,25 @@ def collect(root: Path | None = None) -> dict:
             p for p in folder_path(root, source.folder).glob("*.md") if p.name != "INDEX.md"
         )
         closed_total = 0
+        commit_state_total = 0
         with_section = 0
+        sectionless: list[str] = []
         before = len(items)
         for path in files:
-            found, closed, had_section = _items_in_file(path, source, features)
+            found, closed, commit_state, had_section = _items_in_file(path, source, features)
             items.extend(found)
             closed_total += closed
+            commit_state_total += commit_state
             with_section += int(had_section)
+            if not had_section and path.name not in SECTIONLESS_BY_DESIGN:
+                sectionless.append(path.name)
+        if sectionless:
+            warnings.append(
+                f"'{source.folder}/' 의 {len(sectionless)}개 파일에 '## {source.heading}' 절이 "
+                f"없습니다: {', '.join(sectionless)}. 절 번호가 밀렸으면 그 파일을 고치고, "
+                "일부러 규약 밖이면 openwork/collect.py 의 SECTIONLESS_BY_DESIGN 에 사유와 함께 "
+                "넣으세요 — 그러지 않으면 그 파일의 남은 일이 0건으로 조용히 빠집니다."
+            )
         if with_section == 0:
             warnings.append(
                 f"'{source.folder}/' 에서 '## {source.heading}' 절을 한 파일에서도 못 찾았습니다. "
@@ -363,6 +430,9 @@ def collect(root: Path | None = None) -> dict:
                 "files_with_section": with_section,
                 "open_items": len(items) - before,
                 "closed_skipped": closed_total,
+                # 커밋·푸시 상태라 뺀 수. **닫힘과 따로 세는 것이 요점이다** — 한 칸에 합치면
+                # 「닫힌 것」과 「애초에 일감이 아니던 것」이 섞여 어느 쪽이 줄었는지 못 읽는다
+                "commit_state_skipped": commit_state_total,
             }
         )
 
