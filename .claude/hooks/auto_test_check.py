@@ -84,6 +84,15 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     # 저쪽은 `rag_pipeline/ingestion/` 아래 디렉터리만 훑어서, 여기를 빠뜨리면
     # 그 파일만 자동 테스트가 안 도는데 아무 에러도 안 난다(2026-08-26 에 실제로 그랬다)
     ("rag_pipeline/runtime.py", "tests/test_runtime.py"),
+    # 유료 호출을 한 줄씩 남기는 비용 로그. **`runtime.py` 와 같은 이유로 여기 필요하다** —
+    # 최상위 모듈이라 커버리지 테스트가 안 잡고, 빠뜨리면 그 파일만 자동 테스트가 안 도는데
+    # 아무 에러도 안 난다. 대상이 `tests/cost` 폴더인 것은 **핀 검사가 거기 있기 때문**이다:
+    # `tests/conftest.py` 의 autouse 핀이 죽으면 개발자의 실제 비용 로그가 오염되는데,
+    # 그 검사를 이 파일 편집에서 안 돌리면 죽은 것을 한참 뒤에 안다
+    ("rag_pipeline/cost_log.py", "tests/cost"),
+    # 에이전트 트랙(도구·상태·라우터·근거 조립). 검색을 **감싸는** 쪽이라 최상위에 산다 —
+    # retrieval/ 아래 두면 검색이 자기를 감싼 껍데기를 품는 모양이 된다
+    ("rag_pipeline/agent/", "tests/agent"),
     # 답변 캐시. 적재도 검색도 아니라 최상위에 산다 — retrieve() **앞**에 서기 때문이다
     ("rag_pipeline/answer_cache/", "tests/answer_cache"),
     ("backend/", "tests/api"),
@@ -94,6 +103,14 @@ _MAPPINGS: tuple[tuple[str, str], ...] = (
     # 회귀 기준선을 재는 도구. 같은 이유로 최상위에 있고, 같은 이유로 매핑이 필요하다 —
     # 이것이 틀리면 대조 결과가 통째로 못 믿을 값이 되는데 **아무 에러도 안 난다**
     ("regression/", "tests/regression"),
+    # 비용을 재는 자. `evaluation/`(품질)·`regression/`(회귀)와 나란한 이유도 같고,
+    # 매핑이 필요한 이유도 같다 — 여기가 조용히 깨지면 «이번 실측이 얼마짜리였나» 가
+    # 못 믿을 값이 되는데 **아무 에러도 안 난다**
+    ("cost/", "tests/cost"),
+    # 기록에서 «안 끝난 것»을 모으는 자. 위 셋과 나란한 이유도 같고 매핑이 필요한 이유도 같다 —
+    # **여기가 조용히 깨지면 목록이 짧아지는데 그것이 «할 일이 줄었다»로 보인다.** 절 이름이나
+    # 폴더가 바뀌어 0건이 나와도 예외가 없는 것이 이 도구의 유일한 실패 모드다
+    ("openwork/", "tests/openwork"),
 )
 
 # **일부러 매핑하지 않는 것.** 여기 있는 경로는 전 영역에 영향을 주므로 부분 실행이
@@ -154,7 +171,10 @@ def _run_pytest(args: list[str], *, timeout: int) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            # 이 둘이 한 쌍이다. errors 만 있으면 한국어 사유가 대체문자로 뭉개지고,
+            # env 만 있으면 못 읽는 바이트에서 훅이 죽는다 (_hookutil.child_env 주석)
             errors="replace",
+            env=_hookutil.child_env(),
             timeout=timeout,
             # 하위 프로세스가 stdin 을 기다리며 멈추지 않게 한다
             stdin=subprocess.DEVNULL,

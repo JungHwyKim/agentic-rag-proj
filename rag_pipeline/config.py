@@ -5,10 +5,37 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 프로젝트 루트 (rag_pipeline/ 의 부모). cwd와 무관하게 .env를 찾기 위해 사용
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# `.env` 의 **빈 값**을 `None` 으로 읽는다. temperature 처럼 «안 보낸다» 가 합법 상태인
+# 설정에 붙인다.
+#
+# **이것이 없으면 `.env` 로는 그 상태를 아예 못 만든다** — 2026-08-29 실측으로 확인했다.
+# 줄을 지우거나 주석 처리하면 **코드 기본값**(0.2 · 0.0)이 살아나고, 빈 값·`null`·`None` 은
+# 전부 `ValidationError` 다. 그래서 `gpt-5.6-luna` 로 바꾸면 `temperature=0.2` 가 그대로
+# 나가 **400** 이 났다(`Unsupported value: 'temperature' does not support 0.2`).
+# **한때 문서가 «줄을 주석 처리한다» 로 적어 두었는데 그 처방은 틀렸다** — 기본값이 `None`
+# 이 아닌 한 주석 처리는 «안 보냄» 이 아니라 «기본값을 쓴다» 다.
+#
+# **기본값을 `None` 으로 내리는 안은 기각했다** — 0.2 는 *"근거를 벗어나지 않되 베끼지는
+# 않는다"*, 0.0 은 *"판정은 재현이 값어치"* 로 고른 값이라, 기본을 지우면 그 근거가 사라진다.
+# 빈 값을 쓰는 쪽은 `.env` 를 **쓴 사람이 명시**한 것이라 그 사고가 없다
+# **아무 `float | None` 에나 붙이지 않는다. 조건이 둘이다** — ① 「안 보냄」이 합법 상태이고
+# ② **기본값이 `None` 이 아니라서** 줄을 지우는 것으로는 그 상태를 못 만들 때.
+#
+# 둘 다 아닌 자리에 붙이면 뜻이 같아 보이는데 **축이 하나 는다.** 실제 사례 둘이 저장소에 있다 —
+# `ANSWER_CACHE_THRESHOLD` 는 **기본값이 이미 `None`** 이라 주석 처리로 꺼지므로 ②가 아니고,
+# `TAVILY_API_KEY` 는 **빈 값이 곧 「꺼짐」**이라(`''` 가 falsy) ①이 아니다. 뒤엣것에 붙이면
+# *꺼짐* 이 *안 보냄* 으로 바뀌면서 합법값이 하나 늘어난다.
+def _blank_means_none(value: object) -> object:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
 
 
 # 콘텐츠 유형별로 어떤 핸들러를 쓸지, 외부 API 비용을 어디서 끊을지 결정하는 설정
@@ -25,14 +52,14 @@ class ContentRoutingConfig(BaseSettings):
 
     # --- 표 라우팅 ---
     # PDF/이미지의 표를 무엇으로 파싱할지. llamaparse 실패 시 항상 pymupdf로 폴백된다
-    # 기본값이 pymupdf 인 이유는 실측이다(2026-08-18, plan_log/표-경로.md 1회차).
+    # 기본값이 pymupdf 인 이유는 실측이다(2026-08-18, .claude/wiki/plan_log/표-경로.md 1회차).
     # 같은 문서를 두 경로로 청킹해 보니 LlamaParse 는 마크다운이 아니라 HTML 을 돌려주고,
     # 그러면 metadata["rows"] 를 못 얻어 splitter 가 헤더 반복을 못 하고 태그 한가운데를
     # 글자 단위로 자른다 — 시행령 PDF 표청크가 24→62 로 불고 그중 16개가 여는 태그 없는
     # 조각이었다. 무과금 pymupdf 쪽이 유효한 마크다운 표에 rows 까지 갖고 있다.
     # llamaparse 경로는 지우지 않았다. HTML→rows 복원이 붙으면 다시 볼 값이다.
     #
-    # `hybrid` 는 **승급**이다(2026-08-22, plan_log/표-경로.md 11회차). pymupdf 로 뽑되
+    # `hybrid` 는 **승급**이다(2026-08-22, .claude/wiki/plan_log/표-경로.md 11회차). pymupdf 로 뽑되
     # 빈 칸에 벡터 드로잉이 있는 표만 Vision 으로 올려 **그 빈 칸만** 채운다. 표를 다시
     # 읽는 것이 아니라 메우는 것이라 병합 셀·되붙이기·쪽 경계 결과가 그대로 남는다.
     # 신호가 필요한 이유: 체크 표시가 이미지도 텍스트도 아니라 extract() 로는 원리적으로
@@ -56,7 +83,7 @@ class ContentRoutingConfig(BaseSettings):
     # 12.8x15.2pt 장식 글리프가 115x127px 로 저장돼 픽셀 필터를 그냥 통과한다(실측).
     # 20pt 는 "16.7 이하가 전부 OCR 0~1자"에서, 8:1 은 진짜 내용 최대 5.9:1 과 띠 최소
     # 10.0:1 사이 1.7배 틈에서 나왔다. 두 신호가 각자 다른 것을 잡는다 — 20pt 는 정사각
-    # 글리프를, 비율은 크고 납작한 제목 띠를 잡는다. 근거는 plan_log/이미지-경로.md 2회차
+    # 글리프를, 비율은 크고 납작한 제목 띠를 잡는다. 근거는 .claude/wiki/plan_log/이미지-경로.md 2회차
     min_image_display_pt: float = 20.0
     max_image_aspect_ratio: float = 8.0
 
@@ -79,7 +106,7 @@ class ContentRoutingConfig(BaseSettings):
     #
     # **8은 한계값이 아니라 무릎이다.** 실측(2026-08-24, 47쪽 전면 스캔본)으로 워커를 늘릴 때
     # 직전 대비 -102.1/-62.1/-23.8/**-9.5**초이고, 16이 42.3초로 8(51.8초)보다 18% 빠르지만
-    # 같은 uvicorn 이 질의도 받는다. 근거는 `verify_log/2026-08-24-ocr-병렬화.md`.
+    # 같은 uvicorn 이 질의도 받는다. 근거는 `.claude/wiki/verify_log/2026-08-24-ocr-병렬화.md`.
     #
     # **전에는 일부러 안 열었다** — 그때 근거가 *"합법값이 실제로 갈리는 두 번째 경로가
     # 생긴 뒤에 연다"* 였다. 2026-08-26 에 그 경로가 생겼다: **발열**이다. Tesseract 는
@@ -141,7 +168,7 @@ class SplitterConfig(BaseSettings):
     # 청크 한 개의 상한. **임시값이고 실측 전이다.**
     # 실측상 텍스트 요소는 제일 긴 것이 554자라 이 상한이 텍스트에서는 거의 발화하지 않는다.
     # 실제로 걸리는 곳은 표다(시행령 안내서의 67행 표가 3,243자). 근거 있는 값으로 바꾸려면
-    # 정답 질의 세트가 필요하다 — plan_log/평가-세트.md
+    # 정답 질의 세트가 필요하다 — .claude/wiki/plan_log/평가-세트.md
     max_chunk_chars: int = 1200
 
     # 상한을 넘겨 쪼갠 구간에만 주는 겹침. **섹션 경계에는 주지 않는다** —
@@ -167,7 +194,7 @@ class EmbeddingConfig(BaseSettings):
     openai_api_key: str | None = None
 
     # 어느 구현체로 임베딩하나. **구현체가 둘이 되어서 여는 설정이다** — 하나뿐일 때는
-    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(plan_log/embedding.md 3회차).
+    # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(.claude/wiki/plan_log/embedding.md 3회차).
     # `local` 은 sentence-transformers 경로다.
     #
     # **기본값이 `local` 인 것이 이 설정의 위험한 쪽이다** — 로컬 갈래는 **키가 없어도 돌아서**
@@ -179,7 +206,7 @@ class EmbeddingConfig(BaseSettings):
     # **실측으로 고른 값이다.** 같은 정답 세트 60건에서 `hit@10` 이 KURE-v1 **0.8500** vs
     # `text-embedding-3-small` **0.4833** 이고(miss 9 vs 31, `MRR` 0.5078 vs 0.2530),
     # 그래서 2026-08-25 에 갈아탔다 — 전에 여기 적혀 있던 *"임시값이고 실측 전"* 은 끝났다.
-    # 수치는 `verify_log/2026-08-25-융합-되돌리기.md`, 판단은 `plan_log/embedding.md` 5회차.
+    # 수치는 `.claude/wiki/verify_log/2026-08-25-융합-되돌리기.md`, 판단은 `.claude/wiki/plan_log/embedding.md` 5회차.
     # `provider="local"` 이라 HuggingFace 리포지터리 이름이다
     embedding_model: str = "nlpai-lab/KURE-v1"
 
@@ -195,7 +222,7 @@ class EmbeddingConfig(BaseSettings):
     # 생겨 예약해 뒀던 측정을 했다: 실제 청크 414개를 두 장치로 인코딩해 `1-cos` 최대
     # **1.354e-09** · 성분 최대 절대차 5.728e-06 · 노름 양쪽 1.0000000 이다(합성 입력
     # 200개에서는 `1-cos` 가 정확히 0이었다 — 실제 청크에서는 0이 아니지만 float32 오차
-    # 수준인 것은 같다). 그래서 **넣지 않는 것이 확정**이고, `verify_log/2026-08-26-
+    # 수준인 것은 같다). 그래서 **넣지 않는 것이 확정**이고, `.claude/wiki/verify_log/2026-08-26-
     # 스레드-발열-GPU.md` 가 근거다.
     #
     # 넣었다면 GPU 로 옮기는 순간 임베딩 캐시가 전량 미스가 되고 컬렉션이 갈려 옛 색인이
@@ -257,7 +284,7 @@ class RetrievalConfig(BaseSettings):
     )
 
     # 각 경로(dense·BM25)에서 뽑아 RRF 로 합칠 후보 수. **임시값이고 실측 전이다** —
-    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(plan_log/검색-생성.md 2회차).
+    # Phase 2 의 dense vs hybrid 측정 뒤에 재판정한다(.claude/wiki/plan_log/검색-생성.md 2회차).
     # 50 은 새로 지어낸 수가 아니라 schemas/retrieval.py docstring 이 이미 쓴 수이고,
     # 문서당 청크가 45~104개이므로 대략 한 문서치다.
     # **두 경로에 같은 값을 쓴다** — 한쪽만 길면 RRF 가 긴 쪽에 유리해져, 기울기가 숫자가
@@ -287,16 +314,21 @@ class RerankConfig(BaseSettings):
     # 중복이 아니라 각 설정 객체가 독립이라 각자 읽는 것이다
     openai_api_key: str | None = None
 
-    # 어느 구현체로 다시 정렬하나. **구현체가 둘이라 여는 설정이다** — `embedding_provider`
+    # Cohere 갈래의 키. `openai_api_key` 와 **별개 필드인 것이 요점이다** — 한 칸을 돌려쓰면
+    # provider 를 바꿀 때 남의 키를 물고 401 을 폴백으로 삼킨다(경고만 남고 에러가 안 난다)
+    cohere_api_key: str | None = None
+
+    # 어느 구현체로 다시 정렬하나. **구현체가 셋이라 여는 설정이다** — `embedding_provider`
     # 와 같은 잣대이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
-    # `local` 은 sentence-transformers CrossEncoder 경로다.
+    # `local` 은 sentence-transformers CrossEncoder, `openai` 는 LLM 채점기(listwise),
+    # `cohere` 는 전용 리랭킹 API 다 — **뒤 둘은 같은 '유료'가 아니라 종류가 다르다.**
     # **키가 없어도 도는 갈래라** tests/conftest.py 의 offline_config 가 이 값을 못 박는다
-    rerank_provider: Literal["openai", "local"] = "openai"
+    rerank_provider: Literal["openai", "local", "cohere"] = "openai"
 
     # 무슨 모델로. **기본값이 없는 것이 설계다** — 비어 있으면 `get_reranker()` 가 None 을
     # 돌려줘 리랭커가 통째로 꺼진다(`answer_cache_threshold` 와 같은 모양).
     # 여기서 켜는 순간 **질의당 LLM 호출이 1회에서 2회가 되므로**, 값을 하는지 재기 전에
-    # 과금이 먼저 붙는 것을 막는다. 재는 방법은 plan_log/검색-생성.md 5회차.
+    # 과금이 먼저 붙는 것을 막는다. 재는 방법은 .claude/wiki/plan_log/검색-생성.md 5회차.
     # `provider="openai"` 면 `gpt-4.1-mini` 꼴, `local` 이면 HuggingFace 리포지터리 이름이다
     rerank_model: str | None = None
 
@@ -308,11 +340,20 @@ class RerankConfig(BaseSettings):
     # 후보를 몇 개까지 먹이나. **`candidate_k` 와 같은 수지만 축이 다르다** — 저쪽은 각 경로가
     # *뽑는* 폭이고 이쪽은 리랭커가 *보는* 폭이다. 지금 같은 값인 것은 우연이 아니라
     # "풀 전부를 먹인다"가 결정이어서다: 20으로 자르면 실측으로 후보 #30·#26 에 있던 정답을
-    # 버린다(verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
+    # 버린다(.claude/wiki/verify_log/2026-08-24-리랭커-여지.md). 갈라야 할 근거가 나오면 그때 값이 갈린다
     rerank_candidates: int = 50
 
-    # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다
+    # 응답 길이 상한. 후보당 `{"i": N, "score": M}` 한 줄이라 후보 수에 선형이다.
+    # **`openai` 갈래만 쓴다** — 아래 `rerank_max_tokens_per_doc` 과 이름이 닮았지만 축이 다르다
     rerank_max_tokens: int = 4096
+
+    # `cohere` 갈래가 문서 하나를 몇 토큰까지 보내나. **SDK 기본값과 같은 값을 명시로 박는다** —
+    # 이 코퍼스의 청크는 최대 약 1,200자·토큰이라(CLAUDE.md 의 *문자 ≈ 토큰*) 안 잘리지만,
+    # SDK 기본값이 내려가면 **조용히 잘리기 시작하고 그것은 에러가 아니라 수치로만 드러난다.**
+    # 자르면 안 되는 이유는 `openai_llm` 이 *청크를 안 자른다* 를 정한 것과 같다 —
+    # 정답 span 이 마크다운 표의 행에 흩어져 있어 앞부분만 보면 헤더만 보인다.
+    # **과금 단위와 헷갈리지 말 것**: 과금은 500 토큰마다 별개 문서로 세므로 이 값과 무관하다
+    rerank_max_tokens_per_doc: int = 4096
 
     # 점수는 재현돼야 한다. 생성(0.2)과 달리 0 인 이유는 **추릴 여지를 남길 데가 없어서**다 —
     # 여기서 모델이 하는 일은 문장을 쓰는 것이 아니라 순서를 매기는 것 하나뿐이다
@@ -322,6 +363,57 @@ class RerankConfig(BaseSettings):
     # 디렉터리를 가른다. **평가를 여러 번 돌리는 것이 공짜가 되는 자리다**
     rerank_cache_enabled: bool = True
     rerank_cache_dir: Path = PROJECT_ROOT / ".cache" / "rerank"
+
+
+# 1차 검색 결과를 보고 질의를 다시 쓰는 설정(PRF). RerankConfig·EvaluatorConfig 와 같은
+# 모양인 이유도 같다: 켜지는 순간 질의당 LLM 호출이 하나 늘어, 값을 하는지 재기 전에 과금이
+# 먼저 붙는 것을 막는 자리가 똑같다 (.claude/wiki/plan_log/검색-생성.md 22회차)
+class RewriteConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 다른 설정 객체와 같은 .env 키를 읽는다. 중복이 아니라 각자 독립이라 각자 읽는 것이다
+    openai_api_key: str | None = None
+
+    # 무슨 모델로. **비어 있으면 `get_rewriter()` 가 None 을 돌려줘 통째로 꺼진다** —
+    # `rerank_model`·`evaluator_model` 과 글자 그대로 같은 모양이고, 저장소에는 꺼진 채 커밋된다
+    rewrite_model: str | None = None
+
+    # 재작성 질의의 검색 결과를 원 질의와 어떻게 합치나. **합법값 둘이 실재해 죽은 설정이
+    # 아니다** — `rerank_provider` 와 같은 잣대다.
+    #
+    # `fuse` 는 원 질의 갈래를 남기고 재작성 갈래를 RRF 에 더한다(7회차 로드맵).
+    # `replace` 는 재작성 질의로만 검색한다 — **21회차 프로브가 잰 것이 이쪽이다**
+    # (.claude/wiki/verify_log/2026-08-27-라벨-전수검수-재작성프로브.md 7절: *"프로브는 질의 문자열만
+    # 바꾼 것"*). 즉 `sih-07` 102위 → 2위 는 `replace` 의 수치이고 `fuse` 의 것이 아니다.
+    # 둘을 다 만든 이유가 그것이다 — 어느 쪽이 나은지를 추측이 아니라 측정으로 답한다
+    rewrite_mode: Literal["fuse", "replace"] = "fuse"
+
+    # 1차 검색 결과 몇 개를 재작성기에 보여주나. **10 은 21회차가 실제로 잰 폭이다** —
+    # 그 회차가 "1차 상위 10 에 필요한 낱말이 있나"를 6건에서 확인했고, 겨냥하는 최악의
+    # 질의(`sih-07`, 정답 102위)조차 상위 10 에 어휘가 다 있었다. 정답 청크를 못 건져도
+    # **어휘는 이미 건져 놨다**는 것이 PRF 를 고른 근거라, 이 값이 그 근거의 폭이다
+    rewrite_context_k: int = 10
+
+    # 재작성은 재현돼야 한다. **`float | None` 이고 `None` 은 *보내지 않는다* 는 뜻이다** —
+    # gpt-5 계열이 `temperature=0.0` 을 400 으로 거부하기 때문이고, `1.0` 을 대신 보내지
+    # 않는 이유는 그것이 *0.0 이 재현을 위한 값이었다* 는 사실을 지우기 때문이다
+    # (EvaluatorConfig.evaluator_temperature 와 같은 자리 · CLAUDE.md).
+    # **`.env` 로 그 상태를 만들려면 줄을 주석 처리한다** — 빈 값은 파싱하다 죽는다
+    rewrite_temperature: float | None = 0.0
+
+    # 응답 길이 상한. 출력이 질문 문장 하나(`{"query": "..."}`)라 후보 수에 안 실린다 —
+    # 후보당 한 줄을 받는 `rerank_max_tokens`(4096)와 축이 다르다
+    rewrite_max_tokens: int = 256
+
+    # 같은 (질의, 1차 후보) 를 두 번 다시 쓰지 않는다. 콘텐츠·임베딩·리랭킹 캐시와 수명이
+    # 달라 디렉터리를 가른다. **여기가 두 모드를 견주는 것을 공짜로 만드는 자리다** —
+    # 재작성 호출은 mode 보다 앞에서 일어나므로 fuse·replace 가 같은 항목을 읽는다
+    rewrite_cache_enabled: bool = True
+    rewrite_cache_dir: Path = PROJECT_ROOT / ".cache" / "rewrite"
 
 
 # 검색된 청크로 답변을 만들 때 쓰는 설정. 질의당 LLM 1회가 비용의 전부다
@@ -337,7 +429,7 @@ class GenerationConfig(BaseSettings):
     openai_api_key: str | None = None
 
     # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
-    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(plan_log/backend.md).
+    # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(.claude/wiki/plan_log/backend.md).
     # Vision 과 같은 모델을 쓰는 것은 우연이 아니라 싼 쪽에서 시작한다는 같은 판단이다
     generation_model: str = "gpt-4.1-mini"
 
@@ -345,12 +437,24 @@ class GenerationConfig(BaseSettings):
     generation_max_tokens: int = 1024
 
     # 근거에서 벗어나지 않는 것이 목적이라 낮게 둔다. 0 이 아닌 이유는 표·목록을 그대로
-    # 베끼는 대신 질문에 맞게 추리는 여지를 남기기 위해서다
-    generation_temperature: float = 0.2
+    # 베끼는 대신 질문에 맞게 추리는 여지를 남기기 위해서다.
+    #
+    # **`None` 은 «인자를 안 보낸다» 는 뜻이다** — gpt-5 계열이 기본값(1) 말고는 400 이라
+    # 그 모델로 가려면 이 값을 비워야 한다(`EvaluatorConfig.evaluator_temperature` 와 같은
+    # 자리 · CLAUDE.md). **`1.0` 을 대신 적지 않는다** — 그건 기본값을 명시하는 것뿐이면서
+    # *0.2 가 위 이유로 고른 값이었다* 는 사실을 지운다. **`.env` 에서는 줄을 주석 처리한다**
+    # — 빈 값은 `''` 를 float 로 파싱하다 죽는다
+    generation_temperature: float | None = 0.2
+
+    # **`.env` 에서는 빈 값(`GENERATION_TEMPERATURE=`)이 «안 보냄» 이다** — 줄을 지우면
+    # 위 기본값 0.2 가 살아나 gpt-5 계열에서 400 이 난다 (`_blank_means_none` 참고)
+    _blank_temperature = field_validator("generation_temperature", mode="before")(
+        _blank_means_none
+    )
 
     # 컨텍스트에 실을 청크 수. **임시값이다** — baseline 이 hit@1 0.150 / @5 0.400 /
     # @10 0.483 / @20 0.617 이라 늘리면 오르는 것은 알지만, 대가(컨텍스트 토큰·답변 품질)를
-    # 재는 쪽이 없어 값을 못 정한다. plan_log/indexing.md 의 top_k 미결과 한 줄이다
+    # 재는 쪽이 없어 값을 못 정한다. .claude/wiki/plan_log/indexing.md 의 top_k 미결과 한 줄이다
     generation_top_k: int = 5
 
 
@@ -380,15 +484,91 @@ class AnswerCacheConfig(BaseSettings):
     #
     # **`exact` 는 임계값 없이도 켜진다** — 이 축에는 정할 값이 없기 때문이다.
     # 기본값이 `semantic` 이라 `.env` 를 안 건드리면 지금까지와 글자 그대로 같다
-    # (임계값이 비어 있어 캐시가 통째로 꺼진 상태). 근거는 plan_log/시맨틱-캐시.md 6회차
+    # (임계값이 비어 있어 캐시가 통째로 꺼진 상태). 근거는 .claude/wiki/plan_log/시맨틱-캐시.md 6회차
     answer_cache_mode: Literal["semantic", "exact"] = "semantic"
 
     # 이 값 이상이면 "같은 질문"으로 본다. **기본값이 없는 것이 설계다.**
     # None 이면 get_answer_cache() 가 None 을 돌려줘 캐시가 통째로 꺼진다 — 이 저장소의
     # 임계값은 전부 분포의 틈에서 나왔는데(표 되붙이기 12pt, 표시 면적비 0.08 vs 1.00)
     # 이 축은 아직 안 쟀다. 근거 없는 수를 기본값으로 두면 그 사실이 조용히 묻힌다.
-    # 재는 방법은 plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
+    # 재는 방법은 .claude/wiki/plan_log/시맨틱-캐시.md 의 "임계값의 근거" 절
     answer_cache_threshold: float | None = None
+
+
+# 검색된 근거가 질문에 답하기에 충분한지 판정할 때 쓰는 설정. **켜는 축은 모델 이름 하나다** —
+# 비면 get_evaluator() 가 None 을 돌려주고 그것이 곧 꺼진 상태다. RerankConfig 와 같은 모양인
+# 이유도 같다: 켜지는 순간 질의당 LLM 호출이 1회에서 2회가 되므로, 값을 하는지 재기 전에
+# 과금이 먼저 붙는 것을 막는 자리가 똑같다 (.claude/wiki/plan_log/검색-생성.md 11회차)
+class EvaluatorConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # GenerationConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정 객체가 독립이라 각자
+    # 읽는 것이다 — 판정만 끄고 생성은 살리는 조합이 가능해야 한다
+    openai_api_key: str | None = None
+
+    # 판정에 쓸 모델. **비면 통째로 꺼진다** — RERANK_MODEL 과 글자 그대로 같은 모양이고
+    # 저장소에는 꺼진 채 커밋된다. 켜는 것은 혼동행렬을 재고 나서 .env 에 이름이 들어가는 순간이다
+    evaluator_model: str | None = None
+
+    # 판정은 재현이 값어치라 0 이다. 생성이 0.2 인 것과 갈리는 이유는 출력의 모양이다 —
+    # 저쪽은 표·목록을 질문에 맞게 추리는 여지가 필요하지만 이쪽 출력은 세 상태 중 하나다.
+    #
+    # **None 은 "그 인자를 아예 안 보낸다"는 뜻이다.** gpt-5 계열은 0.0 을 400 으로 거부하고
+    # 기본값(1)만 받는다(2026-08-27 luna 실측). 1.0 을 보내는 것으로 흉내 내지 않는 이유는
+    # 그게 기본값을 명시하는 것뿐이면서 **0.0 이 재현을 위한 값이었다는 사실을 코드에서
+    # 지워 버리기** 때문이다. 기본값이 0.0 그대로인 것이 요점이다 — gpt-4.1-mini 경로는
+    # 글자 그대로 안 바뀐다.
+    #
+    # **`.env` 에서 None 을 만들려면 줄을 주석 처리한다.** `EVALUATOR_TEMPERATURE=` 처럼
+    # 빈 값을 두면 `float | None` 이 `''` 를 파싱하다 ValidationError 로 죽는다
+    # (`EMBEDDING_DIMENSIONS` 가 `.env.example` 에서 주석인 것과 같은 이유다)
+    evaluator_temperature: float | None = 0.0
+
+    # 위 `generation_temperature` 와 같은 자리다. **여기가 먼저 있었는데 결함도 먼저
+    # 있었다** — 문서가 「줄을 주석 처리하면 안 보낸다」로 적어 둔 것이 틀렸고,
+    # 주석 처리하면 기본값 0.0 이 살아나 gpt-5 계열에서 그대로 400 이었다 (2026-08-29 실측)
+    _blank_temperature = field_validator("evaluator_temperature", mode="before")(
+        _blank_means_none
+    )
+
+    # verdict 한 줄 + 사유 한두 문장. **임시값이다** — 사유가 잘리는지는 첫 혼동행렬의
+    # reasoning 을 사람이 읽고 정한다.
+    # **API 인자 이름은 `max_completion_tokens` 다** — gpt-5 계열이 `max_tokens` 를 400 으로
+    # 거부한다. 설정 이름을 안 따라 바꾸는 것은 이게 우리 축의 이름이라서다: 바꾸면 `.env` 의
+    # `EVALUATOR_MAX_TOKENS` 가 `extra="ignore"` 를 타고 **에러 없이** 죽는다
+    evaluator_max_tokens: int = 512
+
+    # 같은 (질의, 후보) 짝을 다시 물으면 API 를 안 탄다. 채점 재실행이 무료여야 실패 버킷을
+    # 읽고 프롬프트를 고치는 반복이 성립한다. 프롬프트를 고치면 salt 가 갈려 자동으로 미스가 된다
+    evaluator_cache_enabled: bool = True
+    evaluator_cache_dir: Path = PROJECT_ROOT / ".cache" / "evaluator"
+
+
+# 재시도 루프(⚑Checkpoint A) 설정. **켜는 축이 수 하나뿐이다.**
+#
+# **`0` 이 곧 꺼짐이다.** `agent_loop_enabled` 를 따로 두지 않은 것은 결정이다 — 리랭커가
+# 「켜는 데 세 줄」로 물린 자리와 같은 모양이 되고, 두 설정이 어긋난 조합(`enabled=true` 인데
+# `max_retries=0`)이 **에러 없이** 생긴다. 대가는 «검색 한 번 + 생성» 루프를 못 쓰는 것인데,
+# 그 조합은 `answer_question()` 과 관측상 같아 잃는 것이 없다.
+#
+# **저장소 커밋본은 꺼진 채다** — `RERANK_MODEL`·`REWRITE_MODEL`·`EVALUATOR_MODEL` 과 같은
+# 규칙이고 이유도 같다. 켜는 순간 질의당 LLM 호출이 회차 수만큼 늘어(회차마다 판정 1회 +
+# 마지막에 생성 1회), 값을 하는지 재기 전에 과금이 먼저 붙는 것을 막는다
+class AgentConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 근거가 불충분할 때 질의를 승급해 다시 찾아갈 최대 횟수. **0 이면 루프를 아예 안 돈다.**
+    # 3 은 스펙(`retrieval/IMPLEMENTATION_SPEC.md` ⚑Checkpoint A)의 값이고 실측으로 고른
+    # 수가 아니다 — 실사용 회차 분포를 보고 정할 자리인데 아직 표본이 없다
+    agent_max_retries: int = 0
 
 
 # 적재 파이프라인 전체 설정
@@ -462,6 +642,16 @@ class IngestConfig(BaseSettings):
             object.__setattr__(self, "_rerank", RerankConfig())
         return self._rerank  # type: ignore[attr-defined]
 
+    # 질의 재작성 설정. 같은 lazy 형태라 테스트·평가에서 _rewrite 로 덮어쓸 수 있다.
+    # **evaluator 와 같은 이유로 lazy 여야 한다** — RewriteConfig() 가 .env 를 직접 읽으므로,
+    # 안 덮으면 개발자 머신의 REWRITE_MODEL 이 픽스처에 실려 **기본 pytest 가 과금 경로로
+    # 간다.** 로컬 갈래가 없어 가중치 적재는 없지만 대신 돈이다
+    @property
+    def rewrite(self) -> RewriteConfig:
+        if not hasattr(self, "_rewrite"):
+            object.__setattr__(self, "_rewrite", RewriteConfig())
+        return self._rewrite  # type: ignore[attr-defined]
+
     # 생성 단계 설정. 같은 lazy 형태라 테스트에서 _generation 으로 덮어쓸 수 있다.
     # **그 덮어쓰기가 offline_config 의 실키 차단이다** — GenerationConfig() 가 .env 를 직접
     # 읽으므로, lazy 가 아니면 픽스처가 키를 지운 객체를 꽂을 자리 자체가 없다
@@ -480,6 +670,25 @@ class IngestConfig(BaseSettings):
         if not hasattr(self, "_answer_cache"):
             object.__setattr__(self, "_answer_cache", AnswerCacheConfig())
         return self._answer_cache  # type: ignore[attr-defined]
+
+    # 판정 단계 설정. 같은 lazy 형태라 테스트에서 _evaluator 로 덮어쓸 수 있다.
+    # **generation·answer_cache 와 같은 이유로 lazy 여야 한다** — EvaluatorConfig() 가 .env 를
+    # 직접 읽으므로, 안 덮으면 개발자 머신의 모델 이름이 픽스처에 실려 **기본 pytest 가 과금
+    # 경로로 간다.** 켜는 축이 이름 하나뿐이라 그 한 줄이 곧 스위치다
+    @property
+    def evaluator(self) -> EvaluatorConfig:
+        if not hasattr(self, "_evaluator"):
+            object.__setattr__(self, "_evaluator", EvaluatorConfig())
+        return self._evaluator  # type: ignore[attr-defined]
+
+    # 재시도 루프 설정. 같은 lazy 형태라 테스트에서 _agent 로 덮어쓸 수 있다.
+    # **evaluator 와 같은 이유로 lazy 여야 한다** — AgentConfig() 가 .env 를 직접 읽으므로,
+    # 안 덮으면 개발자 머신에서 켜 둔 회차 수가 픽스처에 실려 **기본 pytest 가 루프를 돈다**
+    @property
+    def agent(self) -> AgentConfig:
+        if not hasattr(self, "_agent"):
+            object.__setattr__(self, "_agent", AgentConfig())
+        return self._agent  # type: ignore[attr-defined]
 
 
 # 프로세스 전역인 것만 여기 온다. **`EmbeddingConfig`·`RerankConfig` 로 가르지 않는 이유**가
@@ -500,7 +709,7 @@ class RuntimeConfig(BaseSettings):
     # torch 가 쓸 CPU 스레드 수(intra-op). **None 이면 torch 기본값을 안 건드린다** —
     # 그 기본값은 물리 코어 수다.
     #
-    # **기본을 낮추지 않는 것이 결정이다.** `verify_log/` 의 모든 벽시계와
+    # **기본을 낮추지 않는 것이 결정이다.** `.claude/wiki/verify_log/` 의 모든 벽시계와
     # `regression/baseline.json` 이 8스레드에서 잰 값이라, 기본을 바꾸면 과거 수치가
     # **조용히 비교 불가**가 된다. `embedding_device` 가 자동 감지를 안 하는 것과 같은
     # 잣대이고, 발열을 줄이려면 사용자가 `.env` 에서 명시로 내린다.
@@ -509,6 +718,72 @@ class RuntimeConfig(BaseSettings):
     # ① 재현성 때문에 일부러 `cpu` 를 못 박은 `evaluation/config.py` 의 프로필
     # ② GPU 없는 머신 ③ VRAM 이 모자라 CPU 로 내릴 때
     torch_num_threads: int | None = None
+
+
+# 에이전트 도구 계층이 쓰는 웹 검색 설정. **`IngestConfig` 에 안 붙는다** — 소비자가
+# `agent/tools/web_search.py` 하나이고, `RetrievalConfig` 을 `RetrieverTool` 이 직접 받는
+# 것과 같은 자리다. 그래서 `offline_config` 가 이 객체를 못 덮고, **개발자 `.env` 의 실키를
+# 막는 것은 `tests/agent/conftest.py` 의 autouse 픽스처다**(그쪽 docstring 에 이유가 있다).
+#
+# **자리가 파일 끝인 것은 설계가 아니라 조율이다** — 2026-08-29 에 다른 세션이
+# `EvaluatorConfig` 뒤에 `AgentConfig` 를 넣는 중이어서 비켰다. 묶음으로는 `AgentConfig`
+# 옆이 맞다
+class WebSearchConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 켜는 축은 이 키 하나다. **비면 `_make_client()` 가 None 을 돌려줘 도구가 통째로 꺼진다**
+    # — `rerank_model`·`evaluator_model`·`rewrite_model` 이 빈 값으로 꺼지는 것과 글자 그대로
+    # 같은 모양이고, **저장소 커밋본은 꺼진 채다.** 여기서 켜는 순간 질의당 크레딧이 나간다
+    tavily_api_key: str | None = None
+
+    # 몇 건을 받아오나. `generation_top_k`(5)와 나란한 수로 뒀다 — **임시값이고 실측 전이다.**
+    # 웹 근거가 답변에 실리는 경로가 아직 없어(Router 가 이 도구를 안 고른다) 잴 자[尺]가 없다
+    web_search_max_results: int = 5
+
+    # 검색 깊이. **합법값 둘이 크레딧을 갈라 죽은 설정이 아니다** — `rerank_provider`·
+    # `rewrite_mode` 와 같은 잣대이고, 구현체가 Tavily 하나뿐이라 `WEB_SEARCH_PROVIDER` 를
+    # **안 만든 것**이 그 잣대의 반대쪽 사례다. `advanced` 는 같은 질의에 크레딧을 더 쓴다
+    web_search_depth: Literal["basic", "advanced"] = "basic"
+
+    # **호출 캐시 설정이 없는 것이 결정이다.** 이 저장소의 캐시 셋(embedding·rerank·rewrite)은
+    # 전부 *같은 입력이면 같은 출력* 이 참이라 내용 해시만으로 키가 서는데, 웹 검색은 그것이
+    # **거짓**이다 — 결과가 시간에 따라 변하는 것이 이 도구의 존재 이유다. TTL 없이 붙이면
+    # «최신을 찾는 도구가 옛 답을 준다» 가 에러 없이 생기고, TTL 값은 재야 정해지는데 잴
+    # 자[尺]가 없다(이 저장소의 임계값은 전부 분포의 틈에서 나왔다).
+    # 대가는 **테스트·탐색을 되풀이하면 크레딧이 그만큼 나간다**는 것이다
+
+
+# 유료 API 호출을 한 줄씩 남기는 비용 로그 설정.
+#
+# **`IngestConfig` 에 안 붙는다.** 단계가 아니라 **가로지르는** 것이라서다 — 적재(Vision·
+# LlamaParse)도 검색(리랭킹·재작성)도 생성도 평가(지지 판정)도 도구(웹 검색)도 같은 파일에
+# 쓴다. `RuntimeConfig` 이 홀로 사는 것과 같은 자리이고, 소비자가 하나인 `WebSearchConfig`
+# 와는 반대 이유로 그렇다(저쪽은 소비자가 하나라서, 이쪽은 소비자가 전부라서).
+#
+# **기본이 켜짐인 것이 결정이다.** 유료 실측은 다시 돌리는 것 자체가 비용이라, "켜는 걸
+# 잊은 회차"는 그 수치를 영영 못 얻는다. 대가는 테스트가 개발자 파일에 쓰는 것인데 그쪽은
+# `tests/conftest.py` 의 **autouse 핀**이 막는다 — `Settings.query_log_enabled` 가 이미 밟은
+# 길이고, 거기서 배운 것은 **핀이 배선보다 먼저 들어가야 한다**는 것이다.
+#
+# **금액 설정이 여기 없는 것도 결정이다.** 가격표는 `cost/pricing.py` 가 갖고 로그는 관측만
+# 남긴다 — 단가가 바뀌면 이미 쌓인 줄이 조용히 거짓이 되기 때문이다
+class CostLogConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    cost_log_enabled: bool = True
+    cost_log_path: Path = PROJECT_ROOT / "data" / "cost.jsonl"
+
+    # 이 실행에 붙일 이름. `run_eval --label` · `answer_eval --label` 이 그대로 넘겨 리포트
+    # JSON 과 조인된다. **비어 있어도 된다** — 그때는 `run_id` 만으로 실행이 갈린다
+    cost_label: str = ""
 
 
 # 기본 설정 인스턴스를 만들어 반환. 테스트에서는 직접 생성해 값을 덮어쓴다

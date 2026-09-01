@@ -13,7 +13,7 @@ embedding 결정이 아니라 API 결정이다. 청크 285~721개 × 1536차원�
 
 부수 효과 하나가 중요하다 — **기본 `pytest` 가 이 단계를 아예 안 부른다.** 그래서 키가
 없을 때 예외를 던지는 설계가 기본 테스트를 깨지 않는다. 두 결정이 서로를 지탱한다.
-근거는 plan_log/embedding.md 의 "합성 지점" 절.
+근거는 .claude/wiki/plan_log/embedding.md 의 "합성 지점" 절.
 
 ## provider 설정이 왜 이제 있나
 

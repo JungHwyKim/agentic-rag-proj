@@ -1,12 +1,12 @@
 # Retrieval & Generation Pipeline — Implementation Spec (Phased Handoff)
 
-> **이 문서는 외부에서 가져온 원안이다.** 확정된 설계는 `plan_log/검색-생성.md` 이고,
+> **이 문서는 외부에서 가져온 원안이다.** 확정된 설계는 `.claude/wiki/plan_log/검색-생성.md` 이고,
 > 거기서 이 원안의 일부가 이미 기각됐다(평가 세트를 Phase 0 으로 올림 · tool 목록에서
 > Vision·LlamaParse 제외). 어긋나면 그쪽이 맞다.
 
 > 설계 근거는 `DESIGN.md`, 스키마 그림은 `SCHEMA.html` 참고. 이 문서는 코드 어시스턴트에게 phase 단위로 전달하기 위한 실행용 스펙이다.
 >
-> **2026-08-22 정정.** 저장소의 기존 계약과 대조해 고쳤다. 무엇을 왜 골랐는지는 `plan_log/검색-생성.md` 1회차.
+> **2026-08-22 정정.** 저장소의 기존 계약과 대조해 고쳤다. 무엇을 왜 골랐는지는 `.claude/wiki/plan_log/검색-생성.md` 1회차.
 
 ## 사용법
 
@@ -219,12 +219,27 @@ class BaseTool(ABC):
 - **범위 밖**: 답변 생성
 - **DoD**: 다양한 청크 조합에 대해 토큰 예산 내 일관된 포맷
 
-## Phase 10. Generator
+## Phase 10. Generator  ✅ 2026-08-29
 
 - **의존성**: Phase 9
-- **범위**: `final_context` + `current_query` → `final_answer`, 출처 인용 형식
+- **범위**: `final_context` + ~~`current_query`~~ → **`original_query`** → `final_answer`, 출처 인용 형식
+  - **2026-08-29 정정.** 재작성 질의는 PRF 로 부풀린 검색어 뭉치라 질문의 모양이 아니고, 그것에 답하면 **사용자가 묻지 않은 질문에 답한다.** 저장소는 이미 같은 규칙을 셋에서 쓴다 — 리랭커·Evaluator·`answer_question()` 의 생성. 여기만 스펙을 따르면 **네 번째 진입점만 나머지 셋과 다르게 답한다.** 근거는 `agent/loop.py` 모듈 docstring 의 「검색은 `current_query`, 판정·생성은 `original_query`」 절. 이 문서 머리말의 규약대로 **저쪽이 맞다.**
+  - **Pre-Lock A 의 `AgentState.current_query` 필드는 이 정정과 무관하다** — 그 필드는 실재하고 **검색**이 그것을 쓴다(`step_retrieve()`). 문구를 고치면서 필드까지 지우면 검색이 원 질의로만 돌아 **승급이 죽는데 에러가 안 난다.**
 - **범위 밖**: 평가 지표 계산
 - **DoD**: `evaluation/qa_set.jsonl` 의 `gold_spans` 로 Faithfulness/Hallucination rate 측정 가능한 출력
+- **DoD 는 문자 그대로는 못 채운다 — 대체 지표 셋으로 닫았다** (2026-08-29 · 53회차).
+  Faithfulness·Hallucination rate 를 그 이름대로 재려면 **골든 답변**이 필요한데 없고,
+  세트를 만드는 것은 `.claude/wiki/plan_log/평가-세트.md` 소관이라 이 phase 보다 크다. 대신
+  `evaluation/answer_eval.py` 가 **골든 답변 없이** 셋을 낸다 — ① 인용 정합성(무료·결정적 ·
+  답변이 인용한 `[n]` 청크가 `gold_span` 을 담나) ② 근거 지지(LLM · 2026-08-29 에 회귀
+  게이트로 강등) ③ 음성 대조군. **이름을 `faithfulness` 로 안 짓는다** — 29회차가
+  *"잰 것의 이름으로 부른다"* 로 닫았다.
+- **그 수를 읽는 자[尺]도 함께 낸다** (53회차) — 무작위로 인용했을 때의 기대값과
+  그 답변이 낼 수 있는 최대. 실측 7판에서 관측이 무작위의 **2.0~4.6배**이고
+  **최대의 90~100%** 다(사람 세트 두 판은 최대와 같다). 근거는
+  `.claude/wiki/verify_log/2026-08-29-인용정합성-대조군.md`.
+- **닫아도 남는 구멍**: *"질문에 답했나"* 는 여전히 못 잰다. ①②는 *근거에 충실한가* 이지
+  *질문에 답했나* 가 아니다 — `.claude/wiki/plan_log/검색-생성.md` 미결에 있다
 
 ## Phase 11. LangGraph Integration
 

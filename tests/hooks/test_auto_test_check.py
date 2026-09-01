@@ -84,8 +84,14 @@ def test_editing_a_test_file_runs_that_file():
     "path",
     [
         "CLAUDE.md",
-        "plan_log/하네스-확장.md",
-        "task_log/phase1.md",
+        # 소스 폴더 **안**의 `.md` 는 `SOURCE_PREFIXES` 에 걸리고 이름이 아니라 `.py` 필터로만
+        # 빠진다. 느슨해지면 문서를 고칠 때마다 그 영역 테스트가 도는데, 위 문단이 말하는
+        # "못 쓴다"가 바로 그 상태다. **이 경로는 지금 실재하지 않는다** — 2026-08-31 에
+        # 폴더별 `CLAUDE.md` 를 두었다가 2026-09-01 에 되돌렸다. 케이스를 남기는 것은
+        # 파일이 있어서가 아니라 **필터가 이름이 아니라 확장자로 걸러야 하기 때문**이다
+        "rag_pipeline/ingestion/loader/CLAUDE.md",
+        ".claude/wiki/plan_log/하네스-확장.md",
+        ".claude/wiki/task_log/phase1.md",
         "regression/baseline.json",
         ".claude/skills/rag-code-review/SKILL.md",
     ],
@@ -107,7 +113,7 @@ def test_absolute_path_is_normalized():
 
 # 한국어 경로가 깨지지 않아야 한다. 이 저장소는 한국어 파일명이 흔하다
 def test_korean_path_does_not_crash():
-    assert auto_test_check.test_target_for("plan_log/평가-세트.md") is None
+    assert auto_test_check.test_target_for(".claude/wiki/plan_log/평가-세트.md") is None
     assert auto_test_check.test_target_for("tests/fixtures/시행령 개정안.hwpx") is None
 
 

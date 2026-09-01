@@ -8,7 +8,7 @@
 숫자를 고르면 이미지 표시 크기 50pt 를 탐침값으로 박았다가 되돌린 일을 되풀이한다.
 
 대신 `RetrievedChunk.dense_score` 가 답변에 실려 나가므로 **분포는 저절로 모인다.**
-그것이 쌓이면 임계값 논의를 실측으로 할 수 있다(`plan_log/backend.md` 미결).
+그것이 쌓이면 임계값 논의를 실측으로 할 수 있다(`.claude/wiki/plan_log/backend.md` 미결).
 
 ## 왜 청크에 번호를 다나
 
@@ -20,17 +20,89 @@
 **HWPX 쪽 수가 문서에 따라 부풀거나 붕괴한다**(CLAUDE.md — AI가이드가 PDF 28쪽 대 HWPX
 97쪽, 변환본은 1쪽). 모델에게 "N쪽을 보라"고 시키면 그 값이 틀린 문서에서 답변이 틀린 쪽을
 인용한다. 쪽은 **화면의 소스 태그가 metadata 에서 직접** 그린다 — 모델을 거치지 않는다.
+
+## 판정 프롬프트는 왜 답을 쓰게 하지 않나
+
+Evaluator 가 묻는 것은 *"이 근거로 답할 수 있는가"* 하나다. 답까지 쓰게 하면 생성과 같은 일을
+두 번 하고 토큰이 두 배가 되며, 무엇보다 판정이 *충분한가* 에서 *답이 좋은가* 로 미끄러진다 —
+**답변 품질을 재는 자[尺]가 아직 없어서** 그 미끄러짐을 잡을 방법이 없다.
+
+## 규칙 3은 **온도이지 문구가 아니다** — 대조군으로 갈랐다
+
+세 판을 같은 순위 위에서 쟀다(2026-08-27, 각 86호출). 바뀐 것은 프롬프트뿐이고 검색·후보·
+모델은 같다.
+
+| 판 | 규칙 3 | K=5 | K=10 |
+|---|---|---|---|
+| v1 | 없음 | 28/43 | 31/43 |
+| v2 | *빈 서식은 답이 아니다* (표·서식으로 **범위를 좁힌** 엄격 규칙) | 28/43 | 32/43 |
+| **v3 (지금 이것)** | 같은 모양에서 **표·서식 축만 뺀** 일반 엄격 규칙 | **30/43** | **32/43** |
+
+**v2 가 대조군을 부른 이유.** 규칙은 `hbas-07`·`hbas-11`·`hsih-01`(빈 기입 서식을 답으로 본
+거짓 *충분*)을 노리고 썼는데 **셋 다 안 고쳐졌고**, 대신 안 겨냥한 `hbas-10` 하나가 고쳐졌다.
+그 사유는 빈 서식과 무관했다(*"연계 절차가 안 적혀 있다"*).
+
+**답: 온도였다.** 표·서식이라는 낱말이 **하나도 없는** v3 이 `hbas-10` 을 똑같이 고치고,
+K=5 에서는 `hai-02`·`hai-06` 까지 더 고쳐 v1·v2 를 **2건 앞선다.** 즉 일한 것은 *빈 서식*
+이라는 범위 지정이 아니라 *"관련 있어 보이는 것만으로 충분하다고 하지 말라"* 는 압력이다.
+그래서 v2 의 표·서식 문구는 **값을 하지 않았고**, 여기 남기지 않는다.
+
+**공짜는 아니다.** 엄격해진 대가가 K=10 의 `hai-06` 에서 보인다 — 정답이 **10위로 실제로
+왔는데** *불충분* 이라 답한다(K=5 에서는 정답이 안 와서 같은 엄격함이 이득이었다).
+그래서 K=10 총점은 v2 와 같고 구성만 다르다.
+
+**겨냥한 셋은 세 판 모두 못 고친다.** `hbas-07`·`hbas-11`·`hsih-01` 은 v1·v2·v3 에서 전부
+거짓 *충분* 이다 — 프롬프트 문구로 잡히는 종류가 아니라는 것이 이 회차가 얻은 것이다.
+
+**세 판 모두 긍정 칸을 함께 본다.** 표·서식이 정답인 질의가 실재해 이런 규칙은 긍정을 깎을
+수 있는데, v2 에서는 두 K 모두 **한 건도 안 깎였다**(오판 목록이 글자까지 동일).
+
+**후보 둘 중 하나는 애초에 안 넣었다** — *"제목 머리만 있으면 불충분"* 은 이 코퍼스에
+**정답 span 이 제목 머리에만 있는 청크가 실재해서**다(`.claude/wiki/plan_log/검색-생성.md` —
+`sih-06`·`sih-14`). 박으면 그 건들이 판정 오류로 세어지는데 그것은 Evaluator 의 잘못이
+아니라 세트의 축 문제다.
+
+수치는 `.claude/wiki/verify_log/2026-08-27-프롬프트-{v2,v3}.md` 다.
+
+## 판정 프롬프트를 고치면 캐시가 갈린다
+
+`EVALUATOR_PROMPT_VERSION` 이 캐시 salt 에 들어간다. 고칠 때 함께 올리지 않으면 **옛 응답이
+새 프롬프트의 답인 척** 돌아오는데, 에러가 아니라 수치로만 드러난다(`표-경로.md` 14회차).
 """
 
 from __future__ import annotations
 
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["NO_EVIDENCE_ANSWER", "SYSTEM_PROMPT", "build_user_prompt"]
+__all__ = [
+    "EVALUATOR_PROMPT_VERSION",
+    "EVALUATOR_SYSTEM_PROMPT",
+    "GENERATION_PROMPT_VERSION",
+    "NO_EVIDENCE_ANSWER",
+    "SYSTEM_PROMPT",
+    "build_evaluator_prompt",
+    "build_evidence_block",
+    "build_user_prompt",
+]
 
 # 근거를 못 찾았을 때 쓸 문장. 모델이 이 문장을 그대로 쓰도록 프롬프트가 지시하고,
 # 검색이 0건이면 모델을 부르지 않고 코드가 이 값을 그대로 돌려준다
 NO_EVIDENCE_ANSWER = "문서에서 찾지 못했습니다."
+
+# 생성 프롬프트를 고치면 **반드시 올린다.** `EVALUATOR_PROMPT_VERSION` 과 자리는 같은데
+# **막는 것이 다르다** — 저쪽은 캐시 salt 라 안 올리면 옛 응답이 새 프롬프트의 답인 척
+# 돌아오고, 이쪽은 **캐시가 아예 없어**(`generate_answer()` 는 `ResultCache` 를 안 거친다)
+# 그런 사고가 원리적으로 없다. 대신 막는 것은 **리포트가 자기 조건을 못 말하는 것**이다:
+# 이 문자열을 고쳐도 `generation_profile` 은 `prod` 그대로라, 두 리포트를 나중에 견줄 때
+# *생성 프롬프트가 달랐다* 를 되짚을 방법이 없다(`evaluation/answer_eval.py` 의 meta 가 싣는다).
+#
+# **소급 적용이 아니다** — 옛 리포트에는 이 칸이 아예 없다. `"v1"` 은 *여기서부터 센다* 는
+# 뜻이지 *지금까지 안 바뀌었다* 는 주장이 아니다.
+#
+# **캐시 지문(`answer_cache/fingerprint.py`)에는 일부러 안 넣었다** — 넣으면 `qa_cache_*` 가
+# 전량 미스가 되는데, 지금 `exact` 캐시는 *"적중률 5% 미만이면 끈다"* 의 표본을 모으는 중이다
+# (`evaluation/README.md` 8절). 별개 결정이라 `.claude/wiki/plan_log/검색-생성.md` 미결에 있다
+GENERATION_PROMPT_VERSION = "v1"
 
 SYSTEM_PROMPT = f"""당신은 한국어 공문서를 읽고 질문에 답하는 도우미입니다.
 
@@ -43,11 +115,41 @@ SYSTEM_PROMPT = f"""당신은 한국어 공문서를 읽고 질문에 답하는 
 5. 간결하게 답합니다. 근거를 통째로 옮겨 적지 않습니다."""
 
 
-# 검색된 청크를 번호 달린 근거 블록으로 만들어 질문과 함께 싣는다
-def build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+# 번호 달린 근거 블록만 만든다. **이 모양의 유일한 출처다** — 생성·판정에 더해
+# `agent/context.py` 까지 셋이 여기서 가져간다. 하나라도 제 손으로 만들면
+# *판정이 본 것과 생성이 보는 것이 글자까지 같다* 가 조용히 깨진다
+def build_evidence_block(chunks: list[RetrievedChunk]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
         source = chunk.metadata.get("source_name") or chunk.document_id
         blocks.append(f"[{index}] ({source})\n{chunk.text}")
-    evidence = "\n\n".join(blocks)
-    return f"근거:\n\n{evidence}\n\n---\n\n질문: {query}"
+    return "\n\n".join(blocks)
+
+
+# 근거 블록을 질문과 함께 싣는다
+def build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+    return f"근거:\n\n{build_evidence_block(chunks)}\n\n---\n\n질문: {query}"
+
+
+# 판정 프롬프트를 고치면 **반드시 올린다** (모듈 docstring 참고)
+EVALUATOR_PROMPT_VERSION = "v3"
+
+EVALUATOR_SYSTEM_PROMPT = """당신은 한국어 공문서 검색 결과를 검사하는 판정자입니다.
+질문에 대한 답을 쓰지 말고, **주어진 근거만으로 그 질문에 답할 수 있는지**만 판정하세요.
+
+규칙:
+1. 질문이 묻는 내용이 근거 안에 실제로 적혀 있으면 "sufficient" 입니다.
+2. 주제가 관련될 뿐 질문에 답할 내용이 없으면 "insufficient" 입니다.
+3. 근거가 관련 있어 보이더라도 질문이 묻는 값·절차·판단이 **실제로 적혀 있지 않으면**
+   "insufficient" 입니다. 무엇에 관한 것인지가 적혀 있는 것과 그 값이 적혀 있는 것은 다릅니다.
+   반대로 질문이 묻는 값이 실제로 적혀 있으면 "sufficient" 입니다.
+4. 바깥 지식으로 채워서 판정하지 않습니다. 근거에 있는 것만 봅니다.
+5. 출력은 설명 없이 JSON 객체 하나입니다:
+   {"verdict": "sufficient" 또는 "insufficient", "reasoning": "한국어 한 문장"}"""
+
+
+# 판정용 프롬프트. 근거 블록 모양을 생성 쪽과 같게 두는 것이 의도다 —
+# 판정이 본 것과 생성이 보는 것이 글자까지 같아야 "판정은 맞았는데 답이 틀렸다" 가 성립한다
+def build_evaluator_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
+    ask = "이 근거로 위 질문에 답할 수 있습니까?"
+    return f"{build_user_prompt(query, chunks)}\n\n{ask}"

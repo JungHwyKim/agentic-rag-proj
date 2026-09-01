@@ -39,7 +39,7 @@ class DecompressionLimitError(RagPipelineError):
 # **왜 예외인가.** 다른 외부 API 핸들러는 빈 결과를 돌려주고 상위 폴백에 맡기지만
 # (LlamaParse -> PyMuPDF, Vision -> OCR), 임베딩에는 내려갈 층이 없다. 빈 벡터를 돌려주면
 # 그 청크는 영원히 검색되지 않는데 아무도 모른다 — 그 규약이 막으려던 상황이 규약을 지켜서
-# 일어난다. 근거는 plan_log/embedding.md 의 "실패 계약" 절
+# 일어난다. 근거는 .claude/wiki/plan_log/embedding.md 의 "실패 계약" 절
 class EmbeddingError(RagPipelineError):
     pass
 
@@ -64,6 +64,6 @@ class IndexingError(RagPipelineError):
 # 사용자는 "근거를 못 찾았다"와 "생성이 실패했다"를 구분할 수 없다 — 할 일이 서로 다른데도.
 #
 # 검색 결과가 0건인 것은 여기 해당하지 않는다. 그건 정상 경로이고 Answer.sources 가
-# 빈 리스트로 나간다 (plan_log/backend.md)
+# 빈 리스트로 나간다 (.claude/wiki/plan_log/backend.md)
 class GenerationError(RagPipelineError):
     pass

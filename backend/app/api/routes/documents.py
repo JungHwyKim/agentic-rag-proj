@@ -40,6 +40,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from backend.app.core.config import SHADOW_EMBEDDING, Settings, get_settings
+from backend.app.core.singletons import embedder_for
 from rag_pipeline.ingestion.embedding import get_embedder
 from rag_pipeline.ingestion.indexing import document_id_for
 from rag_pipeline.ingestion.loader.registry import SUPPORTED_EXTENSIONS
@@ -121,7 +122,7 @@ def _shadow(request: Request):  # noqa: ANN202 - tuple[VectorStore, Embedder] | 
 #
 # 부딪힐 때만 붙이는 안은 기각했다. 그러면 이름이 document_id 만으로 계산되지 않아
 # "이 문서의 원본이 어느 파일인가"를 알려면 디스크를 뒤지거나 매핑을 들여야 한다 —
-# 두 번째 진실이 생긴다 (plan_log/backend.md 7회차)
+# 두 번째 진실이 생긴다 (.claude/wiki/plan_log/backend.md 7회차)
 def _stored_name(document_id: str) -> str:
     suffix = "".join(
         "_" if ch in _UNSAFE_NAME_CHARS or ord(ch) < 32 else ch
@@ -150,6 +151,21 @@ def _original_path(document_id: str, settings: Settings) -> Path:
             detail="요청한 문서를 찾을 수 없습니다.",
         )
     return candidate
+
+
+# 이 문서 키에 대응하는 원본이 디스크에 있는가. **목록이 재색인 버튼을 그릴지 정하는 값이다.**
+#
+# `routes/query.py` 가 이것을 부른다 — 저장 이름 규칙(`_stored_name()`)을 그쪽에 복사하면
+# 규칙이 두 벌이 되어 한쪽만 고쳐진다. `_reject_unsupported_extension` 을 두 라우트가
+# 나눠 쓰는 것과 같은 이유다.
+#
+# `_original_path()` 가 경로 탈출을 404 로 막는데, 목록을 그리다 그것을 만나면 화면 전체를
+# 죽이는 대신 "원본 없음" 으로 본다 — 사이드바가 예외로 비는 것이 더 나쁘다
+def original_exists(document_id: str, settings: Settings) -> bool:
+    try:
+        return _original_path(document_id_for(document_id), settings).is_file()
+    except HTTPException:
+        return False
 
 
 # 임시 업로드를 원본 보관함으로 옮긴다. **색인이 성공한 뒤에만 부른다** —
@@ -245,6 +261,11 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
             original_name=original_name,
             config=request.app.state.ingest_config,
             store=request.app.state.store,
+            # **임베더도 넘긴다 — 안 넘기면 문서마다 KURE 2.27GB 를 다시 올린다.**
+            # 실측(2026-08-26): 새 문서 업로드가 65초였고 그중 파싱은 0.8초였다.
+            # 재색인은 임베딩 캐시가 전량 적중해 모델이 안 올라오므로 1.3초라,
+            # **재색인만 재면 이 비용이 안 보인다** (rag_pipeline/ingestion/pipeline.py)
+            embedder=embedder_for(request.app),
             shadow=_shadow(request),
         )
         # **색인이 성공한 뒤에만** 원본을 남긴다 (_keep_original 주석 참고).
@@ -279,7 +300,7 @@ async def index_upload(request: Request, file: Annotated[UploadFile, File()]) ->
 #
 # **`{document_id}` 를 불투명 문자열로 받는다.** 지금은 원본 파일명(NFC)이지만 문서
 # 레지스트리가 생기면 명시적 id 로 바뀐다 — 여기서 파일명이라고 전제하지 않으면 그때
-# 공개 URL 이 안 깨진다 (plan_log/backend.md 7회차)
+# 공개 URL 이 안 깨진다 (.claude/wiki/plan_log/backend.md 7회차)
 @router.get("/documents/{document_id}/original")
 async def original_file(document_id: str) -> FileResponse:
     settings = get_settings()
@@ -310,11 +331,73 @@ async def original_file(document_id: str) -> FileResponse:
     )
 
 
+# 이미 색인된 문서를 **보관해 둔 원본으로** 다시 색인한다.
+#
+# ## 왜 새 결합이 아니라 입구인가
+#
+# `index_document()` 는 이미 `delete_by_document_id()` -> `upsert()` 순서라, 같은 키로 다시
+# 부르는 것이 곧 재색인이다. 7회차가 원본을 남기게 만들어 **입력도 이미 디스크에 있다.**
+# 여기서 새로 만드는 것은 그 둘을 잇는 입구 하나뿐이다 (.claude/wiki/plan_log/backend.md 8회차).
+#
+# ## 왜 전량이 아니라 문서 하나인가
+#
+# 전량은 문서 10건에 분 단위라 동기로는 타임아웃이고, 백그라운드로 돌리면 작업
+# 레지스트리·수명·동시성이 딸려 오며 **실패가 응답이 아니라 폴링으로 오게 되어** 5회차의
+# 오류 표시 배선이 통째로 바뀐다. 그 덩어리는 "진짜 단계별 색인 진행률" 미결과 같은 것이다.
+#
+# ## `original_name` 에 무엇을 넘기나 — 여기가 제일 조용하게 틀릴 수 있는 자리다
+#
+# 디스크 이름은 `안내서__a3f9c2.pdf` 다(`_stored_name()`). 그것을 그대로 넘기면
+# `document_id` 가 **새로 생겨** delete 가 옛 청크를 못 찾고 같은 문서가 두 벌이 된다.
+# 넘길 것은 디스크 이름이 아니라 **문서 키**다
+@router.post("/documents/{document_id}/reindex", status_code=status.HTTP_204_NO_CONTENT)
+async def reindex_document(request: Request, document_id: str) -> Response:
+    settings = get_settings()
+    key = document_id_for(document_id)
+    path = _original_path(key, settings)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="이 문서의 원본이 저장돼 있지 않아 다시 색인할 수 없습니다. 파일을 다시 업로드해 주세요.",
+        )
+
+    # 업로드와 **같은** 1차 검증을 다시 태운다. 화이트리스트가 좁아진 뒤에도 남아 있던 옛
+    # 원본을 여기서 거른다 — 규칙이 한 곳에만 있는 것이 두 벌로 갈리는 것보다 낫다
+    _reject_unsupported_extension(key)
+
+    # `store` 주입은 색인 라우트와 **같은 이유로 필수**다 (index_upload 주석 참고).
+    # `_keep_original()` 은 부르지 않는다 — 파일이 이미 제자리라 옮길 것이 없고,
+    # shutil.move 가 자기 자신을 덮는다. 임시 파일이 없으니 정리할 것도 없다
+    await run_in_threadpool(
+        index_document,
+        path,
+        original_name=key,
+        config=request.app.state.ingest_config,
+        store=request.app.state.store,
+        # 업로드 쪽과 같은 이유다 — 청크가 바뀌어 캐시를 빗나가면 여기서도 모델이 올라온다
+        embedder=embedder_for(request.app),
+        shadow=_shadow(request),
+    )
+
+    # 색인 라우트와 같은 계약이다. BM25 는 저장소를 전량 훑은 스냅샷이라 청크가 바뀌면 낡는다
+    request.app.state.bm25 = None
+
+    # **답변 캐시는 비운다 — 삭제 라우트와 갈리는 자리다.** 조회 시점 근거 대조는 *"이 답이
+    # 딛고 선 청크가 사라지거나 바뀌었다"* 를 id·텍스트 해시로 잡는데, 파서를 고쳐 **청크가
+    # 늘어난** 경우는 옛 답의 근거가 여전히 멀쩡해 **원리적으로 못 잡는다.** 색인 라우트가
+    # clear() 를 부르는 이유(새 문서 유입)와 같은 축이다 (rag_pipeline/answer_cache/)
+    cache = getattr(request.app.state, "answer_cache", None)
+    if cache is not None:
+        cache.clear()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"HX-Trigger": "documents-changed"})
+
+
 # 문서 하나를 색인에서 지우고 원본도 함께 지운다.
 #
 # **둘을 함께 지우는 것이 계약이다** — 보이는 것과 실제가 어긋나면 사용자가 모르는 잔여물이
 # 생긴다. 디스크를 정리할 수단이 화면에 있어야 한다는 것도 같은 이유다
-# (plan_log/backend.md 7회차 — 상한·자동정리를 안 만든 대신 이 버튼이 있다)
+# (.claude/wiki/plan_log/backend.md 7회차 — 상한·자동정리를 안 만든 대신 이 버튼이 있다)
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(request: Request, document_id: str) -> Response:
     settings = get_settings()

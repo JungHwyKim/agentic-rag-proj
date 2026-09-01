@@ -18,7 +18,7 @@ NFC 로 저장한다. 정규화하지 않으면 눈에 똑같은 파일명이 �
 그대로 일어난다. 이 코퍼스가 한국어라 이론적인 위험이 아니다.
 
 감수 사항: **내용이 다른 동명 파일은 서로를 덮어쓴다.** backend 에 문서 레지스트리가 생기면
-명시적 id 로 옮긴다 — 근거는 plan_log/indexing.md 의 "미결".
+명시적 id 로 옮긴다 — 근거는 .claude/wiki/plan_log/indexing.md 의 "미결".
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ qdrant 로컬 파일 모드가 저장 디렉터리에 배타 잠금을 건다. `
 
 섞으면 `iter_chunks()`(BM25 가 전량 훑는다)와 `list_documents()`(사이드바)가 **캐시 항목을
 문서 청크로 센다.** 필터로 가르는 길은 없다 — `search(filters=...)` 를 안 만들기로 한 것이
-`plan_log/indexing.md` 의 확정이다.
+`.claude/wiki/plan_log/indexing.md` 의 확정이다.
 
 ## 왜 답과 질문이 한 point 인가
 
@@ -49,6 +49,17 @@ point 마다 벡터를 요구해 *아무도 검색하지 않는 답변에 임베
 
 TTL(시간)을 안 쓰는 것은 **축이 어긋나서**다. 코퍼스가 안 바뀌면 한 달 전 답도 옳고,
 바뀌면 1분 전 답도 틀리다. 시간은 그 둘을 못 가른다.
+
+## 낡는 축은 넷이고 넷째가 파이프라인 지문이다
+
+무효화가 잡는 것은 *문서* 가 바뀐 경우뿐이다. **검색·생성 설정이 바뀐 경우는 근거 청크가
+그대로라 원리적으로 못 잡는다** — 리랭커를 켜도 히트한 질의는 옛 순서로 서빙된다.
+그래서 저장할 때의 설정을 payload 의 `pipeline` 에 싣고 조회 때 대조한다. 무엇을 싣고
+무엇을 빼는지는 `fingerprint.py` 다.
+
+**지문 불일치는 `_drop()` 을 안 부른다.** 근거가 사라진 것은 *확정 사망* 이지만 설정 변경은
+*설정이 되돌아오면 다시 유효해지는* 조건부 사망이다 — 같은 대우를 하면 손잡이를 왔다 갔다
+할 때마다 캐시를 버린다.
 
 ## `clear()` 는 근거 대조를 대체하지 않는다
 
@@ -126,13 +137,15 @@ def _text_hash(text: str) -> str:
 # **`RetrievedChunk` 에는 point id 가 없다.** 저장소 신원을 들고 있는 것은 `StoredChunk.id`
 # 인데 승격 과정에서 떨어진다. 그래서 저장할 때 `point_id_for(chunk_id)` 로 되만든다 —
 # 그 파생이 결정론적이라 같은 청크는 늘 같은 자리이고, 무효화가 되짚을 열쇠가 된다
-def _to_payload(answer: Answer, *, created_at: datetime) -> dict[str, Any]:
+def _to_payload(answer: Answer, *, created_at: datetime, fingerprint: str) -> dict[str, Any]:
     return {
         "query": answer.query,
         "answer": answer.text,
         "sources": [source.model_dump(mode="json") for source in answer.sources],
         "source_point_ids": [point_id_for(source.chunk_id) for source in answer.sources],
         "source_hashes": [_text_hash(source.text) for source in answer.sources],
+        # 이 답을 만든 검색·생성 설정. 조회 때 지금 설정과 대조한다 (fingerprint.py)
+        "pipeline": fingerprint,
         "created_at": created_at.isoformat(),
     }
 
@@ -185,7 +198,7 @@ class QdrantAnswerCache:
 
     # 같은 질문의 답을 찾는다. 없으면 None — **예외를 안 던진다**(모듈 docstring 참고).
     # "같은"의 뜻이 mode 로 갈리고, 무효화는 두 갈래가 공유한다
-    def lookup(self, query: str, *, embedder: Embedder) -> Answer | None:
+    def lookup(self, query: str, *, embedder: Embedder, fingerprint: str) -> Answer | None:
         text = query.strip()
         if not text:
             return None
@@ -199,13 +212,22 @@ class QdrantAnswerCache:
         if not self._sources_still_valid(payload, point_id=str(point.id)):
             return None
 
+        # **`_drop()` 을 안 부른다** — 지문 불일치는 *설정이 되돌아오면 다시 유효해지는*
+        # 조건부 사망이라, 근거가 실제로 사라진 위 판정의 확정 사망과 다르다. `exact` 갈래는
+        # put() 이 같은 point id 를 덮어써 저절로 정리되고, `semantic` 에 남는 항목은
+        # 상한·퇴거(.claude/wiki/plan_log/시맨틱-캐시.md 미결)가 맡을 몫이다.
+        #
+        # 옛 형식(키가 아예 없는 항목)은 여기서 공짜로 걸러진다 — None 은 어느 지문과도 다르다
+        if payload.get("pipeline") != fingerprint:
+            return None
+
         return self._to_answer(payload, query=text, score=score)
 
     # 정규화한 문자열이 같은 항목 하나. **임베딩을 안 부르는 것이 이 갈래의 요점이다** —
     # 그래서 미스 경로의 임베딩이 2회가 아니라 1회다(모듈 docstring 의 감수 사항이 여기서 준다).
     #
     # 점수가 1.0 인 것은 임의값이 아니다 — 같은 정규화 문자열이면 같은 벡터이고, 이 컬렉션의
-    # 벡터는 단위 길이라 자기 자신과의 내적이 1.0 이다(plan_log/시맨틱-캐시.md 4회차 실측)
+    # 벡터는 단위 길이라 자기 자신과의 내적이 1.0 이다(.claude/wiki/plan_log/시맨틱-캐시.md 4회차 실측)
     def _exact(self, text: str) -> tuple[Any, float] | None:
         point = self._by_id(cache_point_id_for(text))
         return None if point is None else (point, 1.0)
@@ -230,7 +252,7 @@ class QdrantAnswerCache:
 
     # 답 하나를 캐시에 넣는다. **근거가 없는 답은 저장하지 않는다** —
     # 무효화가 걸 축이 없어서, 문서를 새로 넣은 뒤에도 "찾지 못했습니다"를 되돌려준다
-    def put(self, answer: Answer, *, embedder: Embedder) -> bool:
+    def put(self, answer: Answer, *, embedder: Embedder, fingerprint: str) -> bool:
         if not answer.sources or not answer.text.strip():
             return False
         # 캐시에서 온 답을 다시 저장하지 않는다. 같은 point 를 원 질문이 아닌 말로 덮어써
@@ -248,14 +270,19 @@ class QdrantAnswerCache:
             return False
 
         try:
-            self._ensure_collection(len(vector))
+            # 차원이 어긋나면 여기서 접는다 — 그대로 upsert 하면 qdrant 가 실패하고
+            # 아래 except 가 삼켜 **원인 없는 경고 하나**로 끝난다 (_ensure_collection 참고)
+            if not self._ensure_collection(len(vector)):
+                return False
             self._client.upsert(
                 collection_name=self._collection,
                 points=[
                     models.PointStruct(
                         id=cache_point_id_for(answer.query),
                         vector=vector,
-                        payload=_to_payload(answer, created_at=datetime.now(UTC)),
+                        payload=_to_payload(
+                            answer, created_at=datetime.now(UTC), fingerprint=fingerprint
+                        ),
                     )
                 ],
             )
@@ -269,20 +296,40 @@ class QdrantAnswerCache:
     def _client(self) -> Any:
         return self._store.client
 
-    # 컬렉션이 없으면 만든다. 거리 척도가 Dot 인 것은 문서 컬렉션과 같은 이유다 —
-    # 벡터가 단위 길이라 Cosine 과 순위가 같고 더 싸다(plan_log/embedding.md 실측).
-    # **그래서 임계값을 코사인 유사도로 읽어도 된다**
-    def _ensure_collection(self, vector_size: int) -> None:
+    # 컬렉션이 없으면 만들고, 있으면 **차원이 맞는지 본다.** 거리 척도가 Dot 인 것은 문서
+    # 컬렉션과 같은 이유다 — 벡터가 단위 길이라 Cosine 과 순위가 같고 더 싸다
+    # (.claude/wiki/plan_log/embedding.md 실측). **그래서 임계값을 코사인 유사도로 읽어도 된다**
+    #
+    # **차원을 확인하지 않으면 캐시가 조용히 죽는다** — 어긋난 채 upsert 하면 qdrant 에서
+    # 실패하고 put() 의 except 가 삼켜 *"저장하지 못했습니다"* 라는 **원인 없는 경고 하나**로
+    # 끝난다. 아무것도 안 쌓이는데 에러가 없다.
+    #
+    # `QdrantStore.ensure_collection()` 은 같은 자리에서 `IndexingError` 로 크게 우는데
+    # **여기서는 못 던진다** — 캐시 때문에 질의가 죽으면 최적화가 신뢰성을 깎은 것이 된다
+    # (모듈 docstring). 대신 *차원* 을 특정한 경고를 남기고 False 를 돌려준다.
+    #
+    # 발화 조건은 좁다: 이름이 이미 `(모델, 선언차원)` 을 가르므로 **같은 모델 이름이 다른
+    # 실제 차원을 낼 때**만이다(HF 리포가 조용히 갱신되는 경우 정도)
+    def _ensure_collection(self, vector_size: int) -> bool:
         client = self._client
-        if client.collection_exists(self._collection):
-            return
-        client.create_collection(
-            collection_name=self._collection,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=models.Distance.DOT,
-            ),
-        )
+        if not client.collection_exists(self._collection):
+            client.create_collection(
+                collection_name=self._collection,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.DOT,
+                ),
+            )
+            return True
+
+        existing = client.get_collection(self._collection).config.params.vectors.size
+        if existing != vector_size:
+            self._warn(
+                f"캐시 컬렉션의 벡터 차원이 달라 저장을 건너뜁니다"
+                f"({self._collection}: 기존 {existing} vs 지금 {vector_size})"
+            )
+            return False
+        return True
 
     # 제일 가까운 캐시 항목 하나. **1건만 본다** — 둘째 후보로 할 일이 없다.
     # 컬렉션이 없는 것은 오류가 아니라 "아직 캐시가 없다"이다 (QdrantStore.search() 와 갈린다:

@@ -29,7 +29,7 @@ from evaluation.scoring import score_query
 # 사람이 쓴 질의 세트. 부정 예시가 사는 곳이라 기본 세트와 갈라 본다
 HUMAN_SET_PATH = QA_SET_PATH.parent / "qa_set_human.jsonl"
 
-# 세트 규모의 하한. `plan_log/평가-세트.md` 2회차의 50~80 중 아래쪽이고 **임시값이다** —
+# 세트 규모의 하한. `.claude/wiki/plan_log/평가-세트.md` 2회차의 50~80 중 아래쪽이고 **임시값이다** —
 # 비교 축이 여섯이라 이보다 적으면 축마다 유의성을 못 낸다는 것이 근거의 전부다
 MIN_ITEMS = 50
 
@@ -267,3 +267,167 @@ def test_human_set_carries_both_kinds():
     positives = [i for i in items if i.answerable]
     negatives = [i for i in items if not i.answerable]
     assert positives and negatives, f"긍정 {len(positives)} · 부정 {len(negatives)}"
+# `must_*` 가 없는 레코드는 **빈 라벨 + pending 으로 읽힌다.** 기본값이 그렇기 때문이고,
+# 그래서 아직 라벨을 안 단 98건이 이 필드를 안 적고도 그대로 산다
+def test_must_labels_default_to_empty():
+    item = QAItem.from_json({
+        "query_id": "x-10", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+    })
+    assert item.must_values == []
+    assert item.must_points == []
+    assert item.must_reviewed_by == "pending"
+    assert item.must_reviewed_hash == ""
+
+
+# jsonl 에 적힌 라벨이 실제로 실린다. **둘이 따로 실린다는 것**이 요점이다 —
+# 한 칸으로 접으면 결정적인 값 축이 LLM 판정에 섞인다(`.claude/wiki/plan_log/평가-세트.md` 13회차)
+def test_must_labels_are_read_from_json():
+    item = QAItem.from_json({
+        "query_id": "x-11", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+        "must_values": ["6개월", "2020.10.1."],
+        "must_points": ["시행일은 유예기간을 거친 뒤이다"],
+    })
+    assert item.must_values == ["6개월", "2020.10.1."]
+    assert item.must_points == ["시행일은 유예기간을 거친 뒤이다"]
+
+
+# **13회차 결정을 잠그는 테스트다 — `must_*` 는 `reviewed_hash` 를 안 건드린다.**
+# 넣었으면 이미 검수된 43건의 도장이 전부 깨져 재검수를 강요하는데, 그것이
+# `.claude/wiki/plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"*
+# 며 라벨을 안 건드린 자리다. 도장이 둘인 것은 실수가 아니라 그 이유로 고른 것이다
+def test_must_labels_do_not_disturb_the_span_review_stamp():
+    base = {
+        "query_id": "x-12", "query": "질문", "source_doc": "시행령-개정안-안내서",
+        "gold_spans": ["어떤 정답 문장"],
+    }
+    bare = QAItem.from_json(dict(base))
+    labeled = QAItem.from_json({**base, "must_values": ["6개월"], "must_points": ["ㄱ"]})
+
+    stamp = content_hash(bare.query, bare.gold_spans)
+    assert content_hash(labeled.query, labeled.gold_spans) == stamp
+
+
+# 모르는 키는 **여전히** 막힌다. 필드를 넷 더하면서 이 가드가 헐거워지지 않았는지 본다 —
+# 오타 난 `must_value`(단수)가 조용히 무시되면 그 레코드만 라벨 없이 채점된다
+def test_a_typo_in_the_new_field_is_still_rejected():
+    with pytest.raises(ValueError, match="모르는 키"):
+        QAItem.from_json({
+            "query_id": "x-13", "query": "질문", "source_doc": "시행령-개정안-안내서",
+            "gold_spans": ["어떤 정답 문장"], "must_value": ["6개월"],
+        })
+
+
+# 실제 커밋된 사람 세트가 라벨을 달고도 통째로 성립한다. **라벨이 붙은 레코드는 도장을
+# 갖는다** — 사람이 안 본 라벨이 `human` 으로 실리는 것을 여기서 잡는다
+def test_labeled_records_in_the_human_set_carry_their_own_stamp():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    labeled = [i for i in items if i.must_values or i.must_points]
+    assert labeled, "라벨이 하나도 없다 — 이 검사가 아무것도 안 보고 있다"
+    for item in labeled:
+        assert item.must_reviewed_by == "human", item.query_id
+        expected = content_hash(item.query, [*item.must_values, *item.must_points])
+        assert item.must_reviewed_hash == expected, item.query_id
+
+
+# **도장을 가른 이유가 이 테스트다.** 같은 문자열을 `must_points` ↔ `must_not_claim` 으로
+# 옮기는 것이 뜻이 제일 크게 뒤집히는 편집인데(담아야 할 것 ↔ 말하면 안 되는 것),
+# 한 지문에 묶으면 payload 가 이어 붙인 **한 목록**이라 그 편집이 지문에 안 걸린다.
+# 마지막 줄이 그 «묶었다면» 을 실제로 찍어 보인다 — 지우면 가른 근거가 사라진다
+def test_moving_a_string_into_must_not_claim_is_caught_by_the_stamp():
+    kept = QAItem(
+        query_id="q1", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], must_points=["어떤 사실"],
+    )
+    moved = QAItem(
+        query_id="q1", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], must_not_claim=["어떤 사실"],
+    )
+
+    def bundled(item: QAItem) -> str:
+        return content_hash(item.query, [*item.must_values, *item.must_points, *item.must_not_claim])
+
+    def apart(item: QAItem) -> tuple[str, str]:
+        return (
+            content_hash(item.query, [*item.must_values, *item.must_points]),
+            content_hash(item.query, item.must_not_claim),
+        )
+
+    assert apart(kept) != apart(moved)
+    assert bundled(kept) == bundled(moved), "묶은 지문은 이 편집을 못 잡는다"
+
+
+# **골든 답변 라벨의 도장도 `--check` 가 본다**(2026-08-29). 도장이 셋인 것은 되풀이가 아니라
+# 사람이 판단한 것이 셋이기 때문이다 — 여기서는 «필수 사실» 쪽을 고치고 도장을 안 고친 것을 잡는다
+def test_the_must_stamp_breaks_when_the_label_changes():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    original = next(i for i in items if i.must_points and i.must_reviewed_by == "human")
+
+    tampered = [dataclasses.replace(original, must_points=["몰래 바꾼 필수 사실"])]
+    problems = validate_items(tampered)
+    assert problems, "라벨을 바꿨는데 도장이 그대로 통과했다"
+    assert "필수 사실 라벨이 바뀌었다" in problems[0]
+
+
+# 같은 규칙이 「단정 금지」쪽에도 있고, **지문이 서로 독립이라 한쪽만 움직인다.**
+# 묶었다면 여기서 두 도장이 함께 깨져 무엇이 바뀌었는지 못 읽는다
+def test_the_must_not_claim_stamp_moves_alone():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    original = next(i for i in items if i.must_not_claim and i.must_points)
+
+    tampered = dataclasses.replace(original, must_not_claim=["몰래 바꾼 금지 항목"])
+    problems = validate_items([tampered])
+    assert len(problems) == 1, problems
+    assert "단정 금지 라벨이 바뀌었다" in problems[0]
+
+    # 같이 갱신하면 통과한다 — 막는 것이 목적이지 못 고치게 하는 것이 아니다(6회차)
+    fixed = dataclasses.replace(
+        tampered, must_not_claim_reviewed_hash=content_hash(tampered.query, tampered.must_not_claim)
+    )
+    assert not validate_items([fixed])
+
+
+# **부정 예시에 골든 답변 라벨을 달면 막는다.** 13회차가 «달면 *답할 수 없다* 가 두 곳에
+# 적힌다» 로 정한 것인데 **결정만 기록에 있고 코드가 안 보던 자리**였다
+def test_a_negative_may_not_carry_golden_answer_labels():
+    problems = validate_items([_negative(must_points=["담아야 할 것"])])
+    assert any("골든 답변 라벨이 달려 있다" in p for p in problems)
+
+    problems = validate_items([_negative(must_not_claim=["단정하면 안 되는 것"])])
+    assert any("골든 답변 라벨이 달려 있다" in p for p in problems)
+
+
+# **`pending` 은 문제가 아니다** — 기계가 제안하고 사람이 거르는 절차라 검수 대기가 정상이다.
+# 여기서 막으면 라벨을 제안하는 순간 `--check` 가 죽어 제안 자체를 못 한다
+def test_a_pending_label_is_not_a_problem():
+    item = QAItem(
+        query_id="x-14", query="질문", source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"], gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로쪽": 1},
+        reviewed_by="pending", must_not_claim=["아직 안 읽은 항목"],
+    )
+
+    assert not [p for p in validate_items([item]) if "단정 금지" in p]
+
+
+# 라벨이 붙은 레코드는 **자기 도장을 갖는다.** 사람이 안 본 라벨이 커밋되는 것과, 검수 뒤에
+# 문구를 고치고 도장을 안 고친 것을 함께 잡는다(`must_reviewed_*` 쪽 형제와 같은 모양이다).
+#
+# **새 라벨을 제안하면 사람이 도장을 찍기 전까지 이 검사가 빨갛다 — 그것이 의도다.**
+# 기계가 문구를 제안하는 것이 이 칸의 절차라(16회차), 제안이 그대로 굳는 것을 여기서 막는다
+def test_must_not_claim_records_carry_their_own_stamp():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    labeled = [i for i in items if i.must_not_claim]
+    assert labeled, "라벨이 하나도 없다 — 이 검사가 아무것도 안 보고 있다"
+    for item in labeled:
+        assert item.must_not_claim_reviewed_by == "human", (
+            f"{item.query_id}: 사람이 읽고 도장을 찍거나, 라벨을 빼라"
+        )
+        expected = content_hash(item.query, item.must_not_claim)
+        assert item.must_not_claim_reviewed_hash == expected, (
+            f"{item.query_id}: 문구가 바뀌었다 — 다시 읽고 도장을 갱신하거나 pending 으로 되돌려라"
+        )

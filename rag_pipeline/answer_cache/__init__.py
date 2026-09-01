@@ -20,7 +20,7 @@
   `cache_point_id_for()` 가 NFC + 공백 정규화 uuid5 라 같은 질문이 늘 같은 자리이고,
   조회가 벡터 검색이 아니라 id 조회라 **`lookup()` 에서 임베딩을 아예 안 부른다**
 
-`exact` 가 차선으로 선 경위는 `plan_log/시맨틱-캐시.md` 4~6회차다 — 양성·음성 분포가
+`exact` 가 차선으로 선 경위는 `.claude/wiki/plan_log/시맨틱-캐시.md` 4~6회차다 — 양성·음성 분포가
 겹쳐 임계값을 *"못 정한다"* 로 닫았고, 1회차가 걸어둔 조건이 그때 발화했다.
 **그래도 기본값은 `semantic` 이라 저장소 커밋본은 여전히 꺼진 채다** — 1회차의 기각 사유
 절반(*비슷한 질문을 못 잡는다*)이 그대로 살아 있어, 켤지는 실사용 질의 로그가 답한다.
@@ -28,7 +28,7 @@
 ## 왜 임계값이 없으면 캐시가 통째로 꺼지나
 
 **이 기능의 유일한 위험이 임계값이기 때문이다.** 헐거우면 다른 질문에 옛 답을 준다 —
-`plan_log/embedding.md` 가 이 단계를 제일 뒤로 밀며 적어둔 그 이유다.
+`.claude/wiki/plan_log/embedding.md` 가 이 단계를 제일 뒤로 밀며 적어둔 그 이유다.
 
 이 저장소의 임계값은 전부 **분포의 틈**에서 나왔다(표 되붙이기 12pt, 표시 면적비 0.08 vs
 1.00). 이 축은 아직 안 쟀다. 그래서 기본값을 두지 않고, 없으면 `get_answer_cache()` 가
@@ -39,6 +39,19 @@
 혼입은 막아주지만, `text-embedding-3-small` 에서 잰 0.9x 가 다른 모델에서 같은 뜻이라는
 보장은 어디에도 없다. 모델을 바꾸면 다시 잰다.
 
+## 캐시가 낡는 축은 넷이고, 넷을 각각 다른 것이 막는다
+
+| 무엇이 바뀌면 낡나 | 무엇이 막나 |
+|---|---|
+| 임베딩 모델·차원 | 컬렉션 이름 (`collection_name_for(..., prefix=)`) |
+| 문서 삭제·수정 | `_sources_still_valid()` — 근거 point 생존 + 텍스트 해시 |
+| 새 문서 색인 | `clear()` — 색인 라우트가 부른다 |
+| 검색·생성 설정 | `pipeline_fingerprint()` — payload 의 `pipeline` 과 대조 |
+
+**넷이 서로를 대체하지 못한다.** 근거 대조는 *새 문서가 들어온 경우* 를 못 잡고(사라진 것이
+없다), `clear()` 는 *설정만 바뀐 경우* 를 못 잡으며(문서는 그대로다), 지문은 *문서가 바뀐
+경우* 를 못 잡는다(설정은 그대로다). 하나를 빼면 그 축이 통째로 열린다.
+
 ## `Protocol` 을 안 만드는 이유
 
 구현체가 하나다. `VectorStore` 가 두 번째 구현체를 기다리는 것과 같은 잣대이고,
@@ -47,11 +60,17 @@
 
 from __future__ import annotations
 
+from rag_pipeline.answer_cache.fingerprint import pipeline_fingerprint
 from rag_pipeline.answer_cache.qdrant_cache import QdrantAnswerCache, cache_point_id_for
 from rag_pipeline.config import IngestConfig
 from rag_pipeline.ingestion.indexing.qdrant_store import QdrantStore
 
-__all__ = ["QdrantAnswerCache", "cache_point_id_for", "get_answer_cache"]
+__all__ = [
+    "QdrantAnswerCache",
+    "cache_point_id_for",
+    "get_answer_cache",
+    "pipeline_fingerprint",
+]
 
 
 # 설정에 맞는 답변 캐시를 만든다. **임계값이 없으면 None** — 그것이 곧 꺼진 상태다.

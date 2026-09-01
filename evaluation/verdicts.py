@@ -1,0 +1,410 @@
+"""Evaluator 의 판정을 채점한다. **`run_eval` 이 못 재는 것을 재는 자[尺]다.**
+
+## 왜 `run_eval` 이 아니라 새 도구인가
+
+`run_eval` 이 재는 것은 **순위**다(`hit@k`·`MRR`·`nDCG`). verdict 는 순위를 안 바꾸므로 저쪽
+지표는 판정이 맞든 틀리든 **똑같은 수를 낸다** — 리랭커를 `recall@후보수` 로 재면 차이가
+정의상 0 이던 것과 같은 함정이다(`.claude/wiki/plan_log/검색-생성.md` 10회차가 이 자를 가르라고 적었다).
+게다가 `run_eval` 의 리포트 JSON 은 `as_baseline()`·`compare_to_baseline()` 에 물려 있어,
+거기에 판정 지표를 얹으면 그 파일이 무엇을 재는 파일인지가 흐려진다.
+
+뼈대는 `negatives.py`·`rerank_diff.py` 와 같다 — **실행 라벨의 컬렉션을 열어 다시 검색한다.**
+색인을 다시 하지 않는 이유도 같다(그 사이 로더가 바뀐 만큼 청크가 달라진다).
+
+## 정답표를 세트에 고정하지 않는다 — 이 도구의 핵심이다
+
+부정 예시 23건은 답이 코퍼스에 없으므로 늘 *불충분* 이 옳다. **긍정 20건은 아니다** —
+검색이 근거를 안 물어왔으면 *불충분* 이 **옳은 답**이다. 실측(`h-ceiling-kure`, 리랭커 off)
+으로 `hit@5` 8/20 · `hit@10` 14/20 이라, `@10` 에서도 여섯 건은 근거 없이 온다.
+
+그래서 기대 verdict 를 **그 실행의 순위로 매번 다시 만든다.** 세트에 박아 두면 옳게
+*불충분* 이라 답한 건이 오답으로 세어지고, 그 순간 이 표는 Evaluator 가 아니라 **검색기를
+재게 된다.** 반대로 말하면 이 표는 *"검색이 가져온 것을 Evaluator 가 제대로 읽었나"* 만 잰다.
+
+## 총점은 자[尺]가 못 된다 — **죽은 판정자와 균형 정확도를 함께 낸다**
+
+기대 분포가 `top_k` 마다 달라진다. 실측(2026-08-27, 사람 세트 43건 · 리랭커 `local-gpu`)으로
+**K=5 는 충분 9 · 불충분 34** 인데 **K=10 은 17 · 26** 이다. 그래서 *늘 불충분* 이라고만 답하는
+**죽은 판정자가 K=5 에서 34/43 을 공짜로 받는다** — 그 자리에서 실제로 잰 네 판 중 셋이
+그보다 낮았다(28 · 30 · 33 · 36). K=5 총점을 판정력으로 읽으면 **죽은 판정자에게 지는 점수를
+개선으로 읽게 된다.**
+
+그래서 `_print()` 가 셋을 함께 낸다 — 총점 · **죽은 판정자 기준선** · **균형 정확도**(긍정
+재현율과 부정 재현율의 평균, 죽은 판정자는 정의상 0.500). 총점을 지우지 않는 것은 회차 간
+비교에 이미 쓰인 수라서다. **K 가 다르면 총점끼리 비교하지 않는다** — 균형으로 본다.
+
+이것은 아래 「실패는 칸이 아니라 열이다」와 **같은 사고의 다른 층**이다. 저쪽은 실패를 판정에
+섞으면 죽은 Evaluator 가 만점을 받는다는 것이고, 이쪽은 **실패가 0이어도 분포만으로** 같은
+일이 난다는 것이다.
+
+## 검색 조건이 바뀌면 **기대 열이 함께 움직인다**
+
+바로 위 문단의 레버가 `top_k` 하나가 아니다. 기대 verdict 를 **그 실행의 순위**로 만들기
+때문에, 리랭커든 재작성이든 검색을 좋게 하면 행이 *불충분* 에서 *충분* 으로 옮겨가고
+**죽은 판정자 기준선도 함께 움직인다.** 실측(사람 18건, 2026-08-28) — `off × local-gpu` 가
+`hit@5` 0.6667 · `hit@10` 0.8333 인데 `off × cohere` 는 0.7222 · 0.8889 이다.
+
+그래서 **`--rerank`·`--rewrite` 가 다른 판끼리는 총점을 안 견주고 균형 정확도로 본다.**
+그 둘이 리포트 이름에 들어가는 이유도 같다(`report_name()`).
+
+## `--rewrite` 는 여기서 **꺼짐이 합법**이다 — `retry_diff` 와 갈리는 자리
+
+`retry_diff.py` 는 재작성이 꺼지면 `SystemExit` 로 멈춘다. 저쪽은 *재시도가 질의를 바꾼
+회차* 를 재므로 재작성이 곧 재는 대상이기 때문이다. **여기는 반대다** — `off` 가 기본값이고
+지금까지의 혼동행렬이 전부 그 위에서 나왔다. 그래서 `None` 을 그대로 `retrieve()` 에 넘기고,
+그것이 곧 재작성 없이 도는 경로다. 저쪽 가드를 베끼면 **기본 실행이 죽는다.**
+
+## 실패는 칸이 아니라 **열**이다
+
+`verdict="failed"` 는 *충분* 도 *불충분* 도 아니라 판정을 못 한 것이다. 혼동행렬 칸에 섞으면
+죽은 Evaluator 가 부정 23건에서 만점을 받아 **점수가 실력이 아니라 실패율을 잰다**(10회차).
+그래서 열을 따로 두고 사유(`warnings`)를 버킷으로 함께 센다.
+
+## `--top-k` 를 둘 이상 받는 이유
+
+**판정 대상이 몇 개인가가 분모를 통째로 바꾼다.** 5면 기대가 *충분 8 / 불충분 12*, 10이면
+*충분 14 / 불충분 6* 이다(부정 23은 그대로). 한쪽만 재면 그 기울기를 못 본다. 그리고
+`GENERATION_TOP_K=5` 는 config 에 *"대가를 재는 쪽이 없어 못 정한다"* 로 적힌 임시값인데,
+이 채점이 그 대가를 재는 첫 자다.
+
+## 판정 프로필은 인자로 받는다 — 임베딩과 반대다 (바로 아래)
+
+`--evaluator` 는 **이 실행에서 무엇을 재는가**이지 컬렉션의 성질이 아니다. 판정은 순위를
+안 바꾸므로 같은 색인 위에서 모델을 갈아 끼워도 검색은 글자 그대로 같고, 그래서 이 축만
+자유롭게 고를 수 있다. 기본이 `mini` 라 **안 주면 지금까지와 같은 실행**이다.
+
+**출력 JSON 이름에 프로필이 들어간다.** 안 넣으면 라벨이 같은 두 모델의 표가 같은 자리를
+다퉈 뒤엣것이 앞엣것을 에러 없이 덮는다 — 그 사고를 손으로 막은 흔적이
+`h-ce-gpu-verdicts-preflip.json` 이다.
+
+## 임베딩 프로필은 인자로 안 받고 리포트에서 읽는다
+
+컬렉션 이름에 임베딩 모델이 들어가서, 손으로 넘기면 같은 디렉터리의 **다른 컬렉션**을 열어
+0건이 나온다(`negatives.py` 의 첫 실행이 실제로 걸렸다). `require_fresh_store()` 가 소리 내어
+막는 것까지 그대로 쓴다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from evaluation.config import (
+    DEFAULT_EMBEDDING_PROFILE,
+    DEFAULT_EVALUATOR_PROFILE,
+    DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
+    eval_config,
+)
+from evaluation.inspect import load_report, require_fresh_store
+from evaluation.qa_set import QA_SET_PATH, load_qa_set
+from evaluation.run_eval import RESULTS_DIR
+from evaluation.scoring import hit_rank
+from rag_pipeline.generation.prompts import EVALUATOR_PROMPT_VERSION
+
+__all__ = ["VerdictRow", "confusion", "report_name", "score_verdicts"]
+
+# 기대와 실제가 가질 수 있는 값. `failed` 는 **실제 쪽에만** 나온다 — 기대는 검색 결과가
+# 만들고 검색은 실패라는 상태를 안 갖는다
+_JUDGEMENTS = ("sufficient", "insufficient")
+_ACTUALS = ("sufficient", "insufficient", "failed")
+
+# 표의 왼쪽 위 칸. f-string 안에 백슬래시를 못 써서 밖에 둔다 (py3.11)
+_HEADER = "기대\\실제"
+
+
+# 질의 하나의 채점 결과. 틀린 칸을 사람이 읽을 수 있게 사유와 순위를 함께 남긴다
+@dataclass
+class VerdictRow:
+    query_id: str
+    query: str
+    source_doc: str
+    # 답이 코퍼스에 있나 (세트 라벨). 부정 예시면 거짓이다
+    answerable: bool
+    # 이 실행에서 정답이 몇 등으로 왔나. 못 왔으면 None. **기대 verdict 를 만드는 값이다**
+    rank: int | None
+    expected: str
+    actual: str
+    reasoning: str = ""
+    warnings: list[str] = field(default_factory=list)
+
+    # 맞았나. **실패는 맞은 것도 틀린 것도 아니라 따로 센다**
+    @property
+    def correct(self) -> bool:
+        return self.actual == self.expected
+
+
+# 기대 verdict. **부정은 늘 불충분이고 긍정은 그 실행의 순위가 정한다** (모듈 docstring 참고)
+def expected_verdict(*, answerable: bool, rank: int | None) -> str:
+    if not answerable:
+        return "insufficient"
+    return "sufficient" if rank is not None else "insufficient"
+
+
+# 세트 하나를 한 `top_k` 로 채점한다. 판정은 evaluator 가 하고 이 함수는 재기만 한다
+def score_verdicts(
+    *,
+    label: str,
+    fmt: str,
+    top_k: int,
+    qa_path: Path | None = None,
+    rerank: str = DEFAULT_RERANK_PROFILE,
+    rewrite: str = DEFAULT_REWRITE_PROFILE,
+    evaluator_name: str = DEFAULT_EVALUATOR_PROFILE,
+) -> tuple[list[VerdictRow], dict[str, Any]]:
+    from rag_pipeline.generation import get_evaluator
+    from rag_pipeline.ingestion.embedding import get_embedder
+    from rag_pipeline.ingestion.indexing import get_store
+    from rag_pipeline.retrieval import (
+        build_bm25_index,
+        get_reranker,
+        get_rewriter,
+        retrieve,
+    )
+
+    qa = load_qa_set(qa_path)
+    if not qa.items:
+        raise SystemExit(f"세트가 비어 있습니다: {qa.path}")
+
+    report = load_report(label, fmt)
+    embedding = report.get("embedding_profile") or DEFAULT_EMBEDDING_PROFILE
+    config = eval_config(
+        qdrant_path=RESULTS_DIR / f"qdrant-{report['label']}-{fmt}",
+        embedding=embedding,
+        rerank=rerank,
+        rewrite=rewrite,
+        evaluator=evaluator_name,
+    )
+
+    evaluator = get_evaluator(config.evaluator)
+    if evaluator is None:
+        # **조용히 안 넘어간다** — 판정 없이 도는 채점은 전건 실패인데 표는 멀쩡해 보인다
+        raise SystemExit(
+            "판정이 꺼져 있습니다: EVAL_SETTINGS['evaluator']['evaluator_model'] 이 비었습니다"
+        )
+
+    embedder = get_embedder(config.embedding)
+    store = get_store(config.indexing, config.embedding)
+    reranker = get_reranker(config.rerank)
+    # **`None` 이어도 안 멈춘다** — 이 도구에서는 꺼짐이 기본값이자 계단의 첫 칸이다
+    # (모듈 docstring 의 「`retry_diff` 와 갈리는 자리」)
+    rewriter = get_rewriter(config.rewrite)
+
+    rows: list[VerdictRow] = []
+    try:
+        total = store.count()
+        require_fresh_store(
+            total, sum(x["chunks"] for x in report["indexed"]), label=report["label"], fmt=fmt
+        )
+        bm25 = build_bm25_index(store)
+        print(
+            f"컬렉션 {total}건 · 세트 {len(qa.items)}건 · top_k {top_k} · "
+            f"리랭커 {rerank} · 재작성 {rewrite} · "
+            f"판정 {evaluator_name}({config.evaluator.evaluator_model})"
+        )
+
+        for item in qa.items:
+            chunks = retrieve(
+                item.query,
+                store=store,
+                embedder=embedder,
+                top_k=top_k,
+                bm25=bm25,
+                reranker=reranker,
+                rewriter=rewriter,
+                config=config.retrieval,
+            )
+            # 기대는 **이 실행의 결과**로 만든다. 세트에 박힌 정답표를 안 쓴다
+            rank = (
+                hit_rank([c.text for c in chunks], item.gold_spans)
+                if item.answerable and item.gold_spans
+                else None
+            )
+
+            evaluator.usage.reset()
+            seen = len(evaluator.warnings)
+            verdict = evaluator.evaluate(item.query, chunks)
+
+            rows.append(
+                VerdictRow(
+                    query_id=item.query_id,
+                    query=item.query,
+                    source_doc=item.source_doc,
+                    answerable=item.answerable,
+                    rank=rank,
+                    expected=expected_verdict(answerable=item.answerable, rank=rank),
+                    actual=verdict.verdict,
+                    reasoning=verdict.reasoning,
+                    warnings=list(evaluator.warnings[seen:]),
+                )
+            )
+    finally:
+        # 안 닫으면 다음 실행이 배타 잠금으로 통째로 죽는다
+        store.close()
+
+    rerank_usage = getattr(reranker, "usage", None)
+    meta = {
+        "label": report["label"],
+        "format": fmt,
+        "top_k": top_k,
+        "embedding_profile": embedding,
+        "rerank_profile": rerank,
+        "rewrite_profile": rewrite,
+        "evaluator_profile": evaluator_name,
+        # **프로필과 함께 프롬프트 판도 싣는다** — 판을 손으로 되돌려 재는 것이 이 축의 방식
+        # 이라(`.claude/wiki/plan_log/검색-생성.md` 13회차) 프로필 이름만으로는 어느 프롬프트로 잰 표인지
+        # 알 수 없다. 캐시 salt 가 이미 이 값으로 갈리므로 표도 같이 갈려야 앞뒤가 맞는다
+        "prompt_version": EVALUATOR_PROMPT_VERSION,
+        "queries": len(rows),
+        "bm25_warnings": list(bm25.warnings),
+        "rerank_warnings": list(getattr(reranker, "warnings", []) or []),
+        "rewrite_warnings": list(rewriter.warnings) if rewriter else [],
+        # **회계 게이트를 리포트에서 바로 읽을 수 있어야 한다.** 유료 갈래는
+        # `rerank_calls + rerank_cache_hits == 질의 수` 인데 로컬 갈래는 그 둘이 **늘 0** 이라
+        # `rerank_reranked / rerank_candidates + rerank_cache_hits` 를 봐야 하고, 그것도
+        # **등식이 아니라 하한**이다 (CLAUDE.md · .claude/wiki/verify_log/2026-08-28-…-localgpu.md 3-1)
+        "rerank_calls": rerank_usage.api_calls if rerank_usage else None,
+        "rerank_cache_hits": rerank_usage.cache_hits if rerank_usage else None,
+        "rerank_reranked": rerank_usage.reranked if rerank_usage else None,
+        "rerank_candidates": config.rerank.rerank_candidates if reranker else None,
+        "rewrite_calls": rewriter.usage.api_calls if rewriter else None,
+        "rewrite_cache_hits": rewriter.usage.cache_hits if rewriter else None,
+    }
+    return rows, meta
+
+
+# 혼동행렬. **실패는 칸이 아니라 열이다** (모듈 docstring 참고)
+def confusion(rows: list[VerdictRow]) -> dict[str, dict[str, int]]:
+    table = {want: {got: 0 for got in _ACTUALS} for want in _JUDGEMENTS}
+    for row in rows:
+        table[row.expected][row.actual] += 1
+    return table
+
+
+# 죽은 판정자 기준선과 균형 정확도. **총점 혼자로는 판정력을 못 말한다** (모듈 docstring 참고).
+# 재현율의 분모는 **판정이 난 건만**이다 — 실패는 따로 세는 열이라 여기 안 섞는다
+def _balanced(rows: list[VerdictRow]) -> tuple[int, float | None]:
+    judged = [r for r in rows if r.actual != "failed"]
+    dead = sum(1 for r in rows if r.expected == "insufficient")
+    recalls = []
+    for want in _JUDGEMENTS:
+        cls = [r for r in judged if r.expected == want]
+        if cls:
+            recalls.append(sum(1 for r in cls if r.actual == want) / len(cls))
+    return dead, (sum(recalls) / len(recalls) if len(recalls) == len(_JUDGEMENTS) else None)
+
+
+# 사람이 읽는 모양. 맞은 수와 실패 수를 **따로** 낸다 — 합치면 실패율이 정확도로 읽힌다
+def _print(rows: list[VerdictRow], meta: dict[str, Any], *, show_wrong: bool) -> None:
+    table = confusion(rows)
+    failed = sum(1 for r in rows if r.actual == "failed")
+    correct = sum(1 for r in rows if r.correct)
+    judged = len(rows) - failed
+
+    print(f"\n{'=' * 78}")
+    print(f"top_k {meta['top_k']} · {meta['label']}-{meta['format']} · 질의 {len(rows)}건")
+    print(f"{_HEADER:<14}{'sufficient':>12}{'insufficient':>14}{'failed':>9}")
+    for want in _JUDGEMENTS:
+        got = table[want]
+        print(
+            f"{want:<14}{got['sufficient']:>12}{got['insufficient']:>14}{got['failed']:>9}"
+        )
+    print(f"\n맞은 것 {correct}/{judged} (판정이 난 건만) · 실패 {failed}건")
+
+    # **총점만 보면 안 된다** — 기대 분포가 top_k 마다 달라 죽은 판정자의 점수도 함께 움직인다
+    dead, balanced = _balanced(rows)
+    mark = "" if correct > dead else "  <-- 죽은 판정자보다 낮다"
+    print(f"  늘 *불충분* 이라 답하는 죽은 판정자: {dead}/{len(rows)}{mark}")
+    if balanced is not None:
+        print(f"  균형 정확도 {balanced:.3f} (죽은 판정자 0.500) — K 가 다르면 이쪽으로 견준다")
+
+    buckets = Counter(w for r in rows for w in r.warnings)
+    if buckets:
+        print("실패 버킷:")
+        for text, count in buckets.most_common():
+            print(f"  {count:>3}  {text}")
+    else:
+        print("실패 버킷: (없음)")
+
+    for key in ("bm25_warnings", "rerank_warnings", "rewrite_warnings"):
+        if meta[key]:
+            print(f"  경고 {key}: {meta[key]}")
+
+    if not show_wrong:
+        return
+    print(f"\n{'-' * 78}\n틀린 것과 실패")
+    for row in rows:
+        if row.correct and row.actual != "failed":
+            continue
+        mark = "실패" if row.actual == "failed" else f"{row.expected} -> {row.actual}"
+        place = f"정답 {row.rank}위" if row.rank else ("부정 예시" if not row.answerable else "정답 없음")
+        print(f"\n  [{row.query_id}] {mark} · {place}\n    {row.query}\n    {row.reasoning}")
+
+
+# 결과 JSON 이름. **판정 프로필·프롬프트 판에 더해 리랭커·재작성까지 들어간다** — 셋을 갈아
+# 가며 계단으로 재는 것이 이 도구의 쓰임인데, 이름이 안 갈리면 뒤엣것이 앞엣것을 **에러 없이
+# 덮는다.** 13회차가 luna v1 로 v3 표를 실제로 잃어 프롬프트 판이 들어갔는데, 그때는 리랭커·
+# 재작성 축이 없었다. `answer_eval.report_name()` 이 43회차에 같은 이유로 넓힌 것과 같은 자리다.
+# **`top_k` 는 안 넣는다** — 한 실행이 `--top-k 5 10` 을 한 파일의 `runs` 로 담는다
+def report_name(
+    *, label: str, evaluator: str, rerank: str, rewrite: str, prompt_version: str
+) -> str:
+    return f"{label}-verdicts-{evaluator}-{rerank}-{rewrite}-{prompt_version}.json"
+
+
+# CLI 진입점
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Evaluator 의 판정을 혼동행렬로 채점한다")
+    parser.add_argument("--label", required=True, help="읽을 실행 라벨 (그 컬렉션을 연다)")
+    parser.add_argument("--format", dest="fmt", default="pdf")
+    parser.add_argument("--qa-set", dest="qa_set", default=str(QA_SET_PATH))
+    # **둘 이상을 받는 것이 기본이다** (모듈 docstring 참고)
+    parser.add_argument("--top-k", type=int, nargs="+", default=[5, 10])
+    parser.add_argument("--rerank", default=DEFAULT_RERANK_PROFILE)
+    # 기본이 `off` 라 이쪽도 **안 주면 지금까지와 글자 그대로 같은 실행이다**
+    parser.add_argument("--rewrite", default=DEFAULT_REWRITE_PROFILE)
+    # 기본이 `mini` 라 **안 주면 지금까지와 글자 그대로 같은 실행이다**
+    parser.add_argument("--evaluator", default=DEFAULT_EVALUATOR_PROFILE)
+    parser.add_argument("--wrong", action="store_true", help="틀린 것과 실패를 하나씩 보여준다")
+    parser.add_argument("--json", action="store_true", help="결과를 JSON 으로도 남긴다")
+    args = parser.parse_args()
+
+    payload: dict[str, Any] = {"runs": []}
+    for top_k in args.top_k:
+        rows, meta = score_verdicts(
+            label=args.label,
+            fmt=args.fmt,
+            top_k=top_k,
+            qa_path=Path(args.qa_set),
+            rerank=args.rerank,
+            rewrite=args.rewrite,
+            evaluator_name=args.evaluator,
+        )
+        _print(rows, meta, show_wrong=args.wrong)
+        payload["runs"].append(
+            {"meta": meta, "confusion": confusion(rows), "rows": [asdict(r) for r in rows]}
+        )
+
+    if args.json:
+        # 이름이 갈리는 축 넷은 `report_name()` 에 있다 — 손으로 지키는 규약은 잊는 순간
+        # 근거가 사라지므로 구조로 옮긴다(지난 세션의 `h-ce-gpu-verdicts-preflip.json` 이
+        # 손으로 지킨 흔적이고, **13회차는 실제로 잃었다**)
+        out = RESULTS_DIR / report_name(
+            label=args.label,
+            evaluator=args.evaluator,
+            rerank=args.rerank,
+            rewrite=args.rewrite,
+            prompt_version=EVALUATOR_PROMPT_VERSION,
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"\n남김: {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -338,7 +338,7 @@ def test_ocr_workers_floor_is_one(mocker) -> None:
     assert router_module._ocr_workers(100, _ocr_config(ocr_max_workers=0)) == 1
 
 
-# 기본값은 8이다. **이 값이 바뀌면 verify_log/2026-08-24-ocr-병렬화.md 의 51.8초가
+# 기본값은 8이다. **이 값이 바뀌면 .claude/wiki/verify_log/2026-08-24-ocr-병렬화.md 의 51.8초가
 # 다른 설정의 수가 된다** — 기본을 안 낮추기로 한 결정을 여기서 잠근다
 def test_default_cap_is_eight() -> None:
     assert ContentRoutingConfig(openai_api_key="").ocr_max_workers == 8

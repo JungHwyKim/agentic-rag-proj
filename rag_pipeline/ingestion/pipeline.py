@@ -12,7 +12,7 @@ HTTP를 전혀 모르기 때문에 FastAPI 없이 스크립트나 노트북에�
 **둘을 합치지 않는 데는 두 번째 이유가 있고 그쪽이 더 중요하다.** 기본 `pytest` 가
 `ingest()` 만 부르므로 임베딩이 호출되지 않고, 그래서 "키가 없으면 예외"라는 embedding 의
 설계가 기본 테스트를 깨지 않는다. 합치는 순간 그 지탱이 무너진다 —
-근거는 plan_log/embedding.md 와 plan_log/indexing.md 의 "합성 지점" 절.
+근거는 .claude/wiki/plan_log/embedding.md 와 .claude/wiki/plan_log/indexing.md 의 "합성 지점" 절.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class IndexResult:
     usage: EmbeddingUsage
     # 그 색인이 **어떤 적재 위에서 나왔나.** `vision_calls`·`ocr_applied`·`warnings` 가
     # 여기 있다. 없으면 검색 수치가 달라졌을 때 *검색이 변한 것인지 적재가 변한 것인지*
-    # 가릴 방법이 없다 — Vision 은 LLM 이라 응답이 실행마다 다르다(plan_log/표-경로.md 12회차).
+    # 가릴 방법이 없다 — Vision 은 LLM 이라 응답이 실행마다 다르다(.claude/wiki/plan_log/표-경로.md 12회차).
     # 호출부가 `ingest()` 를 한 번 더 불러 얻는 안은 기각했다: 그 두 번째 파싱이 실제로
     # 색인된 것과 다를 수 있어, 다른 파싱의 카운터는 애초에 쓸모가 없다
     metadata: DocumentMetadata
@@ -89,6 +89,29 @@ def ingest(
     return document
 
 
+# 주입받은 임베더의 `usage` 를 재는 자[尺]. 앱 수명 동안 누적이라 앞뒤를 빼야
+# **이 문서 몫**이 나온다. `reset()` 이 아닌 이유는 `index_document()` 주석에 있다
+#
+# **입력·출력 토큰을 따로 뜬다.** 2026-08-29 에 `total_tokens` 가 파생 프로퍼티가 되면서
+# 아래 `_usage_since()` 가 그것을 **생성자 인자로** 넘기다 깨졌다 — 프로퍼티로 바꾸면
+# *읽는* 쪽은 한 줄도 안 바뀌지만 **만드는** 쪽은 바뀐다. 그 둘을 같은 것으로 본 것이
+# 이 변경에서 유일하게 놓친 자리다(전체 pytest 가 잡았다)
+def _usage_snapshot(embedder: Embedder) -> tuple[int, int, int, int]:
+    usage = embedder.usage
+    return (usage.api_calls, usage.input_tokens, usage.output_tokens, usage.cache_hits)
+
+
+# 스냅샷 이후로 늘어난 만큼만 담은 새 `EmbeddingUsage`
+def _usage_since(before: tuple[int, int, int, int], embedder: Embedder) -> EmbeddingUsage:
+    usage = embedder.usage
+    return EmbeddingUsage(
+        api_calls=usage.api_calls - before[0],
+        input_tokens=usage.input_tokens - before[1],
+        output_tokens=usage.output_tokens - before[2],
+        cache_hits=usage.cache_hits - before[3],
+    )
+
+
 # 파일 하나를 끝까지 색인한다. 파싱 -> 청킹 -> 임베딩 -> 저장
 #
 # 재색인을 delete -> upsert 로 하는 이유: 문서를 고치면 청크가 사라질 수 있는데
@@ -99,6 +122,7 @@ def index_document(
     original_name: str | None = None,
     config: IngestConfig | None = None,
     store: VectorStore | None = None,
+    embedder: Embedder | None = None,
     shadow: tuple[VectorStore, Embedder] | None = None,
 ) -> IndexResult:
     config = config or IngestConfig()
@@ -110,8 +134,28 @@ def index_document(
     document_id = document_id_for(document.metadata.source_name)
     chunks = split(document, config.splitter, document_key=document_id)
 
-    embedder = get_embedder(config.embedding)
+    # **임베더도 주입받는다 — `store` 와 같은 이유는 아니다.** 저쪽은 배타 잠금이고
+    # 이쪽은 **모델 적재**다. `get_embedder()` 는 메모이즈하지 않아 부를 때마다 새
+    # `LocalEmbedder` 가 되는데, 로컬 갈래는 임베딩 캐시가 빗나갈 때 비로소 가중치를
+    # 올리므로 **새 문서 하나마다 KURE-v1 2.27GB 를 처음부터 적재한다.**
+    # 실측(2026-08-26): 25청크 첫 임베딩 23.629초 vs 적재 후 같은 크기 0.164초.
+    # 이미 올린 문서를 다시 색인할 때는 전량 캐시 히트라 모델이 안 올라와 **이 비용이
+    # 안 보인다** — 그래서 재색인만 재면 멀쩡해 보이고 새 문서만 느리다.
+    #
+    # 안 넘기면 `config.embedding` 을 그대로 쓰는 것은 `store` 와 같은 계약이다.
+    # **닫지는 않는다** — 임베더에 `close()` 가 없고, 그래서 소유권 규칙도 안 딸려온다
+    owns_embedder = embedder is None
+    if embedder is None:
+        embedder = get_embedder(config.embedding)
+
+    # 주입받은 임베더는 앱 수명 동안 살아 여러 문서를 거치므로 `usage` 가 **누적**이다.
+    # `IndexResult.usage` 는 *이 문서의* 비용이라 앞뒤를 빼서 이번 몫만 담는다.
+    # **`usage.reset()` 을 부르면 안 된다** — 같은 인스턴스를 질의 쪽도 쓰고
+    # `evaluation/run_eval.py` 는 루프를 다 돈 뒤 `total_tokens` 를 읽으므로
+    # (`retrieval/dense.py` docstring), 여기서 0으로 만들면 **그 회계가 조용히 사라진다**
+    before = _usage_snapshot(embedder)
     vectors = embedder.embed_documents([chunk.text for chunk in chunks])
+    usage = embedder.usage if owns_embedder else _usage_since(before, embedder)
     records = to_records(chunks, vectors, document_id=document_id)
 
     # **소유권 규칙: 연 쪽이 닫는다.** 인자로 받은 store 는 호출자(backend 의 startup
@@ -143,14 +187,14 @@ def index_document(
         collection=collection,
         chunk_count=len(chunks),
         indexed_count=indexed,
-        usage=embedder.usage,
+        usage=usage,
         metadata=document.metadata,
         shadow=_index_shadow(shadow, chunks, document_id),
     )
 
 
 # 같은 청크를 두 번째 임베더로 한 벌 더 색인한다. **비교 데이터를 쌓아두는 것이 목적**이고
-# (`plan_log/embedding.md` 5회차), 지금은 갈아타기 전 기본값이던 OpenAI 가 그 자리다.
+# (`.claude/wiki/plan_log/embedding.md` 5회차), 지금은 갈아타기 전 기본값이던 OpenAI 가 그 자리다.
 #
 # ## 왜 여기이고 호출부가 아닌가
 #

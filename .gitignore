@@ -28,9 +28,19 @@ original_files/
 # 벡터 DB 바이너리라 커밋하면 안 되고, 임베딩 모델을 바꾸면 내용도 통째로 달라진다
 .qdrant/
 
+# PPT 초안 메모 등 임시 작업 파일
+/tmp/
+
 # 에디터
 .vscode/
 .idea/
+.codex/
+output/
+
+# 로컬 작업 지침과 프로젝트 컨텍스트
+/AGENTS.md
+/project_context/
+/.claude/wiki/plan_log/프로젝트-컨텍스트.md
 
 # backend/preview.py 산출물. 템플릿을 고치면 곧바로 낡아 어느 시점의 화면인지 알 수 없게 된다
 /preview.html

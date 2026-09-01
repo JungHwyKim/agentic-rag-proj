@@ -1,7 +1,7 @@
 """QdrantStore.list_documents(). 사이드바 문서 목록의 유일한 출처다.
 
 **Protocol 에는 없는 메서드다** — 저장소 중립을 지키려고 구체 클래스에만 뒀다
-(plan_log/backend.md). 그래서 여기서 계약을 못 박아 두지 않으면 아무도 안 지킨다.
+(.claude/wiki/plan_log/backend.md). 그래서 여기서 계약을 못 박아 두지 않으면 아무도 안 지킨다.
 """
 
 from __future__ import annotations

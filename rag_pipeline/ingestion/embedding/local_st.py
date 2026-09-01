@@ -5,7 +5,7 @@
 
 ## 왜 이 구현체가 생겼나
 
-`plan_log/embedding.md` 의 *모델·차원* 미결이 *"낱말로 못 찾고 적재로도 못 고치는 자리가
+`.claude/wiki/plan_log/embedding.md` 의 *모델·차원* 미결이 *"낱말로 못 찾고 적재로도 못 고치는 자리가
 남았다"* 까지 좁혀졌고(포맷 비교 · hybrid 측정 · 어휘 겹침 세 회차), 남은 후보가 **임베딩의
 한국어 변별력** 하나였다. 그것을 재려면 **계열·토크나이저가 진짜 다른** 두 번째 모델이
 있어야 한다 — 같은 계열(`text-embedding-3-large`)로 재면 *"안 움직였다"* 가 임베딩 축을
@@ -273,7 +273,10 @@ class LocalEmbedder:
         self._check_dimensions(vectors)
 
         self._usage.api_calls += 1
-        self._usage.total_tokens += _count_tokens(model, batch)
+        # **비용 로그를 안 부른다.** 이 갈래는 무료라 남길 돈이 없고, 남기면 문서 하나
+        # 색인에 수백 줄이 쌓여 상한 없는 파일이 폭주한다(`cost_log.py` 의 *"로컬·무료
+        # 갈래는 안 부른다"*). 토큰은 계속 센다 — 그것은 비용이 아니라 **부하**의 지표다
+        self._usage.input_tokens += _count_tokens(model, batch)
         return vectors
 
     # 한 배치 안에서 차원이 흔들리면 저장 단계가 아니라 여기서 잡는다.

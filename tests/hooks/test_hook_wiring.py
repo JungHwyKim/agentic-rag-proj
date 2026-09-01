@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import re
@@ -104,6 +105,33 @@ def test_every_hook_script_is_wired():
     wired = {script for _event, _matcher, script in _wired()}
 
     assert on_disk - wired == set(), "settings.json 에 배선되지 않은 훅이 있다"
+
+
+# 자식 출력을 **텍스트로 받는** 호출은 자식 인코딩도 함께 못 박아야 한다.
+#
+# `encoding="utf-8"` 만 주고 `env` 를 안 주면 Windows 자식이 로케일(cp949)로 내보내, 한국어
+# 실패 사유·skip 사유가 대체문자로 뭉개진다 — **사유는 나오는데 못 읽는** 상태이고 에러가
+# 안 난다(실측 2026-08-29: pytest 실패 한 줄에 U+FFFD 52개). 파일마다 따로 잠그면 **새로
+# 생긴 훅이 조용히 빠지므로** 훅 전체를 훑는다. `test_every_hook_script_is_wired` 와 같은
+# 모양이고 이유도 같다.
+#
+# 바이트로 받아 직접 디코드하는 호출(`_hookutil.changed_paths` 의 `git -z`)은 `encoding` 을
+# 아예 안 줘서 여기 안 걸린다 — 그쪽은 이미 맞게 돼 있다
+def test_subprocess_text_calls_pin_child_encoding():
+    offenders: list[str] = []
+    for path in sorted(HOOKS_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "run"):
+                continue
+            names = {kw.arg for kw in node.keywords}
+            if "encoding" in names and "env" not in names:
+                offenders.append(f"{path.name}:{node.lineno}")
+
+    assert offenders == [], f"자식 인코딩을 안 박은 subprocess 호출: {offenders}"
 
 
 # 셸 명령을 보는 PreToolUse 훅은 Bash 와 PowerShell 을 모두 덮어야 한다.

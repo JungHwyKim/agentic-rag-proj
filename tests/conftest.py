@@ -19,13 +19,16 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from rag_pipeline.config import (
+    AgentConfig,
     AnswerCacheConfig,
     ContentRoutingConfig,
     EmbeddingConfig,
+    EvaluatorConfig,
     GenerationConfig,
     IndexingConfig,
     IngestConfig,
     RerankConfig,
+    RewriteConfig,
 )
 
 # 한글 렌더링용 폰트 후보. 없으면 OCR 관련 테스트는 건너뛴다
@@ -45,6 +48,30 @@ def _korean_font(size: int = 48) -> ImageFont.FreeTypeFont | None:
             except OSError:
                 continue
     return None
+
+
+# 유료 API 비용 로그를 tmp_path 로 돌린다. **이 저장소 루트 conftest 의 첫 autouse 픽스처다.**
+#
+# `CostLogConfig.cost_log_path` 기본값이 `PROJECT_ROOT/data/cost.jsonl` 이고 기본이 **켜짐**이라,
+# 안 덮으면 유료 이음새를 지나는 모든 테스트가 개발자의 실제 비용 로그에 줄을 쌓는다. 그 파일은
+# "이번 실측이 얼마짜리였나"의 유일한 근거라, 모킹된 가짜 호출이 섞이면 그 근거가 조용히
+# 오염된다 — `tests/api/conftest.py` 의 `QUERY_LOG_PATH` 핀과 **글자 그대로 같은 이유**다.
+#
+# **여기(루트)여야 한다.** 저쪽 핀은 `tests/api` 폴더에만 먹는데 비용 로그의 호출 지점은
+# `rag_pipeline/`·`evaluation/` 안이라 **전체 pytest 가 지나간다.** 2026-08-26 에 라우트를
+# 픽스처보다 먼저 배선했다가 훅이 몇 초 만에 테스트를 돌려 `data/queries.jsonl` 에 15줄이
+# 실제로 샜다 — 그래서 이 픽스처가 `cost_log.py` 보다 **먼저** 들어간다.
+#
+# 환경변수로 덮는 이유도 같다: `CostLogConfig()` 를 쓰기 직전에 만들므로 이 한 줄이 모든
+# 호출부에 먹는다. 모듈마다 patch 하면 새 이음새가 생길 때마다 빠뜨린다.
+#
+# **끄지 않고 옮기는 것이 요점이다.** `COST_LOG_ENABLED=false` 로 막으면 쓰는 코드가
+# 테스트에서 한 번도 안 돌아, 이음새를 빠뜨려도 아무도 모른다
+@pytest.fixture(autouse=True)
+def cost_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "data" / "cost.jsonl"
+    monkeypatch.setenv("COST_LOG_PATH", str(path))
+    return path
 
 
 # 외부 API를 절대 호출하지 않는 설정. 단위 테스트 기본값
@@ -118,7 +145,7 @@ def offline_config(tmp_path: Path) -> IngestConfig:
     # 모드 한 줄이 기본 pytest 에서 캐시를 켜버린다. **필드를 더한 회차가 이 핀을 함께 넓히지
     # 않으면 핀이 아무 에러 없이 불완전해지는 것**이 요점이고, 그것은 2026-08-25 에
     # EVAL_EMBEDDINGS["baseline"] 이 embedding_provider 로 겪은 일과 같은 종류다
-    # (evaluation/config.py 의 baseline 주석 · plan_log/시맨틱-캐시.md 6회차)
+    # (evaluation/config.py 의 baseline 주석 · .claude/wiki/plan_log/시맨틱-캐시.md 6회차)
     object.__setattr__(
         config,
         "_answer_cache",
@@ -137,11 +164,58 @@ def offline_config(tmp_path: Path) -> IngestConfig:
         "_rerank",
         RerankConfig(
             openai_api_key=None,
+            # 갈래가 셋이 되면서 지울 키도 둘이다. **모델이 비어 이미 꺼져 있지만 같이 지운다** —
+            # 이 블록이 셋을 다 박는 이유(겹을 하나에 안 맡긴다)가 여기에도 그대로 적용된다
+            cohere_api_key=None,
             rerank_provider="openai",
             rerank_model=None,
             rerank_cache_enabled=False,
         ),
     )
+    # Evaluator 도 같은 이유로 덮어쓴다. **켜는 축이 모델 이름 하나뿐이라 그 한 줄이 스위치다** —
+    # EvaluatorConfig() 가 .env 를 직접 읽으므로, 개발자가 EVALUATOR_MODEL 을 넣어 두면 기본
+    # pytest 가 질의마다 OpenAI 를 부르는 경로로 조용히 간다(리랭커와 달리 로컬 갈래가 없어
+    # 가중치 적재는 없지만, 대신 **과금**이다). 키까지 지우는 것은 그 한 겹 뒤의 겹이고,
+    # 캐시를 끄는 것은 테스트가 서로의 판정 결과를 물려받지 않게 하려는 것이다.
+    #
+    # **핀은 필드를 더한 회차의 몫이다** — answer_cache 가 mode 축이 생기며 threshold 만 박힌
+    # 핀이 반쪽이 됐던 자리와 같다(2026-08-26)
+    object.__setattr__(
+        config,
+        "_evaluator",
+        EvaluatorConfig(
+            openai_api_key=None,
+            evaluator_model=None,
+            evaluator_cache_enabled=False,
+        ),
+    )
+    # 질의 재작성도 같은 이유로 덮어쓴다. **Evaluator 와 글자 그대로 같은 자리다** —
+    # 켜는 축이 모델 이름 하나뿐이라 그 한 줄이 스위치이고, RewriteConfig() 가 .env 를 직접
+    # 읽으므로 개발자가 REWRITE_MODEL 을 넣어 두면 기본 pytest 가 질의마다 OpenAI 를 부르는
+    # 경로로 조용히 간다. 로컬 갈래가 없어 가중치 적재는 없지만 대신 **과금**이다.
+    # 키까지 지우는 것은 그 한 겹 뒤의 겹이고, 캐시를 끄는 것은 테스트가 서로의 재작성
+    # 결과를 물려받지 않게 하려는 것이다.
+    #
+    # **rewrite_mode 는 안 박는다** — 모델이 비어 이미 꺼져 있어 그 값이 도달할 코드가 없고,
+    # 박으면 "합법값 둘"이라는 그 축의 뜻이 픽스처에서 한쪽으로 굳는다. 모드를 실제로
+    # 가르는 테스트는 자기 config 를 손으로 만든다
+    object.__setattr__(
+        config,
+        "_rewrite",
+        RewriteConfig(
+            openai_api_key=None,
+            rewrite_model=None,
+            rewrite_cache_enabled=False,
+        ),
+    )
+    # 재시도 루프도 같은 이유로 덮어쓴다. **여기는 「키가 없어 못 돈다」가 방어가 아니다** —
+    # 루프 자체는 키를 안 보고, 회차 수 하나로 돈다. 개발자가 .env 에 AGENT_MAX_RETRIES 를
+    # 켜 두면 기본 pytest 의 루프 경로가 **검색을 여러 번 도는 상태**로 조용히 바뀐다.
+    #
+    # **위 핀들과 갈리는 자리가 하나 있다**: 저쪽은 «과금 경로로 새는가» 인데 이쪽은
+    # «몇 바퀴 도는가» 라, 새도 과금이 아니라 **회차 수가 달라진 채 통과하는 테스트**가 된다.
+    # 그것이 더 조용하다 — 위 핀들이 지키는 「필드를 더한 회차가 핀도 넓힌다」 규약 그대로다
+    object.__setattr__(config, "_agent", AgentConfig(agent_max_retries=0))
     return config
 
 

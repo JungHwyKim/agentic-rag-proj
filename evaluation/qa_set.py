@@ -2,7 +2,7 @@
 
 ## 왜 `chunk_id` 가 아니라 `gold_spans` 인가
 
-`plan_log/평가-세트.md` 2회차. 요약하면 둘이다.
+`.claude/wiki/plan_log/평가-세트.md` 2회차. 요약하면 둘이다.
 
 1. `chunk_id` 는 `{document_key}:{chunk_index:04d}` 라 **청킹을 고치면 세트가 통째로 무효**가
    된다. 그런데 청크 상한 재판정이 이 세트의 목적 중 하나다 — 정답이 chunk_id 면 자기 자신을
@@ -62,7 +62,7 @@ Phase 4(Relevance Evaluator)를 재려면 **답이 문서에 없는 질의**가 
 
 ## 모든 span 은 그룹의 **모든 포맷**에서 찾을 수 있어야 한다
 
-포맷 비교(`plan_log/검색-생성.md` 비교 5번)가 성립하는 조건이다. HWPX 에만 있는 문장을
+포맷 비교(`.claude/wiki/plan_log/검색-생성.md` 비교 5번)가 성립하는 조건이다. HWPX 에만 있는 문장을
 정답으로 삼으면 PDF 판은 그 질의를 영원히 못 맞히고, 그 차이는 검색 성능이 아니라 **정답이
 한쪽에 없어서** 생긴 것이다. `validate_spans_across_formats()` 가 그것을 본다.
 """
@@ -122,6 +122,46 @@ class QAItem:
     # 원문을 바로 열게 하는 것이 목적이고, 두 판의 쪽이 어떻게 어긋나는지가 함께 남는다.
     # 한 개의 int 로는 못 쓴다 — 실측으로 학교기록물은 PDF 가 +1, AI 가이드는 아예 다르다
     gold_page: dict[str, int] = field(default_factory=dict)
+    # 답변이 **반드시 담아야 할 것**. `gold_spans` 와 축이 다르다 — 저쪽은 *검색이 이 청크를
+    # 물어왔나* 이고 이쪽은 *생성이 이 사실을 답에 담았나* 다(`.claude/wiki/plan_log/평가-세트.md` 13회차).
+    #
+    # **둘로 가른 것이 이 스키마의 요점이다.** `must_values` 는 값·날짜라 어휘 대조로
+    # **결정적**이고, `must_points` 는 서술이라 LLM 판정이 든다. 한 칸으로 접으면 자[尺]가
+    # 통째로 LLM 이 되어 이 형태를 고른 이유가 사라진다 — 고른 이유는 `judge_probe` 가 놓친
+    # 셋(`3월→4월`·`206개→207개`·`2026년→2027년`)이 **전부 값**이었다는 것이다.
+    #
+    # **`must_points` 에 원문을 그대로 뜨면 안 된다.** 부분 문자열이면 베낀 답변이 통과하고
+    # 바꿔 쓴 답변이 떨어져, 재는 것이 completeness 가 아니라 *원문을 옮겼나* 가 된다 —
+    # 인용 정합성(`generation/citations.py`)이 이미 재는 것이다
+    must_values: list[str] = field(default_factory=list)
+    must_points: list[str] = field(default_factory=list)
+    # 위 둘의 검수 도장. **`reviewed_by`/`reviewed_hash` 와 일부러 갈라 뒀다** — 합치면
+    # 기존 43건 도장이 전부 깨져 재검수를 강요하는데, 그것이 `.claude/wiki/plan_log/검색-생성.md` 56회차가
+    # *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"* 며 라벨을 안 건드린 자리다.
+    # 지문은 `content_hash(query, must_values + must_points)` 이고 `validate_items()` 가
+    # 본다 — 6회차가 `reviewed_hash` 를 검수가 끝난 뒤 백필하고 게이트를 그 뒤에 무장한
+    # 것과 같은 순서다(라벨 18/18 이 찬 뒤인 2026-08-29 에 붙었다)
+    must_reviewed_by: str = "pending"
+    must_reviewed_hash: str = ""
+    # 답변이 **단정하면 안 되는 것**. 위 둘과 축이 반대다 — 저쪽은 *담았나* 이고 이쪽은
+    # *덧붙였나* 라, `must_points` 로는 원리적으로 못 잰다(실측: `hai-05` 에서 답변이 근거의
+    # 「이해관계자」를 담은 **채로** 「국민」을 덧붙였고 어휘 겹침은 두 판이 같았다).
+    #
+    # **이름이 「환각이 없다」로 읽히면 안 된다.** 환각은 열거할 수 없어, 이 칸이 재는 것은
+    # «환각을 안 했나» 가 아니라 **«미리 적어 둔 오류를 냈나»** 다. 그래서 `claim` 이다 —
+    # 낱말이 나온 것(mention)이 아니라 **단정한 것**만 오류다(`.claude/wiki/plan_log/평가-세트.md` 16회차).
+    #
+    # **값/서술로 안 가른다.** `must_values`/`must_points` 를 가른 축은 «어휘로 결정적인가»
+    # 인데, 여기서는 그 축이 실측으로 무너졌다 — 다섯 건 중 셋은 금지어가 **질의 자체의
+    # 낱말**이라(전제가 틀린 질문이 이 칸을 만든다) 전제를 바로잡은 답변도 그 낱말을 쓴다.
+    # 즉 «있나» 로는 값 축조차 결정적이지 않아, 가를 근거가 없다
+    must_not_claim: list[str] = field(default_factory=list)
+    # 이 칸만의 검수 도장. **`must_reviewed_*` 에 안 묶었다** — 묶으면 같은 문자열을
+    # `must_points` ↔ `must_not_claim` 으로 **옮긴 편집이 지문에 안 걸린다**(확인함:
+    # payload 가 이어 붙인 한 목록이라 경계가 안 남는다). 뜻이 제일 크게 뒤집히는 편집이
+    # 그것이라 도장이 그것만은 잡아야 한다. 지문은 `content_hash(query, must_not_claim)` 다
+    must_not_claim_reviewed_by: str = "pending"
+    must_not_claim_reviewed_hash: str = ""
 
     # jsonl 한 줄을 레코드로. 모르는 키는 조용히 버리지 않고 막는다 —
     # 오타 난 키가 조용히 무시되면 그 레코드만 기본값으로 채점된다
@@ -210,6 +250,51 @@ def validate_items(items: list[QAItem]) -> list[str]:
                     f"(기록 {item.reviewed_hash or '없음'} / 지금 {expected}) "
                     "— 다시 검수하고 reviewed_hash 를 갱신하거나 pending 으로 되돌려라"
                 )
+
+        # 골든 답변 라벨의 도장 둘도 같은 규칙 아래 있다. **도장이 셋인 것은 되풀이가 아니라
+        # 가리는 내용이 셋이기 때문이다** — 사람이 판단한 것이 각각 «이 질문에 이 정답이 맞나» ·
+        # «답변이 이것을 담아야 하나» · «답변이 이것을 단정하면 안 되나» 로 다르다.
+        # 셋을 한 지문으로 묶으면 라벨을 한쪽에서 다른 쪽으로 **옮긴 편집이 안 걸린다**
+        # (`.claude/wiki/plan_log/평가-세트.md` 16회차).
+        #
+        # **`pending` 을 문제로 안 센다** — 기계가 문구를 제안하고 사람이 거르는 절차라
+        # (14·16회차) 검수 대기가 정상 상태다. 커밋된 세트가 다 찼는지는 `tests/evaluation`
+        # 쪽이 본다. 여기는 6회차와 같이 **«고치고 도장을 안 고친 것»** 만 잡는다
+        for state, digest, payload, what, field_name in (
+            (
+                item.must_reviewed_by,
+                item.must_reviewed_hash,
+                [*item.must_values, *item.must_points],
+                "필수 사실",
+                "must_reviewed_hash",
+            ),
+            (
+                item.must_not_claim_reviewed_by,
+                item.must_not_claim_reviewed_hash,
+                item.must_not_claim,
+                "단정 금지",
+                "must_not_claim_reviewed_hash",
+            ),
+        ):
+            if state not in REVIEW_STATES:
+                problems.append(f"{item.query_id}: {what} 도장이 {state!r} 이다")
+            elif state == "human":
+                expected = content_hash(item.query, payload)
+                if digest != expected:
+                    problems.append(
+                        f"{item.query_id}: 검수 뒤에 {what} 라벨이 바뀌었다 "
+                        f"(기록 {digest or '없음'} / 지금 {expected}) "
+                        f"— 다시 읽고 {field_name} 를 갱신하거나 pending 으로 되돌려라"
+                    )
+
+        # **부정 예시에는 골든 답변 라벨을 안 단다** — 부정의 골든은 «기권» 이고 그것을
+        # `summarize()` 의 `negative` 버킷이 이미 채점한다(13회차). 달면 *«답할 수 없다»* 가
+        # 두 곳에 적혀 한쪽이 조용히 낡는다. 결정만 기록에 있고 코드가 안 보던 자리다
+        if not item.answerable and (item.must_values or item.must_points or item.must_not_claim):
+            problems.append(
+                f"{item.query_id}: answerable 이 거짓인데 골든 답변 라벨이 달려 있다 "
+                "— 부정의 골든은 «기권» 이고 negative 버킷이 이미 잰다"
+            )
 
         # gold_page 의 키는 그 그룹의 포맷 라벨 전부여야 한다. 라벨을 바꾸고 세트를 안 고치는
         # 것을 여기서 막는다 — 안 막으면 조용히 빈 칸이 되고 검수자가 원문을 못 찾는다.

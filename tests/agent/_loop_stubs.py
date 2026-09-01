@@ -1,0 +1,119 @@
+"""재시도 루프 테스트가 나눠 쓰는 가짜들.
+
+**`conftest.py` 가 아니라 이름이 겹치지 않는 모듈이다.** 루트 `tests/conftest.py` 가
+`sys.modules["conftest"]` 를 먼저 차지해 하위 폴더에서 `import conftest` 가 엉뚱한 모듈을
+집기 때문이고, `tests/hooks/_escape_hatches.py` 가 같은 이유로 있는 자리다.
+
+**두 테스트가 이것을 나눠 쓰는 것이 요점이다.** while 경로(`test_retry_loop.py`)와 그래프
+경로(`test_agent_graph.py`)가 각자 가짜를 지으면, 두 경로가 **서로 다른 가짜를 보면서도**
+「같다」가 나올 수 있다 — 그러면 동등성 시험이 아무것도 안 재게 된다.
+
+가짜는 넷이고 전부 **호출된 질의를 기록한다.** 무엇으로 검색했고 무엇으로 판정·생성했는지가
+이 루프에서 제일 자주 어긋나는 자리이기 때문이다(검색만 재작성 질의를 쓴다).
+
+**생성기만 하나를 더 기록한다 — 받은 근거의 `chunk_id` 다.** 질의가 맞아도 *무엇을 보고*
+답했는지가 어긋날 수 있고, 실제로 그랬다: 예산으로 자른 목록이 `final_context` 에만 가고
+생성에는 안 갔다(31회차).
+"""
+
+from __future__ import annotations
+
+from rag_pipeline.agent.tools.base import BaseTool
+from rag_pipeline.schemas.agent import ToolInput, ToolOutput
+from rag_pipeline.schemas.answer import EvaluatorVerdict
+from rag_pipeline.schemas.retrieval import RetrievedChunk
+
+QUERY = "데이터세트 이관 절차는"
+
+
+def chunk(chunk_id: str = "c1") -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id, document_id="안내서.pdf", text=f"{chunk_id} 본문", metadata={}
+    )
+
+
+# 루프가 `QueryRewriter` 에서 읽는 것은 `last_rewritten` 하나다. **검색이 돌 때 갱신된다** —
+# 실제로도 재작성은 `retrieve()` 안에서 돌고 루프는 그 결과를 읽기만 한다
+class StubRewriter:
+    def __init__(self, queries: list[str | None] | None = None) -> None:
+        self._queries = queries
+        self._calls = 0
+        self.last_rewritten: str | None = None
+
+    def note_retrieval(self, query: str) -> None:
+        if self._queries is None:
+            self.last_rewritten = f"{query}+확장{self._calls}"
+        else:
+            self.last_rewritten = (
+                self._queries[self._calls] if self._calls < len(self._queries) else None
+            )
+        self._calls += 1
+
+
+# 부른 질의를 기록하는 가짜 검색 도구. 실패는 예외로 내고 `BaseTool.run()` 이 값으로 바꾼다
+#
+# **기본값은 질의와 무관하게 같은 목록을 낸다** — 실물에서도 재작성이 어투만 바꾸면 그렇게
+# 되고, 그 회차를 세는 것이 `evidence_unchanged_at` 이다. 결과가 **달라지는** 쪽을 재려면
+# `chunks_per_call` 로 회차마다 다른 목록을 준다(다 쓰면 마지막 것을 되풀이한다)
+class StubRetriever(BaseTool):
+    name = "retriever"
+    description = "테스트용"
+
+    def __init__(
+        self,
+        *,
+        chunks: list[RetrievedChunk] | None = None,
+        chunks_per_call: list[list[RetrievedChunk]] | None = None,
+        rewriter: StubRewriter | None = None,
+        fails: bool = False,
+    ) -> None:
+        self._chunks = [chunk()] if chunks is None else chunks
+        self._chunks_per_call = chunks_per_call
+        self._rewriter = rewriter
+        self._fails = fails
+        self.queries: list[str] = []
+
+    def _run(self, tool_input: ToolInput) -> ToolOutput:
+        self.queries.append(tool_input.query)
+        if self._fails:
+            # 재작성기도 안 돈다 — 1차 검색이 없으면 PRF 가 성립하지 않는다
+            raise RuntimeError("저장소 응답 없음")
+        if self._rewriter is not None:
+            self._rewriter.note_retrieval(tool_input.query)
+        return ToolOutput(success=True, data=list(self._chunks_for_this_call()))
+
+    # 이번 회차가 낼 목록. `chunks_per_call` 을 안 주면 늘 같은 것이다
+    def _chunks_for_this_call(self) -> list[RetrievedChunk]:
+        if self._chunks_per_call is None:
+            return self._chunks
+        index = min(len(self.queries) - 1, len(self._chunks_per_call) - 1)
+        return self._chunks_per_call[index]
+
+
+# 정해둔 판정을 순서대로 낸다. 다 쓰면 마지막 것을 되풀이한다
+class StubEvaluator:
+    def __init__(self, *verdicts: str) -> None:
+        self._verdicts = list(verdicts)
+        self.queries: list[str] = []
+
+    def evaluate(self, query: str, chunks: list[RetrievedChunk]) -> EvaluatorVerdict:
+        self.queries.append(query)
+        index = min(len(self.queries) - 1, len(self._verdicts) - 1)
+        return EvaluatorVerdict(verdict=self._verdicts[index], reasoning="테스트")
+
+
+# 무슨 질의로, **무슨 근거로** 생성했는지 기록한다
+class StubGenerate:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+        # 회차마다 받은 근거의 chunk_id. **질의만으로는 안 잡히는 어긋남이 있다** —
+        # 예산으로 자른 목록이 생성까지 안 가면 상태의 `final_context` 와 모델이 실제로
+        # 본 근거가 갈리는데 아무 에러가 안 난다 (loop.py docstring 참고)
+        self.chunk_ids: list[list[str]] = []
+
+    def __call__(self, query: str, chunks: list[RetrievedChunk]) -> str:
+        self.queries.append(query)
+        self.chunk_ids.append([c.chunk_id for c in chunks])
+        # **근거 수를 답변에 싣는 것이 그래프 동등성 시험의 이음새다** —
+        # 상태만 견줘도 «두 경로가 같은 목록을 봤나» 가 함께 걸린다
+        return f"답변({len(chunks)}건)"

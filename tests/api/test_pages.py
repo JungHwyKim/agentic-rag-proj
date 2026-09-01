@@ -63,7 +63,7 @@ def test_htmx_is_vendored(client: TestClient):
 
 
 # 업로드는 더 이상 목업이 아니다. index_document() 가 store 를 인자로 받게 되면서
-# startup 싱글턴과의 충돌이 풀렸다 (plan_log/backend.md 3회차).
+# startup 싱글턴과의 충돌이 풀렸다 (.claude/wiki/plan_log/backend.md 3회차).
 # 파일을 고르는 즉시 보내므로 트리거가 change 이고, 별도 전송 버튼이 없다
 def test_upload_posts_to_index_endpoint(client: TestClient):
     body = client.get("/").text
@@ -83,16 +83,26 @@ def test_history_is_placeholder(client: TestClient):
     assert "저장은 아직 준비 중입니다" in body
 
 
-# 재검색 표시는 화면에 있되 아무것도 판정하지 않는다 — Phase 4~5 가 붙을 자리다.
-# **유사질문 배지는 여기서 빠졌다** — 답변 캐시가 실제로 붙어 placeholder 가 아니게 됐다
-def test_rewrite_row_still_placeholder_in_answer_fragment():
+# 재검색 표시가 **실물이 됐다**(2026-08-27). 유사질문 배지·판정 배지가 걸어간 길과 같다 —
+# 붙기 전에는 모양만 있었고, 붙은 뒤에는 값이 있을 때만 그린다.
+#
+# **여기서 재는 것은 «가짜가 안 남았는가» 다.** 모형 문구가 실물 옆에 남으면 재작성에 관한
+# 줄이 둘이 되고 그중 하나가 매 답변에 거짓을 그린다 — 그리고 흐린 줄이라 아무도 안 읽는다
+def test_rewrite_row_is_real_not_a_placeholder():
     from backend.app.core.templates import TEMPLATES_DIR
 
     fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
 
-    assert "재검색 중" in fragment
-    # 흐리게 + 클릭 불가로 표시해야 진짜 기능으로 오인되지 않는다
-    assert "is-placeholder" in fragment
+    # 모형이 그리던 가짜 진행 표시. 남아 있으면 안 된다
+    assert "재검색 중 (1 / 3)" not in fragment
+    assert "준비 중인 기능입니다" not in fragment
+    # 값이 있을 때만 그린다 — 조건 없이 그리면 재작성이 꺼져 있어도 줄이 남는다
+    assert "{% if answer.rewrite %}" in fragment
+    row = fragment.split("{% if answer.rewrite %}", 1)[1].split("{% endif %}", 1)[0]
+    assert "is-placeholder" not in row
+    # **mode 로 문구가 갈려야 한다** — fuse 는 원 질의도 함께 돌았다
+    assert "도 함께 검색했습니다" in row
+    assert "로 바꿔 검색했습니다" in row
 
 
 # 캐시 배지는 **cached_from 이 있을 때만** 그린다. 조건 없이 그리면 캐시가 꺼져 있어도
@@ -168,22 +178,24 @@ def test_upload_form_targets_the_error_slot(client: TestClient):
     assert 'hx-swap="innerHTML"' in body
 
 
-# **reset 비대칭은 의도다** — 업로드 폼은 조건 없이, composer 는 successful 일 때만 비운다.
-# file input 을 안 비우면 같은 파일을 다시 골라도 change 가 안 떠서 재시도도 재색인도 막히고,
-# 질문 글자는 실패 때 남아야 한다. '일관성' 을 이유로 한쪽에 맞추면 조용히 망가진다
-def test_upload_resets_unconditionally_but_composer_does_not():
+# **비대칭은 여전히 의도다** — 업로드 폼은 조건 없이 비우고, composer 는 실패했을 때 질문
+# 글자를 **되돌려 놓는다.** file input 을 안 비우면 같은 파일을 다시 골라도 change 가 안 떠서
+# 재시도도 재색인도 막히고, 질문 글자는 실패 때 남아야 한다.
+#
+# **composer 쪽은 속성에서 스크립트로 옮겨갔다** — 입력 예약이 생기면서 상태 기계가 한 곳에
+# 있어야 했다. 그래서 재는 것도 문자열이 아니라 규칙이다: 보낼 때 비우고 실패하면 되돌린다
+def test_upload_resets_unconditionally_but_composer_restores_on_failure():
     from backend.app.core.templates import TEMPLATES_DIR
 
     chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
     upload_form = chat.split('<form id="upload-form"')[1].split("</form>")[0]
-    composer = chat.split('<form class="composer"')[1].split("</form>")[0]
+    composer_js = chat.split('<script id="composer-js">')[1].split("</script>")[0]
 
     # reset 이 **조건 밖**에 있어야 한다 — 핸들러 맨 앞이라는 것이 그 증거다
     assert 'hx-on::after-request="this.reset();' in upload_form
-    assert "if(event.detail.successful) this.reset();" in composer
-    # composer 는 반대로 reset 이 조건 **안**에 있다
-    reset_at = composer.index("this.reset()")
-    assert "successful" in composer[:reset_at]
+    # composer 는 보낼 때 비우고, 실패했을 때만 되돌린다
+    assert "input.value = '';" in composer_js
+    assert "if (!event.detail.successful) input.value = sent;" in composer_js
 
 
 # **성공했을 때 오류 자리를 손으로 비운다.** htmx 는 204 에 swap 을 아예 안 하므로
@@ -210,7 +222,7 @@ def test_vendored_htmx_never_swaps_on_204():
 
 
 # htmx 는 4xx/5xx 를 기본적으로 swap 하지 않는다 — 이 리스너가 그것을 뒤집는다.
-# 없으면 서버가 오류 조각을 보내도 화면에는 아무것도 안 뜬다 (main.py · plan_log/backend.md 5회차)
+# 없으면 서버가 오류 조각을 보내도 화면에는 아무것도 안 뜬다 (main.py · .claude/wiki/plan_log/backend.md 5회차)
 def test_error_swap_listener_present(client: TestClient):
     body = client.get("/").text
 
@@ -248,7 +260,9 @@ def test_indexing_phase_shows_time_not_a_fake_percentage():
 
     chat = (TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8")
     script = chat.split('<script id="upload-progress-js">')[1].split("</script>")[0]
-    indexing = script.split("function enterIndexing()")[1].split("function stop()")[0]
+    # 자르는 앵커를 `function stop(` 까지만 잡는다 — 인자까지 묶으면 시그니처가 바뀌는 순간
+    # 잔여 전체가 구간으로 들어와 **이 가드가 엉뚱한 데서 터진다**(실제로 한 번 그랬다)
+    indexing = script.split("function enterIndexing()")[1].split("function stop(")[0]
     tick = script.split("function tick()")[1].split("}")[0]
 
     # 무한 애니메이션으로 넘어가고, **퍼센트를 계산하지 않는다**.
@@ -257,11 +271,12 @@ def test_indexing_phase_shows_time_not_a_fake_percentage():
     assert "Math.round" not in indexing
     assert "d.total" not in indexing
 
-    # 라벨에 들어가는 것은 퍼센트가 아니라 경과 시간이다
+    # 라벨에 들어가는 것은 퍼센트가 아니라 경과 시간이다.
+    # **문구를 만드는 곳은 여기가 아니다** — 답변 생성 표시와 같은 것을 쓴다 (#elapsed-js)
     assert "%" not in tick
-    assert "elapsed()" in tick
+    assert "window.formatElapsed(startedAt)" in tick
     assert "색인하는 중…" in tick
-    assert "'초'" in script
+    assert "'초'" in chat.split('<script id="elapsed-js">')[1].split("</script>")[0]
 
 
 # 업로드 구간은 반대로 **실제 수치**여야 한다. lengthComputable 을 안 보면
@@ -276,11 +291,104 @@ def test_upload_phase_uses_real_bytes():
     assert "d.loaded / d.total" in script
 
 
-# 답변 말풍선 쪽은 여전히 .pending 규약이다 — 진행 바는 업로드에서만 벗어난다
-def test_query_side_still_uses_pending(client: TestClient):
+# **답변 생성 표시는 질문마다 #messages 안에서 태어난다.**
+#
+# 한때 입력줄 아래의 `#pending` 한 줄이었는데 **한 번도 뜬 적이 없다** — htmx 는 hx-indicator 가
+# 없으면 htmx-request 를 요청을 낸 엘리먼트 자신에 붙이는데 그 줄은 form 의 형제였다. 그리고
+# 그것을 잠갔다고 믿은 테스트는 **그 문자열이 응답에 있는지만** 쟀다(같은 함정이 6회차에도 있었다).
+# 그래서 여기서는 문자열이 아니라 **자리와 동작**을 잠근다 — 죽은 규약이 되살아나지 않는 것까지
+def test_generating_note_is_born_inside_messages(client: TestClient):
     body = client.get("/").text
 
-    assert 'class="pending htmx-indicator" id="pending"' in body
+    # 뜬 적 없는 규약이 되살아나면 안 된다
+    assert 'id="pending"' not in body
+    assert "htmx-indicator" not in body
+
+    js = body.split('<script id="composer-js">')[1].split("</script>")[0]
+    assert "bubble assistant generating" in js
+    assert "messages.appendChild" in js
+    assert "답변을 만드는 중…" in js
+
+
+# **전송 중에 입력칸을 안 잠근다.** hx-disabled-elt 가 켜던 CSS 가 커서를 not-allowed 로 바꾸고
+# 캐럿을 없앴는데, 그것이 3~6초 구간의 유일한 피드백이었다. 연타 방지는 예약 상태 기계가 맡는다
+def test_composer_does_not_disable_input_while_sending(client: TestClient):
+    body = client.get("/").text
+    composer = body.split('<form class="composer"')[1].split("</form>")[0]
+
+    assert "hx-disabled-elt" not in composer
+    # htmx 자체 큐(queue last)는 값이 아니라 "폼을 다시 읽어라" 를 담아 빈 질문을 낸다
+    assert 'hx-sync="this:drop"' in composer
+
+
+# 예약 상태에서 잠기는 자리가 하나 남는데, **거기서도 커서 모양이 바뀌면 안 된다.**
+# 브라우저는 disabled 입력에 화살표를 주므로 cursor 를 명시해야 없앤 것이 안 되살아난다
+def test_stylesheet_never_swaps_the_cursor(client: TestClient):
+    css = client.get("/static/app.css").text
+
+    assert "cursor: not-allowed;" not in css
+    assert ".composer input:disabled { opacity: .5; cursor: text; }" in css
+
+
+# **상태등은 「문서」 제목 줄에 있다** — 사이드바 맨 위가 제일 먼저 읽히는 자리이고, 등이
+# 답하는 물음(«서버가 도는가»)은 문서 목록보다 앞선다. 한때 사이드바 바닥에 뒀는데 사용자가
+# 위로 올려 달라고 했다(2026-08-28)
+def test_server_status_polls_in_the_document_panel_head(client: TestClient):
+    body = client.get("/").text
+
+    # 제목 줄 안이다 — 업로드 버튼보다 앞이고, 사이드바 바닥(doc-count)보다 훨씬 앞이다
+    assert (
+        body.index('<div class="panel-head">')
+        < body.index('id="server-status"')
+        < body.index('<form id="upload-form"')
+        < body.index('id="doc-count"')
+    )
+    tag = body.split('<div id="server-status"')[1].split(">")[0]
+    assert 'hx-get="/api/v1/status"' in tag
+    assert "every 10s" in tag
+
+
+# **입력칸을 비우는 자리는 submit 이 아니라 `htmx:beforeRequest` 다.**
+#
+# htmx 는 [폼 값 수집 → configRequest → **검증** → beforeRequest → 전송] 순으로 돌고
+# (`htmx.min.js` 의 `b=C.errors; if(b&&b.length>0){... "htmx:validation:halted" ...; return}`),
+# 이 스크립트의 submit 리스너는 htmx 것보다 **먼저** 등록된다(`htmx.min.js` 가 defer 라
+# 나중에 process 한다). 그래서 submit 에서 비우면 htmx 가 **빈 질문을 읽고** `required` 검증에
+# 걸려 **요청이 아예 안 나가는데, 화면에는 「만드는 중」만 영원히 남고 에러가 없다.**
+# 2026-08-28 에 실제로 그렇게 만들었고 사용자가 «답변을 안 준다» 로 물고 왔다.
+#
+# **브라우저가 없어 동작으로는 못 잰다.** 대신 비우는 코드가 **어느 리스너 안에 있는지**를
+# 잠근다 — 이 회귀가 나려면 그 줄이 submit 으로 돌아가야 한다
+def test_input_is_cleared_only_after_htmx_read_the_form(client: TestClient):
+    js = client.get("/").text.split('<script id="composer-js">')[1].split("</script>")[0]
+    submit_body = js.split("form.addEventListener('submit'")[1].split("});")[0]
+    before_request = js.split("'htmx:beforeRequest'")[1].split("});")[0]
+
+    assert "input.value = ''" not in submit_body
+    assert "input.value = ''" in before_request
+    # 말풍선도 같은 이유로 beforeRequest 다 — 검증에 걸린 요청에는 아예 안 그려야 한다
+    assert "bubble user" in before_request
+    # submit 이 하는 일은 예약 하나뿐이고, htmx 리스너가 **뒤에** 붙어 있어 여기서 끊어야 한다
+    assert "reserve(text)" in submit_body
+    assert "stopImmediatePropagation" in submit_body
+
+
+# **예약된 질의는 `afterRequest` 콜스택 밖에서 보내야 한다.**
+#
+# htmx 는 `htmx:afterRequest` 를 **먼저** 쏘고 그 다음에 in-flight 잠금을 푼다
+# (`htmx.min.js` 의 `m = function(){u.xhr=null; ...}` 가 `onload` 끝에서 불린다). 그래서 그
+# 핸들러 안에서 곧바로 `requestSubmit()` 하면 아직 «도는 중» 이라 `hx-sync="this:drop"` 이
+# 예약된 질의를 **조용히 떨군다** — 예약도 스탑도 되는데 **자동 발사만 안 되고 에러가 없다.**
+# 2026-08-28 에 사용자가 그 상태를 물고 왔다.
+#
+# 브라우저가 없어 동작으로는 못 잰다. 대신 **발사가 콜스택 밖으로 미뤄졌는지**를 잠근다
+def test_reserved_query_is_dispatched_outside_the_htmx_callstack(client: TestClient):
+    js = client.get("/").text.split('<script id="composer-js">')[1].split("</script>")[0]
+
+    # 보내는 자리가 하나이고 그 하나가 미뤄져 있어야 한다 — 미루지 않은 맨 호출이
+    # 하나라도 남아 있으면 그것이 곧 이 회귀다
+    assert js.count("form.requestSubmit()") == 1
+    assert "setTimeout(function () { form.requestSubmit(); }, 0)" in js
 
 
 # 문서 이름이 곧 원문 링크다. **urlencode 가 빠지면** 한국어·공백·`#` 이 든 파일명에서
@@ -342,3 +450,24 @@ def test_sidebar_shows_originals_size():
 
     assert "originals_mb" in fragment
     assert "MB" in fragment
+
+
+# 인용 줄도 **값이 있을 때만** 그린다 — 배지 셋이 이미 쓰는 규칙이다. 조건 없이 그리면
+# 맞게 인용한 답변에도 줄이 남아, 사용자가 «늘 뜨는 것» 으로 읽고 그때부터 안 읽는다.
+#
+# **문구가 problem 에서 갈려야 한다**: 인용이 아예 없는데 «없는 근거를 가리킵니다» 는
+# 거짓이고, 범위 밖인데 «출처 표시가 없습니다» 도 거짓이다 — rewrite 줄이 mode 로
+# 갈리는 것과 같은 자리다
+def test_citation_row_is_conditional_and_branches_on_problem():
+    from backend.app.core.templates import TEMPLATES_DIR
+
+    fragment = (TEMPLATES_DIR / "_answer.html").read_text(encoding="utf-8")
+
+    assert "{% if answer.citation %}" in fragment
+    row = fragment.split("{% if answer.citation %}", 1)[1].split("</div>", 1)[0]
+    assert "is-placeholder" not in row
+    assert "없는 근거를 가리킵니다" in row
+    assert "출처 표시가 없습니다" in row
+    # **danger 를 안 쓴다** — 거짓 경고가 날 수 있어(generation/citations.py) 빨강으로
+    # 말하면 멀쩡한 답변이 고장 난 것으로 읽힌다
+    assert "error" not in row

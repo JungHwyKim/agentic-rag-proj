@@ -25,7 +25,7 @@
 ## 왜 거리 척도가 설정이 아닌가
 
 **Dot 으로 고정한다.** 유료 호출로 벡터가 단위 길이임을 확인했다(0.9998~1.0005,
-`dimensions=256` 축소본도 0.9999 — plan_log/embedding.md). 단위 벡터에서는 Cosine 과 Dot 이
+`dimensions=256` 축소본도 0.9999 — .claude/wiki/plan_log/embedding.md). 단위 벡터에서는 Cosine 과 Dot 이
 같은 순위를 주고 Dot 이 더 싸며 재정규화도 필요 없다. 두 값 중 하나만 쓸 설정은
 `embedding.provider` 와 같은 죽은 설정이 된다. 정규화하지 않는 로컬 모델이 붙는 날 함께 더한다.
 
@@ -334,7 +334,7 @@ class QdrantStore:
     # 색인된 문서 목록. 문서당 (document_id, source_name, chunk_count) 하나로 접는다.
     #
     # **Protocol(base.py)에는 안 올린다.** 저장소 중립을 지키는 쪽이 그것이고, 두 번째
-    # 구현체가 실재할 때 올린다 (plan_log/검색-생성.md 의 "새 추상화를 안 만든다"와 같은 잣대).
+    # 구현체가 실재할 때 올린다 (.claude/wiki/plan_log/검색-생성.md 의 "새 추상화를 안 만든다"와 같은 잣대).
     # 그래서 이 메서드는 backend 가 QdrantStore 를 구체 타입으로 아는 유일한 자리다.
     #
     # **컬렉션이 없으면 search() 와 달리 빈 리스트다.** 저쪽은 "색인한 적 없음"과 "질의가 안

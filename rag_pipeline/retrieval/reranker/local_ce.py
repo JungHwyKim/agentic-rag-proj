@@ -7,7 +7,7 @@
 스위치라 유료든 무료든 기본 테스트가 안 깨진다), *"torch 를 안 들인다"* 는 임베더가 로컬로
 가며 `torch`·`sentence-transformers` 가 본체 의존성이 되어 지워졌다. 그래서 순서가 뒤집혀
 OpenAI 가 먼저 붙고 이쪽이 뒤에 왔다 — **둘 다 만들어 같은 세트로 견주는 것**이 결론이다
-(1회차가 세운 비교 축 6번, `plan_log/검색-생성.md` 5회차).
+(1회차가 세운 비교 축 6번, `.claude/wiki/plan_log/검색-생성.md` 5회차).
 
 ## 비용의 축이 다르다
 
@@ -50,11 +50,11 @@ from rag_pipeline.retrieval.reranker.base import (
 from rag_pipeline.runtime import apply_torch_threads
 from rag_pipeline.schemas.retrieval import RetrievedChunk
 
-__all__ = ["LocalCrossEncoderReranker"]
+__all__ = ["SCORING_VERSION", "LocalCrossEncoderReranker"]
 
-# 채점 규약이 바뀌면 올린다. OpenAI 갈래의 `_PROMPT_VERSION` 과 같은 자리다 —
+# 채점 규약이 바뀌면 올린다. OpenAI 갈래의 `PROMPT_VERSION` 과 같은 자리다 —
 # 캐시가 옛 점수를 새 규약의 답인 척 돌려주는 것을 막는다
-_SCORING_VERSION = "v1"
+SCORING_VERSION = "v1"
 
 
 # cross-encoder 를 올린다. 실패하면 None.
@@ -99,10 +99,16 @@ class LocalCrossEncoderReranker:
     def usage(self) -> RerankUsage:
         return self._usage
 
+    # **여기만 True 다.** 첫 질의가 무는 가중치 적재 6.2초를 기동으로 옮기는 것이
+    # 워밍업의 값어치이고(.claude/wiki/verify_log/2026-08-26-첫질의-대표값.md), 그것이 있는 갈래는 이것뿐이다
+    @property
+    def needs_warmup(self) -> bool:
+        return True
+
     # 캐시 salt. 규칙은 base 가 정한다
     @property
     def _salt(self) -> str:
-        return rerank_cache_salt_for(self._config, prompt_version=_SCORING_VERSION)
+        return rerank_cache_salt_for(self._config, prompt_version=SCORING_VERSION)
 
     # 후보를 점수 순으로. **예외를 안 던진다** — 실패는 RRF 순서로 내려가는 폴백이다
     def rerank(self, query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:

@@ -20,7 +20,7 @@
 
 `QdrantStore.list_documents()` 는 **일부러 여기 안 올렸다**(그쪽 메서드 주석에 이유가 있다) —
 소비자인 backend 는 구체 타입을 알아도 되기 때문이다. 열거는 다르다. 소비자가 retriever 이고,
-*"retriever 는 `VectorStore` Protocol 만 받는다"* 가 `plan_log/검색-생성.md` 1회차 확정이다.
+*"retriever 는 `VectorStore` Protocol 만 받는다"* 가 `.claude/wiki/plan_log/검색-생성.md` 1회차 확정이다.
 BM25 인덱스를 지으려면 저장된 청크를 전부 읽어야 하는데, Protocol 에 없으면 retriever 가
 `QdrantStore` 를 구상 타입으로 잡아 그 확정이 곧바로 깨진다.
 

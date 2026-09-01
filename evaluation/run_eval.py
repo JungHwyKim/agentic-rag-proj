@@ -5,13 +5,13 @@
 - `--check` — 세트가 성립하는지만 본다. 레코드 형식 + 모든 정답 span 이 그룹의 모든 포맷에서,
   그리고 청크 하나 안에서 발견되는지. 파싱만 하므로 **키가 필요 없다**
 - `--dense` — dense 검색 baseline 을 잰다. 문서를 색인하고 질의를 임베딩하므로 **OpenAI 과금이
-  일어난다.** 이것이 이후 모든 비교의 기준선이다(`plan_log/평가-세트.md` 2회차)
+  일어난다.** 이것이 이후 모든 비교의 기준선이다(`.claude/wiki/plan_log/평가-세트.md` 2회차)
 
 **`--dense` 는 pytest 가 아니라 스크립트라 `paid_test_check.py` 가 안 막는다.** 사람이 승인한다.
 
 ## 왜 포맷마다 저장 경로를 가르나
 
-포맷 비교(`plan_log/검색-생성.md` 비교 5번)는 "같은 질의를 HWPX 판만 색인했을 때와 PDF 판만
+포맷 비교(`.claude/wiki/plan_log/검색-생성.md` 비교 5번)는 "같은 질의를 HWPX 판만 색인했을 때와 PDF 판만
 색인했을 때" 를 견주는 것이다. 한 컬렉션에 둘 다 넣으면 같은 내용의 청크가 **서로 경쟁**해서
 비교가 성립하지 않는다. 그래서 `--format` 으로 고른 판만 색인하고 저장 경로에 그 이름을 붙인다.
 
@@ -42,7 +42,7 @@ qdrant 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어 **서버�
 ## 왜 적재 카운터를 함께 남기나
 
 `image_handler="hybrid"` 는 Vision 을 부르고 **Vision 응답은 실행마다 다르다**(실측:
-`plan_log/표-경로.md` 12회차). 캐시가 얼려 주지만 캐시를 잃으면 산출이 움직인다. 그때
+`.claude/wiki/plan_log/표-경로.md` 12회차). 캐시가 얼려 주지만 캐시를 잃으면 산출이 움직인다. 그때
 `vision_calls`·`ocr_applied`·`warnings` 가 없으면 **검색이 변한 것인지 적재가 변한 것인지**
 가릴 수 없다. 막지는 못하고 보이게만 한다.
 
@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,9 @@ from typing import Any
 from evaluation.config import (
     DEFAULT_EMBEDDING_PROFILE,
     DEFAULT_RERANK_PROFILE,
+    DEFAULT_REWRITE_PROFILE,
     EVAL_RERANKERS,
+    EVAL_REWRITERS,
     EVAL_SETTINGS,
     embedding_profile,
     eval_config,
@@ -157,13 +160,14 @@ def run_dense(
     groups: list[str] | None = None,
     use_bm25: bool = False,
     rerank: str = DEFAULT_RERANK_PROFILE,
+    rewrite: str = DEFAULT_REWRITE_PROFILE,
     qa_path: Path | None = None,
     embedding: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> dict[str, Any]:
     from rag_pipeline.ingestion.embedding import get_embedder
     from rag_pipeline.ingestion.indexing import get_store
     from rag_pipeline.ingestion.pipeline import index_document
-    from rag_pipeline.retrieval import build_bm25_index, get_reranker, retrieve
+    from rag_pipeline.retrieval import build_bm25_index, get_reranker, get_rewriter, retrieve
 
     qa = load_qa_set(qa_path)
     if not qa.items:
@@ -172,7 +176,10 @@ def run_dense(
     # **개발자 `.env` 가 아니라 고정 설정이다** (evaluation/config.py).
     # 실행마다 저장 경로를 가르는 것은 배타 잠금 때문이다 (모듈 docstring 참고)
     config = eval_config(
-        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}", embedding=embedding, rerank=rerank
+        qdrant_path=RESULTS_DIR / f"qdrant-{label}-{fmt}",
+        embedding=embedding,
+        rerank=rerank,
+        rewrite=rewrite,
     )
 
     wanted = sorted({item.source_doc for item in qa.items} & set(groups or DOCUMENT_GROUPS))
@@ -217,6 +224,11 @@ def run_dense(
     # 그 비용을 60번 낸다. `--rerank` 를 안 주면 프로필이 `off` 라 None 이고, 그때 결과는
     # 리랭커 이전과 글자 그대로 같아야 한다 (hybrid.py 가 그 동등성을 계약으로 박아 뒀다)
     reranker = get_reranker(config.rerank)
+    # **재작성기도 루프 밖에서 한 번 만든다.** 올릴 가중치는 없지만 `usage` 가 인스턴스에
+    # 쌓이므로, 안에서 지으면 질의마다 새 카운터가 생겨 리포트의 호출 수가 0 이 된다 —
+    # 그러면 «성공 횟수 == 질의 수» 검사가 통째로 못 돈다. `--rewrite` 를 안 주면 프로필이
+    # `off` 라 None 이고, 그때 결과는 재작성 이전과 글자 그대로 같아야 한다
+    rewriter = get_rewriter(config.rewrite)
     # k 축마다 QueryScore 목록. **검색은 한 번이고 채점만 여러 번이다**
     by_axis: dict[int, list[QueryScore]] = {axis: [] for axis in axes}
     try:
@@ -230,6 +242,7 @@ def run_dense(
                 top_k=k,
                 bm25=bm25,
                 reranker=reranker,
+                rewriter=rewriter,
                 config=config.retrieval,
             )
             texts = [hit.text for hit in hits]
@@ -263,10 +276,17 @@ def run_dense(
         # **리랭커 프로필도 같은 이유로 갈아 끼운다** — `EVAL_SETTINGS["rerank"]` 는 기본
         # 프로필(=꺼짐)이라, 그대로 실으면 리랭커를 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
         "rerank_profile": rerank,
+        # **재작성 프로필도 같은 이유로 싣는다** — 라벨만으로는 나중에 fuse 와 replace 를
+        # 못 가른다. 그리고 상한 프로브(102위 → 2위)와 견줄 수 있는 것은 `replace` 뿐이라
+        # 어느 쪽이었는지가 그 비교의 성립 조건이다
+        "rewrite_profile": rewrite,
         "settings": {
             **EVAL_SETTINGS,
             "embedding": embedding_profile(embedding),
             "rerank": EVAL_RERANKERS[rerank],
+            # **`EVAL_SETTINGS["rewrite"]` 를 그대로 실으면 안 된다** — 그것은 기본
+            # 프로필(=꺼짐)이라, 재작성을 켜고 돌린 실행이 *"안 켰다"* 로 기록된다
+            "rewrite": EVAL_REWRITERS[rewrite],
         },
         # **어느 갈래로 쟀는지가 리포트에 남아야 한다** — 파일명(label)만으로는 나중에
         # dense 와 hybrid 를 못 가른다. 경고를 함께 싣는 이유는 BM25 실패가 예외가 아니라
@@ -280,6 +300,11 @@ def run_dense(
             # 리포트에서 구분이 안 된다. 비교표의 한 칸이 통째로 거짓이 되는 자리다
             "rerank": rerank,
             "rerank_warnings": list(reranker.warnings) if reranker is not None else [],
+            # **재작성 경고도 같은 이유로 싣는다** — 실패가 예외가 아니라 1차 pool 을 그대로
+            # 쓰는 폴백이라, 안 남기면 *"재작성이 값을 못 했다"* 와 *"재작성이 안 돌았다"* 가
+            # 리포트에서 구분이 안 된다
+            "rewrite": rewrite,
+            "rewrite_warnings": list(rewriter.warnings) if rewriter is not None else [],
         },
         "indexed": indexed,
         # **리랭커 비용을 임베딩과 갈라 싣는다** — 유료 갈래는 토큰이, 로컬 갈래는 채점한
@@ -291,6 +316,12 @@ def run_dense(
             "rerank_tokens": reranker.usage.total_tokens if reranker is not None else 0,
             "rerank_cache_hits": reranker.usage.cache_hits if reranker is not None else 0,
             "reranked": reranker.usage.reranked if reranker is not None else 0,
+            # **재작성 비용도 갈라 싣는다.** 유료 갈래를 켠 실행은 지표를 읽기 **전에**
+            # `rewrite_calls + rewrite_cache_hits == 질의 수` 를 확인한다 — Cohere 1차 실행이
+            # 한도 초과 30건을 품질 저하로 읽히게 했던 자리와 같은 사고의 입구다(CLAUDE.md)
+            "rewrite_calls": rewriter.usage.api_calls if rewriter is not None else 0,
+            "rewrite_tokens": rewriter.usage.total_tokens if rewriter is not None else 0,
+            "rewrite_cache_hits": rewriter.usage.cache_hits if rewriter is not None else 0,
         },
         "summary": summarize(by_axis[report_k], report_k),
         "by_k": {str(axis): summarize(by_axis[axis], axis) for axis in axes},
@@ -318,7 +349,7 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         "설정": "settings 블록이 그 실행의 고정 설정이다 (evaluation/config.py).",
         "갱신 규칙": (
             "수치가 달라졌을 때 자동으로 덮어쓰지 않는다. --save-baseline 없이 돌리면 질의별 "
-            "승·패·무가 나오므로 그것을 읽고, 의도한 변화일 때만 갱신하며 근거를 task_log/ 에 남긴다."
+            "승·패·무가 나오므로 그것을 읽고, 의도한 변화일 때만 갱신하며 근거를 .claude/wiki/task_log/ 에 남긴다."
         ),
         "주의": (
             "입력 파일은 tests/fixtures/ 에 있고 gitignore 다 — 파일이 없는 환경에서는 재현할 수 "
@@ -336,6 +367,8 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
         "format",
         "embedding_profile",
         "rerank_profile",
+        # 같은 이유로 함께 담는다 — 빼면 기준선 파일만 보고 재작성을 켠 실행인지 못 가른다
+        "rewrite_profile",
         "retriever",
         "groups",
         "k",
@@ -454,6 +487,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--rewrite",
+        default=DEFAULT_REWRITE_PROFILE,
+        choices=sorted(EVAL_REWRITERS),
+        help=(
+            "질의 재작성 프로필 이름 (evaluation/config.py 의 EVAL_REWRITERS). "
+            "기본은 off 라 지금까지와 같은 실행이다. **켜면 질의당 LLM 1회가 더 붙는다**"
+        ),
+    )
+    parser.add_argument(
         "--qa-set",
         type=Path,
         help="쓸 세트 파일. 비우면 qa_set.jsonl. **기준선 대조는 기본 세트에서만 뜻이 있다**",
@@ -466,11 +508,22 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 이 실행이 쓴 돈에 이름을 붙인다. **`setdefault` 라 사람이 준 `COST_LABEL` 이 이긴다** —
+    # 한 라벨 아래 여러 회차를 묶고 싶을 때가 있고, 그때 러너가 덮으면 그 묶음이 깨진다.
+    # 라벨을 리포트 JSON 과 **같은 값**으로 두는 것이 요점이다: `cost/report.py --label` 이
+    # 그 회차의 비용을, `evaluation/results/<label>-<fmt>.json` 이 그 회차의 지표를 낸다
+    os.environ.setdefault("COST_LABEL", args.label)
+
     # **`--rerank` 를 `--dense` 없이 주면 멈춘다.** 아래 갈래가 세트 검증만 돌고 `통과` 를
     # 찍는데, 리랭커를 켰다고 믿은 사람은 그것을 성공으로 읽는다. `--hybrid` 에 같은 함정이
     # 있어 다른 세션이 실제로 한 번 헛돌았다 — 그 가드를 되살릴 때 모양을 맞추기로 했다
     if args.rerank != DEFAULT_RERANK_PROFILE and not args.dense:
         raise SystemExit("--rerank 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
+
+    # **`--rewrite` 도 같은 가드를 탄다** — 켰다고 믿은 사람이 세트 검증의 `통과` 를 성공으로
+    # 읽는 것이 똑같고, 이쪽은 그 오해가 곧 *"재작성이 효과 없다"* 가 된다
+    if args.rewrite != DEFAULT_REWRITE_PROFILE and not args.dense:
+        raise SystemExit("--rewrite 는 --dense 와 함께 써야 합니다 (검색을 안 돌리면 잴 것이 없습니다)")
 
     if args.check or not args.dense:
         problems = check(refresh=args.refresh, qa_path=args.qa_set)
@@ -489,6 +542,7 @@ def main() -> int:
         groups=args.groups,
         use_bm25=args.hybrid,
         rerank=args.rerank,
+        rewrite=args.rewrite,
         qa_path=args.qa_set,
         embedding=args.embedding,
     )

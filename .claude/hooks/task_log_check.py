@@ -1,7 +1,7 @@
 """소스를 고친 세션이 작업 기록 없이 끝나는 것을 막는 Stop 훅.
 
 Claude 가 응답을 마치려 할 때 settings.json 의 Stop 훅이 이 스크립트를 부른다.
-`rag_pipeline/` 이나 `backend/` 의 파이썬 파일이 바뀌었는데 `task_log/` 에 아무
+`rag_pipeline/` 이나 `backend/` 의 파이썬 파일이 바뀌었는데 `.claude/wiki/task_log/` 에 아무
 변경이 없으면 종료코드 2 로 끝나 대화를 이어가게 만들고, stderr 로 남긴 사유가
 모델에게 전달돼 기록을 쓰게 한다.
 
@@ -11,15 +11,15 @@ CLAUDE.md 에 "기록을 남겨라"라고 적는 방법과 계층이 다르다. 
 그건 저장소에 안 남고 세션과 함께 사라지므로, 지시가 아니라 훅으로 못 박는다.
 
 **"기록했는가"는 git 이 아니라 세션 마커로 판정한다.** 처음에는 `git status` 에
-`task_log/` 경로가 하나라도 있으면 통과시켰는데, 그 판정은 **세션을 구분하지 못한다.**
+`.claude/wiki/task_log/` 경로가 하나라도 있으면 통과시켰는데, 그 판정은 **세션을 구분하지 못한다.**
 지난 세션이 남긴 미커밋 기록이 작업트리에 있으면 이번 세션이 한 줄도 안 써도 통과한다.
 커밋할 때까지 검사가 없는 것과 같아지고, 기록이 밀릴수록 검사가 더 헐거워진다는 점에서
-방향이 정반대였다. 실제로 `plan_log/` 쪽이 미커밋 3건이 쌓인 채 무력화돼 있는 것을
-2026-08-17 에 발견했다. 그래서 PostToolUse 로 `task_log/` 쓰기를 직접 잡는다 —
+방향이 정반대였다. 실제로 `.claude/wiki/plan_log/` 쪽이 미커밋 3건이 쌓인 채 무력화돼 있는 것을
+2026-08-17 에 발견했다. 그래서 PostToolUse 로 `.claude/wiki/task_log/` 쓰기를 직접 잡는다 —
 `plan_log_check.py` 가 Skill 호출을 잡는 것과 같은 수법이다.
 
 **그 마커만으로는 부족하다는 것이 2026-08-19 에 드러났다.** 마커는 PostToolUse 의
-`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있어, `task_log/` 를
+`tool_input.file_path` 로 만드는데 그 필드는 Write/Edit 에만 있어, `.claude/wiki/task_log/` 를
 Bash 로 쓴 세션은 기록을 다 남기고도 안 잡힌다. "기록은 Write/Edit 로 쓰라"는 지시로
 고칠 수 없는 것은 위 문단과 같은 이유다. 그래서 도구가 아니라 **파일이 실제로 바뀌었는가**를
 함께 본다(`_hookutil.wrote_under`). 비교 기준이 세션 시작 시각이라 git 판정이 못 갈랐던
@@ -79,8 +79,8 @@ SOURCE_PREFIXES = ("rag_pipeline/", "backend/", "evaluation/")
 HARNESS_PREFIX = (".claude/hooks/", "tests/hooks/")
 HARNESS_FILES = (".claude/settings.json",)
 
-# 기록이 남는 곳
-LOG_PREFIX = "task_log/"
+# 기록이 남는 곳. 폴더 이름은 그대로이고 뿌리만 `_hookutil.WIKI_ROOT` 가 준다
+LOG_PREFIX = _hookutil.WIKI_ROOT + "task_log/"
 
 # 세션당 한 번만 막기 위한 마커 이름
 MARKER_NS = "claude_task_log_seen"
@@ -100,9 +100,9 @@ def _reason(source_changes: list[str]) -> str:
         lines.append(f"  ... 외 {len(source_changes) - len(listed)}개")
 
     return (
-        "소스를 고쳤는데 task_log/ 에 기록이 없습니다.\n\n"
+        "소스를 고쳤는데 .claude/wiki/task_log/ 에 기록이 없습니다.\n\n"
         "변경된 파일:\n" + "\n".join(lines) + "\n\n"
-        "task-log 스킬로 task_log/<날짜>-<주제>.md 를 남기고 task_log/INDEX.md 에 "
+        "task-log 스킬로 .claude/wiki/task_log/<날짜>-<주제>.md 를 남기고 .claude/wiki/task_log/INDEX.md 에 "
         "한 줄 추가한 뒤 마치세요. 설계 결정에서 **버린 대안과 버린 이유**, 그리고 "
         "잘못 짚었다가 되돌린 시도가 제일 중요합니다.\n"
         "기록할 만한 작업이 아니면 SKIP_TASKLOG=1 로 건너뛸 수 있습니다.\n"
@@ -119,7 +119,7 @@ def is_recordable(path: str) -> bool:
     return path.startswith(SOURCE_PREFIXES) or path.startswith(HARNESS_PREFIX)
 
 
-# task_log/ 에 쓴 것을 이번 세션의 기록으로 표시한다
+# .claude/wiki/task_log/ 에 쓴 것을 이번 세션의 기록으로 표시한다
 def _handle_post_tool_use(payload: dict, session_id: str) -> None:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):

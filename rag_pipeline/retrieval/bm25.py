@@ -4,7 +4,7 @@
 
 qdrant 의 sparse 벡터로 얹으면 `VectorStore` Protocol 과 컬렉션 스키마를 고쳐야 하고,
 *"retriever 는 `VectorStore` Protocol 만 받는다"* 로 지킨 저장소 중립이 깨진다
-(`plan_log/검색-생성.md` 1회차). 다른 저장소에는 sparse 가 없을 수도 있다.
+(`.claude/wiki/plan_log/검색-생성.md` 1회차). 다른 저장소에는 sparse 가 없을 수도 있다.
 
 ## 왜 색인 시점이 아니라 질의 시점에 짓나
 

@@ -78,7 +78,7 @@ def test_size_filter_applies_to_every_mode(mode: str, tiny_image_file: Path) -> 
 # --- 쪽 위 표시 크기 필터 ---
 #
 # 저장 픽셀 자[尺]와 이 자[尺]는 서로를 대신하지 못한다. 아래 크기들은 실측에서 나온
-# 값이고, 근거는 plan_log/이미지-경로.md 2회차다.
+# 값이고, 근거는 .claude/wiki/plan_log/이미지-경로.md 2회차다.
 
 
 # 반복 장식 글리프. 저장 픽셀은 필터를 통과하지만 쪽 위에서는 13.6x15.2pt 다

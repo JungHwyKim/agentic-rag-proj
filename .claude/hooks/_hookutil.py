@@ -27,6 +27,16 @@ from pathlib import Path
 # .claude/hooks/_hookutil.py -> 프로젝트 루트
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# 기록 세 폴더(plan_log·task_log·verify_log)를 담은 위키의 뿌리.
+#
+# **한 자리에 두는 이유는 어긋나도 아무 에러가 안 나서다.** 두 기록 훅이 각자
+# `"plan_log/"` `"task_log/"` 를 들고 있었는데, 그 접두사가 실제 경로와 어긋나면
+# `rel.startswith()` 가 늘 False 를 돌려 **기록을 남긴 세션이 안 남긴 것으로 보인다** —
+# 검사가 죽는 게 아니라 반대로 늘 막는 쪽으로 고장 나고, 그러면 `SKIP_TASKLOG=1` 이
+# 습관이 되어 검사가 통째로 죽는다. `openwork/collect.py` 의 `WIKI_ROOT` 와 같은 잣대이고
+# (거기는 조용히 짧아지는 쪽으로 고장 난다), 양쪽을 `tests/hooks` 가 잠근다.
+WIKI_ROOT = ".claude/wiki/"
+
 GIT_TIMEOUT_SEC = 20
 
 
@@ -48,6 +58,28 @@ def read_payload() -> dict | None:
     except (json.JSONDecodeError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+# 자식 프로세스에 물릴 환경. **`PYTHONIOENCODING` 하나가 요점이다.**
+#
+# 부모는 `encoding="utf-8", errors="replace"` 로 받는데 Windows 자식은 파이프로 나갈 때
+# 로케일(cp949)로 내보낸다. 그래서 한국어 실패 사유·skip 사유가 대체문자로 바뀌어
+# **사유는 나오는데 못 읽는** 모양이 된다 — 실측(2026-08-29) pytest 실패 한 줄에 U+FFFD 52개,
+# 이 변수를 넣으면 0개다. 대신 `errors="replace"` 를 빼는 것은 답이 아니다: 호출부가 잡는
+# 예외가 TimeoutExpired·OSError 뿐이라 UnicodeDecodeError 로 훅이 죽는다. 둘 다 필요하다.
+#
+# **`openwork/collect.py`·`cost/__init__.py` 가 «부르는 쪽이 붙이는 규약» 을 기각한 것과
+# 어긋나지 않는다.** 저쪽은 *우리 CLI* 가 자기 출력을 스스로 못 박으라는 것이고, pytest·ruff 는
+# 우리 것이 아니라 자식 환경이 유일한 손잡이다.
+#
+# **`PYTHONUTF8=1` 은 안 쓴다** — 자식의 모든 파일 I/O 기본 인코딩까지 바꿔서, 훅이 돌린
+# pytest 와 사람이 손으로 돌린 pytest 가 다른 조건이 된다.
+#
+# **갈아끼우지 않고 복제한다** — `.venv` 를 찾는 PATH 를 잃으면 검사가 통째로 안 돈다
+def child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
 
 
 # git 이 보고하는 변경 경로 목록. 판단할 수 없으면 None
@@ -146,7 +178,7 @@ def is_marked(namespace: str, session_id: str) -> bool:
 # **이것이 필요한 이유는 "누가 썼는가"로 판정하면 구멍이 난다는 것이다.** 기록 훅들은
 # "이번 세션에 기록했는가"를 PostToolUse 의 `tool_input.file_path` 로만 봤는데, 그 필드는
 # Write/Edit 에만 있다. Bash 로 쓴 기록은 **아무리 잘 써도 안 보인다** — 2026-08-19 에
-# plan_log/ 를 python heredoc 으로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도
+# .claude/wiki/plan_log/ 를 python heredoc 으로 고친 세션이 회차·INDEX 를 다 남기고 커밋까지 하고도
 # 막혔다. 도구를 Write/Edit 로 쓰라고 지시해서 고칠 수는 없다. 모델에게 시키는 일은
 # 지켜질 때도 있고 아닐 때도 있다는 것이 이 장치 전체의 전제이기 때문이다.
 #

@@ -20,6 +20,11 @@
           },
           {
             "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/heredoc_write_check.py\"",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pre_commit_check.py\"",
             "timeout": 900,
             "statusMessage": "커밋 전 린트·빌드·테스트 실행 중..."

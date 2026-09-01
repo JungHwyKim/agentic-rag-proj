@@ -5,7 +5,7 @@
 리랭커는 **후보 집합을 안 바꾸고 순서만 바꾼다.** 그래서 `recall@후보수` 로 재면 차이가
 **정의상 0** 이고, `hit@10` 으로 재도 바닥이 좋으면 여지가 실제보다 작아 보인다. 바닥은
 `hit@1` 이고 천장은 `hit@후보수` 다 — 주지표는 `nDCG@5`·`precision@3`·`recall@5` 다
-(`evaluation/README.md`, `plan_log/검색-생성.md` 1·5회차).
+(`evaluation/README.md`, `.claude/wiki/plan_log/검색-생성.md` 1·5회차).
 
 ## 실패는 예외가 아니라 폴백이다 — 다만 전부 아니면 전무다
 
@@ -63,17 +63,31 @@ __all__ = [
 class RerankUsage:
     # 실제로 나간 외부 API 호출 수. **성공한 뒤에만** 오른다. 로컬은 늘 0 이다
     api_calls: int = 0
-    # 그 호출들이 쓴 토큰. 로컬은 0 이다
-    total_tokens: int = 0
+    # 그 호출들이 쓴 토큰. **입력과 출력을 가르는 것이 2026-08-29 의 변경이다** —
+    # 단가가 서로 달라 합계 하나로는 금액을 **원리적으로 못 낸다**. 로컬·Cohere 는 0 이다
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Cohere 의 과금 단위. **토큰이 아니라 검색 단위로 받는다**(`meta.billed_units`).
+    # 나머지 갈래는 늘 0 이고, 그 0 은 *"이 API 는 그 단위가 없다"* 는 뜻이다
+    search_units: int = 0
     # 캐시로 아낀 질의 수
     cache_hits: int = 0
     # 실제로 점수를 매긴 후보 수. **로컬의 비용은 토큰이 아니라 이것이다**(후보 수에 선형)
     reranked: int = 0
 
+    # 합계는 **파생이지 필드가 아니다.** 나란한 필드로 두면 두 번째 진실이 되어 조용히
+    # 어긋난다. 프로퍼티로 두면 `evaluation/run_eval.py` 의 `usage` 블록 같은 기존 독자가
+    # 한 줄도 안 바뀐다 — 쓰는 쪽만 `input_tokens += …` 로 옮긴다
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
     # 질의 하나를 끝내고 다음으로 넘어갈 때 부른다
     def reset(self) -> None:
         self.api_calls = 0
-        self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.search_units = 0
         self.cache_hits = 0
         self.reranked = 0
 
@@ -90,6 +104,18 @@ class Reranker(Protocol):
     # 지금까지 쌓인 비용
     @property
     def usage(self) -> RerankUsage: ...
+
+    # **기동 워밍업이 나를 불러서 얻는 것이 있나** — 답하는 것은 *올릴 가중치가 있는가* 다.
+    #
+    # `backend` 의 `warm_up()` 이 이것을 보고 부를지 정한다. **provider 이름으로 분기하지
+    # 않는 것이 요점이다** — 그러면 구현체가 늘 때마다 backend 를 따라 고쳐야 하고,
+    # 빠뜨려도 **아무 에러가 안 난다.** 판단은 자기를 아는 쪽이 갖는다.
+    #
+    # 네트워크 갈래가 `False` 인 것은 취향이 아니라 **과금**이다: 워밍업 입력이 `uuid4` 라
+    # 늘 캐시 미스인데(그래야 로컬 가중치가 실제로 올라온다) 올릴 가중치가 없는 갈래에서는
+    # 그 미스가 곧 기동마다 나가는 유료 호출 하나다. `--reload` 는 코드 고칠 때마다 재기동한다
+    @property
+    def needs_warmup(self) -> bool: ...
 
 
 # 캐시 키. **질의·후보 신원·모델·프롬프트가 전부 들어간다.**

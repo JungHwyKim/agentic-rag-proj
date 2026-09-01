@@ -137,3 +137,31 @@ def test_claim_session_returns_false_on_os_error(
 
     monkeypatch.setattr(os, "open", _boom)
     assert _hookutil.claim_session("ns", "session-1") is False
+
+
+# 자식 환경에 utf-8 을 못 박나. **갈아끼우지 않고 복제하는 것까지 함께 본다** —
+# PATH 를 잃으면 훅이 .venv 를 못 찾아 검사가 통째로 안 돈다
+def test_child_env_pins_utf8(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PYTHONIOENCODING", "cp949")
+
+    env = _hookutil.child_env()
+
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env.get("PATH") == os.environ.get("PATH")
+
+
+# 값이 박히는 것과 **실제로 왕복하는 것**은 다르다. 한국어가 그대로 돌아와야 한다.
+#
+# 부모 환경이 이미 utf-8 이면 두 갈래가 똑같이 통과해 테스트가 아무것도 안 잰다. 그래서
+# cp949 를 일부러 깔고 **안 박은 쪽이 깨지는 것까지** 단언한다 — 대조군 없이 성공만 재면
+# 이 테스트는 `child_env()` 가 빈 dict 를 돌려줘도 통과한다
+def test_child_env_makes_korean_readable(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PYTHONIOENCODING", "cp949")
+    code = "print('임계값이 분포의 틈에서 안 나온다')"
+    kwargs = {"capture_output": True, "encoding": "utf-8", "errors": "replace"}
+
+    without = subprocess.run([sys.executable, "-c", code], **kwargs)
+    pinned = subprocess.run([sys.executable, "-c", code], env=_hookutil.child_env(), **kwargs)
+
+    assert "�" in without.stdout
+    assert "임계값이 분포의 틈에서 안 나온다" in pinned.stdout

@@ -28,16 +28,18 @@ description: agentic-rag-proj(한국어 문서 RAG 적재 파이프라인)의 �
 
 | 변경된 경로 | 읽을 reference |
 |---|---|
-| (항상) | `references/contracts.md` |
-| `rag_pipeline/ingestion/loader/**` | `references/loader.md` |
-| `backend/**`, `rag_pipeline/exceptions.py` | `references/backend.md` |
-| `rag_pipeline/ingestion/cleaner/**` | `references/cleaner.md` |
-| `rag_pipeline/ingestion/splitter/**`, `rag_pipeline/schemas/chunk.py` | `references/splitter.md` |
-| `rag_pipeline/ingestion/embedding/**` | `references/embedding.md` |
-| `rag_pipeline/ingestion/indexing/**`, `rag_pipeline/schemas/vector.py` | `references/indexing.md` |
-| `rag_pipeline/answer_cache/**` | `references/indexing.md` (qdrant 컬렉션·잠금이 같은 축이다. 전용 reference 는 임계값이 정해질 때) |
-| `rag_pipeline/ingestion/retriever/**` | `references/next-stages.md` |
-| `rag_pipeline/schemas/document.py` | `references/contracts.md` (전 단계 공통 계약의 원본) |
+| (항상) | `.claude/wiki/knowledge/contracts.md` |
+| `rag_pipeline/ingestion/loader/**` | `.claude/wiki/knowledge/ingestion/loader.md` |
+| `backend/**`, `rag_pipeline/exceptions.py` | `.claude/wiki/knowledge/backend.md` |
+| `rag_pipeline/ingestion/cleaner/**` | `.claude/wiki/knowledge/ingestion/cleaner.md` |
+| `rag_pipeline/ingestion/splitter/**`, `rag_pipeline/schemas/chunk.py` | `.claude/wiki/knowledge/ingestion/splitter.md` |
+| `rag_pipeline/ingestion/embedding/**` | `.claude/wiki/knowledge/ingestion/embedding.md` |
+| `rag_pipeline/ingestion/indexing/**`, `rag_pipeline/schemas/vector.py` | `.claude/wiki/knowledge/ingestion/indexing.md` |
+| `rag_pipeline/answer_cache/**` | `.claude/wiki/knowledge/ingestion/indexing.md` (qdrant 컬렉션·잠금이 같은 축이다. 전용 reference 는 임계값이 정해질 때) + `.claude/wiki/knowledge/query/README.md` |
+| `rag_pipeline/retrieval/**` | `.claude/wiki/knowledge/query/retriever.md` |
+| `rag_pipeline/generation/**`, `rag_pipeline/agent/**` | `.claude/wiki/knowledge/query/generation.md` |
+| `rag_pipeline/query.py` | `.claude/wiki/knowledge/query/README.md` + 위 둘 |
+| `rag_pipeline/schemas/document.py` | `.claude/wiki/knowledge/contracts.md` (전 단계 공통 계약의 원본) |
 | `rag_pipeline/ingestion/pipeline.py` | `contracts.md` + 추가·변경된 단계의 reference |
 | `rag_pipeline/config.py` | `contracts.md` + 그 설정을 쓰는 영역의 reference |
 | `tests/**` | 그 테스트가 덮는 영역의 reference |
@@ -129,7 +131,8 @@ reference 에 "같이 읽어야 하는 곳" 표가 있다.
 ## 리뷰 후 — reference 제안
 
 reference 에 없던 **프로젝트 고유의 반복 유효한 함정·계약**을 발견했으면 리포트 맨 끝에
-`Reference 제안: 이 내용은 references/<파일명>.md 에 남길 만합니다` 한 줄을 적는다.
+`Reference 제안: 이 내용은 .claude/wiki/knowledge/ 아래 <파일명>.md 에 남길 만합니다`
+한 줄을 적는다.
 **reference 파일을 직접 고치지는 않는다.** 이 스킬은 읽기 전용이고, 반영은 별도 작업이다.
 
 ## 이 스킬의 범위
