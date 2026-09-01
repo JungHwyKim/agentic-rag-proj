@@ -36,6 +36,12 @@ Bash 도구의 heredoc 은 이 저장소에서 **파일을 쓰는 수단으로 �
 것처럼 막지 않는다. PowerShell 의 here-string 은 `git commit -m @'...'@` 처럼 파일과
 무관한 정상 용도가 있어(도구 설명이 권하는 형태다) 파일 쓰기일 때만 막는다.
 
+**그런데 그 문장이 2026-09-01 까지 거짓이었다.** 파일 쓰기 판정을 명령 **전체**에 대는 바람에
+here-string **본문 글자를 명령으로 읽어**, 바로 그 «정상 용도» 가 사실상 늘 막혔다. 자세한
+기전과 기각한 대안은 `powershell_reason()` 주석에 있다. **테스트는 내내 초록이었다** —
+`ALLOWED_PS` 의 커밋 케이스에 `>` 가 한 번도 안 나와, 의도는 맞는데 케이스가 실사용을
+안 닮았다. 그래서 지금은 **하네스가 요구하는 트레일러가 붙은 진짜 커밋 메시지**가 케이스에 있다.
+
 공통 규약은 다른 훅과 같다 — **판단이 서지 않으면 막지 않는다.** 훅 입력을 못 읽거나
 heredoc 의 끝 구분자를 못 찾으면 통과시킨다. 탈출구는 `SKIP_HEREDOC=1` 이다.
 
@@ -65,9 +71,6 @@ _FILE_REDIRECT_RE = re.compile(r">>?\s*(?!&)[^\s|&;<>]+")
 # 본문을 그대로 흘려보내는 명령. 이 둘일 때만 heredoc 본문이 곧 파일 내용이 된다
 _CAT_RE = re.compile(r"(?:^|\||&&|\|\||;)\s*(?:[\w./\\-]*[/\\])?cat\b")
 _TEE_RE = re.compile(r"(?:^|\||&&|\|\||;)\s*(?:[\w./\\-]*[/\\])?tee\b\s+(?:-a\s+)?[^\s|&;<>-]")
-
-# PowerShell here-string 을 여는 자리. 줄 끝에서 열려야 here-string 이다
-_PS_HERESTRING_RE = re.compile(r"@[\"']\s*(?:\r?\n|$)")
 
 # PowerShell 에서 그 문자열이 파일이 되는 자리
 _PS_FILE_WRITE_RE = re.compile(r"(?:Set-Content|Out-File|Add-Content|New-Item)\b", re.IGNORECASE)
@@ -138,11 +141,37 @@ def bash_reason(command: str) -> str | None:
     return None
 
 
-# PowerShell here-string 검사. 파일 쓰기일 때만 막는다 (docstring 의 비대칭 참고)
+# PowerShell here-string 본문. 여는 `@'`/`@"` 부터 **줄 첫머리의** `'@`/`"@` 까지다 —
+# 셸이 종료를 그렇게 판정한다. `(?:.*?\r?\n)?` 가 선택인 것은 본문이 빈 here-string
+# (`@'` 다음 줄이 바로 `'@`)도 닫힌 것으로 세기 위해서다. 안 그러면 `@'\n'@ > out.md` 가
+# «못 찾음» 으로 빠져 **진짜 파일 쓰기가 통과한다**
+_PS_HERESTRING_BODY_RE = re.compile(r"@(['\"])[ \t]*\r?\n(?:.*?\r?\n)?\1@", re.DOTALL)
+
+
+# PowerShell here-string 검사. 파일 쓰기일 때만 막는다 (docstring 의 비대칭 참고).
+#
+# **본문을 들어내고 그 밖만 본다.** 2026-09-01 전까지는 명령 **전체**에 정규식을 대서
+# **here-string 본문 글자를 명령으로 읽었다** — `Co-Authored-By: … <noreply@anthropic.com>`
+# 의 닫는 `>` 하나가 `>>?\s*(?!&)[^\s|&;<>]+` 에 걸려(`\s*` 가 줄바꿈을 먹고 종료 기호 `'@`
+# 가 대상 파일명 자리에 들어간다) **`git commit -m @'...'@` 가 사실상 늘 막혔다.** 그
+# 트레일러는 하네스가 모든 커밋에 요구하므로 우연이 아니라 상시였다. 증상은 `>` 하나가
+# 아니다 — 본문에 `Set-Content` 라는 낱말이 있어도, `cat > f.md` 라고 적어도 막혔다.
+# **이 훅을 설명하는 커밋 메시지가 이 훅에 막히는 모양이다.**
+#
+# **Bash 쪽은 처음부터 `opener_line` 에만 댔으므로**(`_writes_a_file()`) 이것은 새 규칙이
+# 아니라 **PowerShell 을 Bash 에 맞추는 것**이다. 실측(2026-09-01, 케이스 15) — 오탐 3 → 0,
+# 누락 0 유지. **「`>` 뒤에 경로꼴을 요구」안은 기각했다**: `'@` 를 거르려면 경로꼴에서
+# 따옴표를 빼야 하는데 그러면 `@'…'@ > "out file.md"` 같은 **진짜 파일 쓰기가 샌다**(누락 1).
+# 게다가 `_FILE_REDIRECT_RE` 는 Bash 와 공유라 그쪽까지 함께 움직인다.
+#
+# **끝 구분자를 못 찾으면 판단하지 않는다** — `_heredocs()` 가 닫힌 것만 모으는 것과 같은
+# 규약이고, 2026-09-01 전에는 여기만 어긋나 있었다(여는 자리만 봤다). 안 닫힌 here-string 은
+# 셸이 스스로 죽으므로 여기서 추측하면 오탐만 는다
 def powershell_reason(command: str) -> str | None:
-    if not _PS_HERESTRING_RE.search(command):
+    outside, closed = _PS_HERESTRING_BODY_RE.subn("@@", command)
+    if not closed:
         return None
-    if _PS_FILE_WRITE_RE.search(command) or _FILE_REDIRECT_RE.search(command):
+    if _PS_FILE_WRITE_RE.search(outside) or _FILE_REDIRECT_RE.search(outside):
         return (
             "here-string(`@'...'@`) 본문이 그대로 파일이 됩니다.\n"
             "Bash heredoc 과 같은 자리이고, 도구를 바꿔서 우회할 대상이 아닙니다."

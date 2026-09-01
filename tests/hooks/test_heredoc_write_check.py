@@ -82,18 +82,34 @@ ALLOWED_BASH = [
     'git commit -m "heredoc 함정을 기록했다"',
 ]
 
+# 하네스가 **모든 커밋에 요구하는** 트레일러. 닫는 `>` 가 있는 것이 핵심이라 여기 못 박는다 —
+# 이 글자 하나가 2026-09-01 까지 `git commit -m @'...'@` 를 상시로 막았다
+_TRAILER = "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+
 # 막아야 하는 PowerShell 명령 — ① 만 본다
 BLOCKED_PS = [
     "@'\nhello\n'@ | Set-Content out.md",
     '@"\nhello\n"@ | Out-File out.md',
     "@'\nhello\n'@ | Add-Content out.md",
     "@'\nhello\n'@ > out.md",
+    # 공백 있는 따옴표 경로. **「`>` 뒤에 경로꼴을 요구」안이 여기서 죽었다** —
+    # `'@` 를 거르려고 따옴표를 빼면 이 진짜 파일 쓰기가 함께 샌다
+    '@\'\nhello\n\'@ > "out file.md"',
+    # 본문이 빈 here-string 도 닫힌 것이다. 「못 찾음」으로 빠지면 이게 통과한다
+    "@'\n'@ > out.md",
 ]
 
 # 막으면 안 되는 PowerShell 명령
 ALLOWED_PS = [
     # 도구 설명이 권하는 정상 용도. 파일과 무관하다
     "git commit -m @'\nmessage line\n'@",
+    # **실사용은 늘 트레일러를 단다.** 위 케이스에는 `>` 가 한 번도 안 나와서,
+    # 의도는 맞는데 실사용을 안 닮은 채 8일을 초록으로 지나갔다
+    f"git commit -m @'\nfix: 무언가를 고친다\n\n{_TRAILER}\n'@",
+    # 본문의 **낱말**과 **예시**도 명령이 아니다. 트레일러와 무관한 같은 부류다 —
+    # 이 훅을 설명하는 커밋 메시지가 이 훅에 막히면 안 된다
+    "git commit -m @'\nfix: Set-Content 를 쓰라고 문서에 적었다\n'@",
+    "git commit -m @'\ndocs: `cat > f.md` 가 위험하다고 적었다\n'@",
     # here-string 이 아니다
     "Set-Content out.md -Value 'hello'",
     "Get-Content out.md",
@@ -129,6 +145,33 @@ def test_safe_powershell_commands_pass(command: str):
 def test_powershell_backslash_alone_does_not_block():
     command = "@'\nC:\\Users\\junghwy\\path\n'@ | Write-Output"
     assert heredoc_write_check.powershell_reason(command) is None
+
+
+# **판정은 here-string 본문 «밖» 만 본다.** 본문은 데이터이지 명령이 아니다.
+#
+# 2026-09-01 전에는 명령 **전체**에 정규식을 대서 본문 글자가 명령으로 읽혔다. 같은 본문을
+# 감싸는 명령만 바꿔 **짝으로** 재는 것이 그 회귀를 잡는 유일한 모양이다 — 한쪽만 재면
+# «본문을 무시한다» 와 «아무것도 안 막는다» 가 안 갈린다
+@pytest.mark.parametrize("body", ["x > out.md", "Set-Content out.md", _TRAILER])
+def test_only_text_outside_the_herestring_is_judged(body: str):
+    assert heredoc_write_check.powershell_reason(f"git commit -m @'\n{body}\n'@") is None
+    assert heredoc_write_check.powershell_reason(f"@'\n{body}\n'@ > out.md") is not None
+
+
+# **끝 구분자를 못 찾으면 판단하지 않는다** — `_heredocs()` 가 닫힌 것만 모으는 것과 같은
+# 규약이다. 2026-09-01 전에는 여는 자리만 봐서 여기만 어긋나 있었다.
+#
+# 안 닫힌 here-string 은 셸이 스스로 죽으므로, 여기서 추측하면 **일을 하고도 막히는** 게이트가
+# 되고 그것이 `plan_log/하네스-확장.md` 4회차가 말한 무력화의 한 형태다
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m @'\ndocs: cat > f.md 함정을 적었다",
+        "@'\nhello\n | Set-Content out.md",
+    ],
+)
+def test_unterminated_herestring_is_not_judged(command: str):
+    assert heredoc_write_check.powershell_reason(command) is None, command
 
 
 # 도구가 갈리면 판정도 갈린다. Bash 규칙을 PowerShell 명령에 먹이면 안 된다
