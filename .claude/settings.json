@@ -32,16 +32,6 @@
         ]
       },
       {
-        "matcher": "Bash|PowerShell|Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/folder_md_check.py\"",
-            "timeout": 15
-          }
-        ]
-      },
-      {
         "matcher": "ExitPlanMode",
         "hooks": [
           {
@@ -117,17 +107,6 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/plan_interview_check.py\"",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "InstructionsLoaded": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/folder_md_check.py\"",
             "timeout": 15
           }
         ]

@@ -15,7 +15,6 @@ from __future__ import annotations
 ESCAPE_HATCHES = (
     "ALLOW_PAID_TESTS",
     "SKIP_AUTOTEST",
-    "SKIP_FOLDERMD",
     "SKIP_HEREDOC",
     "SKIP_PLANINTERVIEW",
     "SKIP_PLANLOG",
