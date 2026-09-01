@@ -155,6 +155,77 @@ def test_piped_read_still_injects(session: str):
     assert out is not None, "파이프가 붙었다고 안 실으면 차단안과 같은 구멍이 생긴다"
 
 
+# --- 폴더를 훑는 명령 ---
+#
+# **첫 판은 「실재하는 파일 이름」만 알아봐서 이 갈래가 통째로 0자였다**(2026-09-01 실측).
+# auto mode 가 지시하는 것이 정확히 `grep`·`ls` 라 제일 자주 밟히는 자리였다.
+#
+# 넓히는 방향이 하나가 아니고 **순진한 쪽은 밀어낸다** — 폴더 이름이 전부 평범한 낱말이라
+# `grep` 패턴이 그대로 걸리고, 한 호출에 드는 조각이 사실상 하나라 부딪힌 폴더가 **일하는
+# 폴더의 자리를 먹는다.** 그래서 아래 둘은 «실린다» 와 «안 실린다» 를 한 쌍으로 잠근다.
+
+
+# 폴더를 훑으면 **그 폴더 자신의** 지침이 실린다.
+#
+# **`parents` 만 보던 때는 여기가 빈손이었다** — `rag_pipeline/retrieval/` 의 부모는
+# `rag_pipeline` 이고 거기엔 `CLAUDE.md` 가 없다. 넓히면서 자기 자신을 후보에 안 넣으면
+# **한 칸 위를 가리켜** 정작 그 폴더 지침이 안 실린다
+def test_a_folder_sweep_injects_that_folders_own_doc(session: str):
+    out, code = run_hook(bash("grep -rn retrieve rag_pipeline/retrieval/", session))
+
+    assert code == 0
+    assert is_whole(context_of(out), FITS_DOC), (
+        "폴더를 훑었는데 그 폴더 지침이 안 실렸다 — 넓히기 전 상태로 돌아간 것이다"
+    )
+
+
+# **검색어가 폴더 이름과 부딪혀도 일하는 폴더를 밀어내면 안 된다.**
+#
+# 실측(2026-09-01): 맨낱말까지 디렉터리로 세면 `cost/CLAUDE.md` 만 2,286자 실리고
+# `backend` 는 한 줄도 안 온다. 구분자를 요구하는 것이 그것을 가른다
+def test_a_search_term_matching_a_folder_name_does_not_displace_the_real_folder(session: str):
+    out, _ = run_hook(bash('grep -rn "cost" backend/app', session))
+    context = context_of(out)
+
+    assert has_body(context, "backend/CLAUDE.md"), "일하는 폴더가 밀려났다"
+    assert not has_body(context, "cost/CLAUDE.md"), (
+        "검색어를 경로로 셌다 — 이 저장소의 폴더 이름은 전부 평범한 낱말이다"
+    )
+
+
+# **파일을 아예 안 건드리는 명령은 침묵한다.** 산문에 폴더 이름이 있다는 이유로 실으면,
+# 예산은 먹으면서 그 폴더에서 일하지도 않는다
+def test_bare_folder_names_in_prose_are_not_paths(session: str):
+    out, code = run_hook(bash('python -c "print(1)"  # data cost tests 를 손본다', session))
+
+    assert code == 0
+    assert out is None
+
+
+# 한 명령이 폴더를 여럿 물면 **여럿이 후보가 된다.** 훅 docstring 의 「상한은 호출당이라
+# 합산된다」가 드는 예시가 이것이고, **이 판 전까지는 거짓이었다**(실린 자 0).
+#
+# 실린 글이 아니라 후보 목록으로 재는 것은 **예산이 그 뒤에서 하나로 줄이기 때문**이다 —
+# 출력으로 재면 합산 여부가 아니라 예산을 재게 된다
+def test_a_command_naming_two_folders_makes_both_candidates():
+    docs = folder_md_check.folder_docs_for(
+        folder_md_check.paths_in("grep -rn retrieve backend/ tests/")
+    )
+
+    assert [folder_md_check.rel_of(d) for d in docs] == ["backend/CLAUDE.md", "tests/CLAUDE.md"]
+
+
+# **구분자 없는 진짜 인자는 놓친다 — 감수한 대가다.**
+#
+# 살리려면 「인자 위치를 본다」가 되는데 그것이 셸 파싱이라, 훅이 *새 형태의 명령을 조용히
+# 빠뜨리는* 쪽으로 틀린다. **놓치는 방향은 넓히기 전과 같아 되돌아갈 뿐이다**(fail-safe)
+def test_a_bare_directory_argument_is_a_known_miss(session: str):
+    out, code = run_hook(bash("ls backend", session))
+
+    assert code == 0
+    assert out is None, "이 누락이 사라졌으면 판별자가 바뀐 것이다 — 오탐 쪽을 다시 재라"
+
+
 # --- 예산과 이어싣기 ---
 #
 # **이 절이 이 훅의 두 번째 실패를 잠근다.** 첫 판은 «실었다» 까지는 맞았는데 하네스가 큰

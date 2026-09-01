@@ -87,6 +87,30 @@
 셸 명령이 권한 프롬프트를 건너뛴다** — 이 훅이 만들어도 되는 부작용이 아니다.
 `additionalContext` 만으로 목적이 달성된다(2026-08-31 실측: 실제로 실린다).
 
+## 폴더를 훑는 명령도 센다 — 다만 구분자를 품은 토큰만
+
+**첫 판은 「실재하는 파일 이름」만 알아봤고, 그래서 폴더를 훑는 명령에 지침이 한 줄도 안
+실렸다**(2026-09-01 실측). `grep -rn retrieve backend/ tests/` 도 `ls -la backend/app` 도
+**0자**다 — 훅은 정상으로 돌고 아무 에러도 안 난다. **auto mode 가 지시하는 것이 정확히
+`grep`·`ls` 라 이 구멍이 제일 자주 밟히는 자리였다.**
+
+**`Grep`·`Glob` *도구* 는 이 판에서 안 덮었다.** 그쪽은 `tool_input` 에 `command` 키가 아예
+없어 matcher 만 붙이면 **무동작**이고(먹여서 확인했다), 「경로 없음 = 저장소 전체」를 무엇으로
+대우할지가 **새 결정**이다 — 모든 폴더에서 조각을 하나씩 집으면 한 호출이 예산을 통째로
+태운다. 근거와 미결은 `.claude/wiki/plan_log/문서-최신성.md` 13회차에 있다.
+
+**그 구멍이 「`Grep` 도구에 훅이 안 붙는다」로 기록돼 있었는데 이름이 틀렸다.** 12회차 3차
+시험이 빠진 곳은 `.claude/wiki/` 인데 **거기엔 `CLAUDE.md` 가 없어** 어떤 폴더 지침 훅으로도
+원리적으로 못 닿는다. 즉 이 수리는 그 시험을 되살리지 않는다 — 고치는 것은 **다른 구멍**이다.
+
+**넓히는 방향은 하나뿐이 아니었고, 순진한 쪽이 밀어낸다.** 자세한 실측은 `paths_in()` 주석에
+있다 — 요지는 폴더 이름이 전부 평범한 낱말이라 `grep` 패턴이 그대로 걸리고, 한 호출에 드는
+조각이 사실상 하나라 **부딪힌 폴더가 일하는 폴더를 밀어낸다**는 것이다.
+
+**위 「상한은 호출당이라 합산된다」의 `grep -rn x backend/ tests/` 예시는 이 판 전까지 거짓이
+었다**(실린 자 0). 합산 주장 자체는 일곱 `CLAUDE.md` 를 **파일 이름으로** 부른 명령이 근거라
+참이었고, 예시만 틀렸는데 하필 그것이 **구멍을 정상 동작처럼 보이게 했다.** 지금은 참이다.
+
 ## 같은 조각을 두 번 안 싣는 것이 이 훅의 절반이다
 
 **없으면 역효과다.** `evaluation/CLAUDE.md` 는 37,141바이트라 `cat` 마다 실으면 다섯 번에
@@ -173,8 +197,23 @@ MAX_SLICE_CHARS = CONTEXT_BUDGET_CHARS - SLICE_OVERHEAD_CHARS
 _PATH_TOKEN = re.compile(r"[A-Za-z0-9_.가-힣][A-Za-z0-9_./\\:가-힣-]*")
 
 
-# 명령에 나온 것 중 저장소 안에 실재하는 파일들. 판단이 안 서면 빈 목록
-def files_in(command: str) -> list[Path]:
+# 명령에 나온 것 중 저장소 안에 실재하는 경로들. 판단이 안 서면 빈 목록.
+#
+# **디렉터리는 구분자(`/`)를 품은 토큰일 때만 센다.** 맨낱말까지 세면 **검색어가 폴더 이름과
+# 부딪힌다** — 이 저장소의 폴더 이름이 `cost`·`tests`·`data`·`evaluation` 처럼 전부 평범한
+# 낱말이라 `grep` 패턴이 그대로 걸린다. 파일 토큰은 확장자가 그 몫을 하는데 디렉터리에는
+# 그런 표지가 없어, 구분자가 대신한다.
+#
+# **부딪히면 조용히 틀리는 것이 아니라 밀어낸다** — 실측(2026-09-01) `grep -rn "cost"
+# backend/app` 이 맨낱말 허용에서 **`cost/CLAUDE.md` 만 2,286자 싣고 `backend` 는 한 줄도 안
+# 온다.** 한 호출에 드는 조각이 사실상 하나라(예산 9,500 · `backend` 조각 1이 8,130) 부딪힌
+# 폴더가 **일하는 폴더의 자리를 먹는다.** `compose()` 가 얕은 폴더부터 채우는데 둘은 깊이가
+# 같아 명령의 토큰 순서가 이기고, `grep` 은 검색어를 경로보다 **먼저** 쓴다.
+#
+# 대가는 `ls backend`(구분자 없는 진짜 인자)를 놓치는 것인데, **놓치는 방향은 넓히기 전과
+# 같아 되돌아갈 뿐이다.** 「인자 위치를 본다」로 살리는 안은 셸 파싱이라 아래 `_PATH_TOKEN`
+# 주석이 이미 경계한 자리다
+def paths_in(command: str) -> list[Path]:
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -187,7 +226,9 @@ def files_in(command: str) -> list[Path]:
         candidate = Path(token)
         path = candidate if candidate.is_absolute() else PROJECT_ROOT / token
         try:
-            if not path.is_file():
+            if path.is_file():
+                pass
+            elif not (path.is_dir() and "/" in token):
                 continue
             resolved = path.resolve()
             resolved.relative_to(PROJECT_ROOT)
@@ -199,13 +240,18 @@ def files_in(command: str) -> list[Path]:
     return found
 
 
-# 그 파일들의 조상 폴더에 있는 `CLAUDE.md` 전부. **뿌리 것은 뺀다** — 늘 로드된다
-def folder_docs_for(files: list[Path]) -> list[Path]:
+# 그 경로들이 속한 폴더의 `CLAUDE.md` 전부. **뿌리 것은 뺀다** — 늘 로드된다.
+#
+# **디렉터리는 자기 자신도 후보다** — `grep -rn x backend/` 가 무는 폴더는 `backend` 이지
+# 그 부모가 아니다. 파일만 다루던 때는 `parents` 하나로 충분했고, 그대로 두면 넓힌 것이
+# **한 칸 위를 가리켜** 정작 그 폴더 지침이 안 실린다
+def folder_docs_for(paths: list[Path]) -> list[Path]:
     docs: list[Path] = []
     seen: set[Path] = set()
 
-    for path in files:
-        for parent in path.parents:
+    for path in paths:
+        chain = [path, *path.parents] if path.is_dir() else list(path.parents)
+        for parent in chain:
             if parent == PROJECT_ROOT:
                 break
             doc = parent / MEMORY_NAME
@@ -372,7 +418,7 @@ def main() -> None:
     if not command:
         sys.exit(0)
 
-    context = compose(folder_docs_for(files_in(command)), session_id)
+    context = compose(folder_docs_for(paths_in(command)), session_id)
     if context:
         emit(context)
 
