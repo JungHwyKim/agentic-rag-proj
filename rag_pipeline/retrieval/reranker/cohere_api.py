@@ -76,7 +76,7 @@ API_VERSION = "v1"
 
 # Cohere 클라이언트를 만든다. 키가 없거나 SDK 가 없으면 None.
 # **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고)
-def _make_client(api_key: str | None) -> Any | None:
+def _make_client(api_key: str | None, timeout: float) -> Any | None:
     if not api_key:
         return None
     try:
@@ -84,7 +84,7 @@ def _make_client(api_key: str | None) -> Any | None:
     except ImportError:
         return None
     try:
-        return cohere.ClientV2(api_key=api_key)
+        return cohere.ClientV2(api_key=api_key, timeout=timeout)
     except Exception:  # noqa: BLE001 - 폴백이 있는 갈래다 (base.py docstring)
         return None
 
@@ -195,7 +195,7 @@ class CohereReranker:
     # 실제로 보낸다. 실패·손상은 전부 None 으로 바꿔 폴백에 맡긴다
     def _call_api(self, query: str, pool: list[RetrievedChunk]) -> list[float] | None:
         config = self._config
-        client = _make_client(config.cohere_api_key)
+        client = _make_client(config.cohere_api_key, config.cohere_timeout_sec)
         if client is None:
             self._warnings.append("COHERE_API_KEY 가 없어 리랭커를 건너뛰고 RRF 순서를 씁니다")
             return None

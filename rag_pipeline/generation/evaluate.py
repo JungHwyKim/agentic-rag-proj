@@ -67,7 +67,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from rag_pipeline.config import EvaluatorConfig
+from rag_pipeline.config import OPENAI_CONNECT_TIMEOUT_SEC, EvaluatorConfig
 from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.generation.prompts import (
     EVALUATOR_PROMPT_VERSION,
@@ -112,14 +112,19 @@ class EvaluatorUsage:
 
 # OpenAI 클라이언트를 만든다. 키가 없으면 None.
 # **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고)
-def _make_client(api_key: str | None) -> Any | None:
+def _make_client(api_key: str | None, timeout: float) -> Any | None:
     if not api_key:
         return None
     try:
+        import httpx
         from openai import OpenAI
     except ImportError:
         return None
-    return OpenAI(api_key=api_key)
+    # 맨 float 을 주면 connect 까지 덮여 연결 실패가 5초에서 이 값으로 늘어난다 (config.py)
+    return OpenAI(
+        api_key=api_key,
+        timeout=httpx.Timeout(timeout, connect=OPENAI_CONNECT_TIMEOUT_SEC),
+    )
 
 
 # 캐시 키. 질의·후보 신원·모델·프롬프트 버전이 전부 들어간다 (모듈 docstring 참고)
@@ -231,7 +236,7 @@ class OpenAIEvaluator:
     # 실제로 보낸다. 실패·손상은 전부 None 으로 바꿔 제3의 상태에 맡긴다
     def _call_api(self, query: str, chunks: list[RetrievedChunk]) -> EvaluatorVerdict | None:
         config = self._config
-        client = _make_client(config.openai_api_key)
+        client = _make_client(config.openai_api_key, config.openai_timeout_sec)
         if client is None:
             self._warnings.append("OPENAI_API_KEY 가 없어 근거 충분성을 판정하지 못했습니다")
             return None

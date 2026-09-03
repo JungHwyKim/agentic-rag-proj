@@ -107,6 +107,7 @@ class WebSearchTool(BaseTool):
                 query=tool_input.query,
                 max_results=_resolve_max_results(tool_input, config),
                 search_depth=config.web_search_depth,
+                timeout=config.tavily_timeout_sec,
             )
         except Exception as exc:  # noqa: BLE001 - 다시 던진다. 값으로 바꾸는 것은 run() 몫이다
             # **`run()` 이 예외를 값으로 바꿔 삼키므로 여기서 안 남기면 실패가 사라진다.**

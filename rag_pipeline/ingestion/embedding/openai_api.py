@@ -36,7 +36,7 @@ from typing import Any
 
 import tiktoken
 
-from rag_pipeline.config import EmbeddingConfig
+from rag_pipeline.config import OPENAI_CONNECT_TIMEOUT_SEC, EmbeddingConfig
 from rag_pipeline.cost_log import append_cost_log
 from rag_pipeline.exceptions import EmbeddingError
 from rag_pipeline.ingestion.embedding.base import EmbeddingUsage, cache_salt_for
@@ -48,14 +48,19 @@ _FALLBACK_ENCODING = "cl100k_base"
 
 # OpenAI 클라이언트를 만든다. 키가 없으면 None.
 # **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고)
-def _make_client(api_key: str | None) -> Any | None:
+def _make_client(api_key: str | None, timeout: float) -> Any | None:
     if not api_key:
         return None
     try:
+        import httpx
         from openai import OpenAI
     except ImportError:
         return None
-    return OpenAI(api_key=api_key)
+    # 맨 float 을 주면 connect 까지 덮여 연결 실패가 5초에서 이 값으로 늘어난다 (config.py)
+    return OpenAI(
+        api_key=api_key,
+        timeout=httpx.Timeout(timeout, connect=OPENAI_CONNECT_TIMEOUT_SEC),
+    )
 
 
 # 모델에 맞는 토크나이저. 모르는 모델이면 cl100k_base 로 떨어진다
@@ -218,7 +223,7 @@ class OpenAIEmbedder:
                 ),
             )
 
-        client = _make_client(config.openai_api_key)
+        client = _make_client(config.openai_api_key, config.openai_timeout_sec)
         if client is None:
             raise EmbeddingError(
                 "OPENAI_API_KEY가 없어 임베딩을 만들 수 없습니다",

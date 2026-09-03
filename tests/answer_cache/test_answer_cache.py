@@ -877,6 +877,19 @@ def test_fingerprint_ignores_call_cache_settings(tmp_path: Path) -> None:
     assert _fp(moved) == _fp()
 
 
+# **타임아웃도 지문에 안 든다.** 타임아웃이 가르는 것은 *답이 무엇인가* 가 아니라 «답이
+# 나오는가» 이고, 안 나온 회차는 애초에 캐시에 안 들어간다. 실으면 `.env` 한 줄을 고칠 때마다
+# `qa_cache_*` 가 전량 미스가 되어 `exact` 적중률 표본을 아래로 민다 (fingerprint.py)
+def test_fingerprint_ignores_timeouts() -> None:
+    moved = _fp_config(
+        _rerank=_rerank_config(openai_timeout_sec=5.0, cohere_timeout_sec=5.0),
+        _rewrite=_rewrite_config(openai_timeout_sec=5.0),
+        _generation=_generation_config(openai_timeout_sec=5.0),
+    )
+
+    assert _fp(moved) == _fp()
+
+
 # 그리고 절대 경로가 값 자체로 안 새어야 한다 — payload 에 남는 문자열이다
 def test_fingerprint_carries_no_absolute_path() -> None:
     fingerprint = _fp(_fp_config())
