@@ -76,7 +76,10 @@ _CITATION = re.compile(
 # `auto_test_check.UNMAPPED_BY_DESIGN` · `openwork.NOT_A_SOURCE` 와 같은 자리다.
 # 셋 다 사유가 같다 — **"빠뜨린 게 아님을 명시하는 자리"**.
 #
-# **갈래를 셋으로 가른 것은 수명이 다르기 때문이다.** 아래 첫 갈래만 유한하다.
+# **갈래를 가른 것은 수명이 다르기 때문이다.** 아래 첫 갈래만 유한하다. 셋으로 시작해
+# 2026-09-04 에 넷이 됐는데, **넷째를 억지로 셋 안에 넣으면 그 갈래의 뜻이 무너진다** —
+# `PLANNED` 는 «만들면 뺀다» 인데 저장소 밖 파일은 영원히 안 만들고, `GONE` 은 «부재를
+# 서술한다» 인데 그 문장들은 있다고 서술한다. 갈래를 더할 때 재는 것은 개수가 아니라 수명이다.
 
 # ① 앞으로 만들 파일. **생기면 이 예외를 빼야 한다** — 아래 반대 방향 테스트가 강제한다
 PLANNED_FILES: dict[str, str] = {
@@ -104,10 +107,31 @@ GONE_FILES: dict[str, str] = {
     ),
 }
 
+# ④ **저장소 밖에 실재하는 파일.** 앞 셋과 수명이 또 다르다 — 없어진 것도, 앞으로 만들
+# 것도, 이력에만 있는 것도 아니고 **지금 있는데 여기가 아닌 곳에 있다.** 셋 중 하나에
+# 억지로 넣으면 그 갈래의 뜻이 무너진다(`PLANNED` 는 «만들면 뺀다» 인데 이건 영원히 안
+# 만들고, `GONE` 은 «부재를 서술한다» 인데 이건 있다고 서술한다).
+#
+# **반대 방향 검사가 여기에도 값을 한다** — 노트를 저장소로 들여오면 이 예외가 죽고, 그때는
+# 실제로 다시 봐야 한다(gitignore·커밋 여부가 걸린다)
+OUTSIDE_REPO_FILES: dict[str, str] = {
+    "면접노트.html": (
+        "면접 준비 노트의 원본이고 `~/Documents/면접준비/` 에 산다 — 개인 자료라 저장소에 "
+        "안 들어온다. `quiz` 스킬이 그 폴더를 읽고, 경로는 코드에 안 박고 `QUIZ_NOTE_DIR` "
+        "환경변수로 받는다(`quiz/collect.py`)"
+    ),
+    "_html2md.py": (
+        "위 노트를 마크다운으로 다시 뽑는 도구이고 같은 폴더에 산다. `quiz` 스킬은 마크다운이 "
+        "HTML 보다 낡았을 때 **이것을 돌리라고 안내하고 멈춘다** — 낡은 답으로 채점하면 "
+        "맞는 답을 하고도 틀렸다고 듣기 때문이다"
+    ),
+}
+
 _EXCEPTION_GROUPS: tuple[tuple[str, dict[str, str]], ...] = (
     ("PLANNED_FILES", PLANNED_FILES),
     ("HISTORICAL_FILES", HISTORICAL_FILES),
     ("GONE_FILES", GONE_FILES),
+    ("OUTSIDE_REPO_FILES", OUTSIDE_REPO_FILES),
 )
 
 ALL_EXCEPTIONS: dict[str, str] = {
@@ -177,7 +201,7 @@ def test_cited_paths_exist(repo_files: frozenset[str]) -> None:
         "문서가 실재하지 않는 파일을 가리킵니다:\n"
         + "\n".join(sorted(set(broken)))
         + "\n\n파일이 옮겨졌으면 문서를 고치고, 없는 것을 가리키는 것이 옳으면 "
-        "tests/test_docs.py 의 예외 셋 중 맞는 갈래에 **사유와 함께** 넣으세요."
+        "tests/test_docs.py 의 예외 갈래 중 맞는 곳에 **사유와 함께** 넣으세요."
     )
 
 
