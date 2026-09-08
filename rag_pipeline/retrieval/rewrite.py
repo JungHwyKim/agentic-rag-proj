@@ -82,7 +82,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from rag_pipeline.config import RewriteConfig
+from rag_pipeline.config import OPENAI_CONNECT_TIMEOUT_SEC, RewriteConfig
 from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.ingestion.loader.content.base import ResultCache, content_hash
 from rag_pipeline.schemas.retrieval import RetrievedChunk
@@ -132,14 +132,19 @@ class RewriteUsage:
 
 # OpenAI 클라이언트를 만든다. 키가 없으면 None.
 # **모듈 레벨이어야 한다** — 테스트의 모킹 이음새다 (모듈 docstring 참고)
-def _make_client(api_key: str | None) -> Any | None:
+def _make_client(api_key: str | None, timeout: float) -> Any | None:
     if not api_key:
         return None
     try:
+        import httpx
         from openai import OpenAI
     except ImportError:
         return None
-    return OpenAI(api_key=api_key)
+    # 맨 float 을 주면 connect 까지 덮여 연결 실패가 5초에서 이 값으로 늘어난다 (config.py)
+    return OpenAI(
+        api_key=api_key,
+        timeout=httpx.Timeout(timeout, connect=OPENAI_CONNECT_TIMEOUT_SEC),
+    )
 
 
 # 1차 결과를 번호 붙인 프롬프트로. **청크를 안 자른다** — 이 코퍼스는 도메인 낱말이
@@ -268,7 +273,7 @@ class QueryRewriter:
     # 실제로 보낸다. 실패·손상은 전부 None 으로 바꿔 폴백에 맡긴다
     def _call_api(self, query: str, pool: list[RetrievedChunk]) -> str | None:
         config = self._config
-        client = _make_client(config.openai_api_key)
+        client = _make_client(config.openai_api_key, config.openai_timeout_sec)
         if client is None:
             self._warnings.append("OPENAI_API_KEY 가 없어 질의 재작성을 건너뜁니다")
             return None

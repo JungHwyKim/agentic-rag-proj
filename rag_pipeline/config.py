@@ -11,6 +11,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 프로젝트 루트 (rag_pipeline/ 의 부모). cwd와 무관하게 .env를 찾기 위해 사용
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+# 외부 API 의 **연결** 타임아웃. `*_timeout_sec` 와 달리 이것은 손잡이가 아니라 못이다 —
+# 설정으로 안 열고 여기 한 자리에만 둔다.
+#
+# **명시가 필요한 이유는 SDK 의 인자 모양이다.** `OpenAI(timeout=60.0)` 처럼 맨 float 을 주면
+# connect·read·write·pool 을 **전부** 그 값으로 덮는다(실측: `Timeout(connect=5.0, read=600,
+# …)` → `60.0`). 그러면 읽기를 조이려다 **연결까지 60초로 늘어나서**, 호스트가 죽었을 때
+# 5초에 끝나던 실패가 60초 × 재시도가 된다. 그래서 `httpx.Timeout(읽기, connect=이 값)` 으로
+# 두 축을 갈라 준다.
+#
+# 값이 5.0 인 것은 **SDK 기본과 같은 값을 그대로 못 박은 것**이다. 고른 수가 아니라
+# *안 바꾸겠다*는 표시라 재판정 조건도 없다 — 바꿀 근거가 생기면 그때는 손잡이가 된다
+OPENAI_CONNECT_TIMEOUT_SEC = 5.0
+
 
 # `.env` 의 **빈 값**을 `None` 으로 읽는다. temperature 처럼 «안 보낸다» 가 합법 상태인
 # 설정에 붙인다.
@@ -49,6 +62,29 @@ class ContentRoutingConfig(BaseSettings):
     # --- 외부 API 키 (없으면 자동으로 로컬 폴백) ---
     openai_api_key: str | None = None
     llama_cloud_api_key: str | None = None
+
+    # OpenAI 클라이언트의 **읽기** 타임아웃. `openai_api_key` 와 같은 모양으로 여러 설정
+    # 객체가 같은 .env 키를 각자 읽는다(아래 다섯 곳).
+    #
+    # **안 걸면 SDK 기본값이 먹는데 그 값이 위험하다** — 설치본(openai 3.0.0)에서 직접 읽은
+    # 기본이 `connect=5.0 · read=600 · max_retries=2` 다. 연결은 5초로 짧은데 **응답을 안 주면
+    # 10분을 기다리고**, 타임아웃도 재시도 대상이라 최악이 **1800초**다. 로더·질의가 uvicorn
+    # 스레드풀에서 도니 그동안 그 스레드가 다른 요청을 못 받는다. `llamaparse_timeout_sec` 만
+    # 값이 있었고 나머지 여덟 클라이언트가 전부 이 상태였다.
+    #
+    # **60 은 임시값이고 실측 전이다.** 이 저장소에 외부 호출의 지연 기록이 없다 —
+    # `cost_log` 는 토큰·호출만 담고 걸린 시간을 안 담아서, 정상 호출의 분포를 아직 못 본다.
+    # 관측된 것은 질의 한 건이 생성까지 3.3~8.0초라는 것뿐이라 그 여유 배수로 골랐다.
+    #
+    # **재판정 조건은 「정상 호출이 잘리는가」다.** 이 값이 낮으면 조용히 나빠지지 않는다 —
+    # Vision 은 OCR 로, 리랭커는 RRF 순서로, 재작성은 원 질의로 내려가며 **전부 경고를 남긴다.**
+    # 그래서 경고에 timeout 이 뜨는 순간이 곧 올릴 근거다. 반대 방향(600초)은 아무 신호가
+    # 없다는 것이 이 값을 먼저 낮게 잡은 이유다.
+    #
+    # **이 값은 읽기에만 먹는다.** 연결 쪽은 `OPENAI_CONNECT_TIMEOUT_SEC`(위)에 못 박혀 있고
+    # 설정으로 안 연다 — 여기서 문제였던 것은 *연결은 됐는데 응답이 안 오는* 쪽이라 축이 다르고,
+    # 둘 다 열면 손잡이만 둘이 된다
+    openai_timeout_sec: float = 60.0
 
     # --- 표 라우팅 ---
     # PDF/이미지의 표를 무엇으로 파싱할지. llamaparse 실패 시 항상 pymupdf로 폴백된다
@@ -192,6 +228,8 @@ class EmbeddingConfig(BaseSettings):
     # ContentRoutingConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정 객체가 독립이라
     # 각자 읽는 것이다 — 임베딩만 끄고 Vision 은 살리는 식의 조합이 가능해야 한다
     openai_api_key: str | None = None
+    # 위와 같은 이유로 각자 읽는다. 왜 60 이고 무엇이 재판정 조건인지는 ContentRoutingConfig
+    openai_timeout_sec: float = 60.0
 
     # 어느 구현체로 임베딩하나. **구현체가 둘이 되어서 여는 설정이다** — 하나뿐일 때는
     # 합법값이 하나뿐인 죽은 설정이라 일부러 안 만들었다(.claude/wiki/plan_log/embedding.md 3회차).
@@ -313,10 +351,18 @@ class RerankConfig(BaseSettings):
     # ContentRoutingConfig·EmbeddingConfig·GenerationConfig 와 같은 .env 키를 읽는다.
     # 중복이 아니라 각 설정 객체가 독립이라 각자 읽는 것이다
     openai_api_key: str | None = None
+    # 위와 같은 이유로 각자 읽는다. 왜 60 이고 무엇이 재판정 조건인지는 ContentRoutingConfig.
+    # **`openai` 갈래에만 먹는다** — 이 설정 객체가 구현체 셋을 덮는데 타임아웃은 갈래마다다
+    openai_timeout_sec: float = 60.0
 
     # Cohere 갈래의 키. `openai_api_key` 와 **별개 필드인 것이 요점이다** — 한 칸을 돌려쓰면
     # provider 를 바꿀 때 남의 키를 물고 401 을 폴백으로 삼킨다(경고만 남고 에러가 안 난다)
     cohere_api_key: str | None = None
+
+    # Cohere 갈래의 타임아웃. 키와 **같은 이유로 별개 필드다** — 한 칸을 돌려쓰면 provider 를
+    # 바꿀 때 남의 값이 먹는다. SDK 기본이 **300초**라(`cohere 7.1.0` 실측) 여기도 구멍이었다.
+    # `local` 갈래에는 이 축이 없다 — HTTP 를 안 탄다
+    cohere_timeout_sec: float = 60.0
 
     # 어느 구현체로 다시 정렬하나. **구현체가 셋이라 여는 설정이다** — `embedding_provider`
     # 와 같은 잣대이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
@@ -377,6 +423,8 @@ class RewriteConfig(BaseSettings):
 
     # 다른 설정 객체와 같은 .env 키를 읽는다. 중복이 아니라 각자 독립이라 각자 읽는 것이다
     openai_api_key: str | None = None
+    # 위와 같은 이유로 각자 읽는다. 왜 60 이고 무엇이 재판정 조건인지는 ContentRoutingConfig
+    openai_timeout_sec: float = 60.0
 
     # 무슨 모델로. **비어 있으면 `get_rewriter()` 가 None 을 돌려줘 통째로 꺼진다** —
     # `rerank_model`·`evaluator_model` 과 글자 그대로 같은 모양이고, 저장소에는 꺼진 채 커밋된다
@@ -427,6 +475,9 @@ class GenerationConfig(BaseSettings):
     # ContentRoutingConfig·EmbeddingConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정
     # 객체가 독립이라 각자 읽는 것이다 — 생성만 끄고 임베딩은 살리는 조합이 가능해야 한다
     openai_api_key: str | None = None
+    # 위와 같은 이유로 각자 읽는다. 왜 60 이고 무엇이 재판정 조건인지는 ContentRoutingConfig.
+    # **여기가 제일 먼저 잘릴 자리다** — 답변 생성이 이 파이프라인에서 제일 긴 호출이다
+    openai_timeout_sec: float = 60.0
 
     # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
     # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(.claude/wiki/plan_log/backend.md).
@@ -509,6 +560,8 @@ class EvaluatorConfig(BaseSettings):
     # GenerationConfig 와 같은 .env 키를 읽는다. 중복이 아니라 각 설정 객체가 독립이라 각자
     # 읽는 것이다 — 판정만 끄고 생성은 살리는 조합이 가능해야 한다
     openai_api_key: str | None = None
+    # 위와 같은 이유로 각자 읽는다. 왜 60 이고 무엇이 재판정 조건인지는 ContentRoutingConfig
+    openai_timeout_sec: float = 60.0
 
     # 판정에 쓸 모델. **비면 통째로 꺼진다** — RERANK_MODEL 과 글자 그대로 같은 모양이고
     # 저장소에는 꺼진 채 커밋된다. 켜는 것은 혼동행렬을 재고 나서 .env 에 이름이 들어가는 순간이다
@@ -739,6 +792,13 @@ class WebSearchConfig(BaseSettings):
     # — `rerank_model`·`evaluator_model`·`rewrite_model` 이 빈 값으로 꺼지는 것과 글자 그대로
     # 같은 모양이고, **저장소 커밋본은 꺼진 채다.** 여기서 켜는 순간 질의당 크레딧이 나간다
     tavily_api_key: str | None = None
+
+    # Tavily 의 타임아웃. **여기만 성격이 다르다 — 구멍을 막는 게 아니라 못을 박는 것이다.**
+    # 이 SDK 는 생성자가 아니라 `search()` 가 타임아웃을 받고 그 기본이 이미 **60초**라
+    # (`tavily-python` 실측) 값이 안 바뀐다. 그런데도 명시하는 이유는 그 60이 **우연**이기
+    # 때문이다 — SDK 가 올라가며 조용히 바뀌어도 아무 신호가 없다. 이 변경이 없애려던 것이
+    # 바로 «숨은 기본값에 기대는 것» 이라, 값이 같아도 출처를 우리 쪽으로 옮긴다
+    tavily_timeout_sec: float = 60.0
 
     # 몇 건을 받아오나. `generation_top_k`(5)와 나란한 수로 뒀다 — **임시값이고 실측 전이다.**
     # 웹 근거가 답변에 실리는 경로가 아직 없어(Router 가 이 도구를 안 고른다) 잴 자[尺]가 없다

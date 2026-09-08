@@ -66,6 +66,8 @@ def _other_value(name: str, annotation: Any, default: Any) -> Any:
         return not bool(default)
     if base is int:
         return (default or 0) + 7
+    if base is float:
+        return (default or 0.0) + 7.0
     if base is str:
         return f"{default or ''}-changed"
     if base is Path:

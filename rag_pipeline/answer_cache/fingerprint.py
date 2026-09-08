@@ -75,8 +75,17 @@ _VERSION = "v1"
 # 설정 객체에서 뺄 필드. **뺄 것만 적는 것이 이 모듈의 방향이다** (모듈 docstring 참고)
 _SKIP = frozenset({"generation_top_k"})
 
-# 이름 규칙으로 빼는 것. 새 설정 객체가 같은 규칙을 따르면 저절로 빠진다
-_SKIP_SUFFIXES = ("_api_key", "_cache_dir", "_cache_enabled")
+# 이름 규칙으로 빼는 것. 새 설정 객체가 같은 규칙을 따르면 저절로 빠진다.
+#
+# **`_timeout_sec` 는 `_cache_*` 와 같은 자리다** — 타임아웃은 *답이 무엇인가* 를 안 가른다.
+# 가르는 것은 «답이 나오는가» 이고, 안 나온 회차는 애초에 캐시에 안 들어간다. 그래서 이 값을
+# 바꿨다고 이미 저장된 답이 낡지 않는다.
+#
+# **뺄 이유가 하나 더 있고 그쪽이 더 급하다** — 지금 `exact` 캐시는 *"`source=="user"` 50줄에서
+# 적중률 5% 미만이면 끈다"* 의 표본을 모으는 중이다(`evaluation/README.md` 8절). 실으면
+# 타임아웃 한 줄을 고칠 때마다 전량 미스가 되어 **그 판정을 아래로 민다** — 아래 `max_retries`
+# 조각이 꺼졌을 때 붙지 않는 것과 같은 이유다
+_SKIP_SUFFIXES = ("_api_key", "_cache_dir", "_cache_enabled", "_timeout_sec")
 
 
 # 이 필드를 지문에 싣나

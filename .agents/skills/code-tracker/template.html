@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CODE-TRACKER: 제목은 「<범위> — 코드 흐름」 형태로 -->
+<title>범위 — 코드 흐름</title>
+<style>
+/* 라이트가 기본. 다크는 아래에서 토큰만 덮는다 */
+:root {
+  --bg: #fbfaf9;
+  --fg: #1c1a17;
+  --muted: #6b6560;
+  --line: #e2ddd7;
+  --card: #ffffff;
+  --accent: #7a4a2b;
+  --accent-bg: #f6efe9;
+  --warn-bg: #fdf4e6;
+  --warn-line: #e0b878;
+  --code-bg: #f2efec;
+  --ev: #8a6a4f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17161a;
+    --fg: #e9e5e0;
+    --muted: #9c948c;
+    --line: #322e34;
+    --card: #1e1c21;
+    --accent: #d9a678;
+    --accent-bg: #2a2119;
+    --warn-bg: #2b2318;
+    --warn-line: #7a5e33;
+    --code-bg: #232025;
+    --ev: #b8956f;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.75 -apple-system, "Segoe UI", "Malgun Gothic", "맑은 고딕", sans-serif;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 96px; }
+
+header { border-bottom: 2px solid var(--line); padding-bottom: 20px; margin-bottom: 8px; }
+h1 { font-size: 1.7rem; line-height: 1.35; margin: 0 0 12px; letter-spacing: -0.01em; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.83rem; color: var(--muted); }
+.meta code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+
+h2 {
+  font-size: 1.22rem; margin: 40px 0 12px; padding-top: 20px;
+  border-top: 1px solid var(--line); letter-spacing: -0.01em;
+}
+h2:first-of-type { border-top: none; padding-top: 0; }
+h3 { font-size: 1rem; margin: 24px 0 8px; color: var(--accent); }
+p, li { margin: 0 0 12px; }
+ul, ol { padding-left: 22px; }
+
+/* ── 근거 표기 ────────────────────────────────────────────────
+   기본은 위첨자 번호만. 토글을 켜면 파일·심볼이 본문에 펼쳐진다.
+   JS 없이 체크박스 + 형제 선택자로만 돈다 — 파일 하나로 전달되는 것이 전제다 */
+.ev { font-size: 0.72em; color: var(--ev); vertical-align: super; line-height: 0;
+      margin-left: 2px; white-space: nowrap; cursor: help; }
+.ev a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--ev); }
+.ev .full { display: none; }
+
+#showsrc { position: absolute; opacity: 0; pointer-events: none; }
+.toggle {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 0.82rem; color: var(--muted); user-select: none;
+  border: 1px solid var(--line); background: var(--card);
+  padding: 5px 12px; border-radius: 999px; margin: 16px 0 4px;
+}
+.toggle:hover { border-color: var(--accent); color: var(--fg); }
+.toggle .box { width: 13px; height: 13px; border: 1.5px solid var(--muted); border-radius: 3px; }
+#showsrc:checked ~ .wrap .toggle .box { background: var(--accent); border-color: var(--accent); }
+#showsrc:checked ~ .wrap .ev .full {
+  display: inline; vertical-align: baseline; font-size: 1.02em;
+  background: var(--accent-bg); color: var(--accent);
+  padding: 0 5px; border-radius: 3px; margin-left: 3px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+#showsrc:checked ~ .wrap .ev .num { display: none; }
+
+/* 「추정」 표시 — 코드에서 확인 못 한 문장 */
+.guess {
+  border-left: 3px solid var(--warn-line); background: var(--warn-bg);
+  padding: 10px 14px; margin: 0 0 12px; border-radius: 0 6px 6px 0; font-size: 0.94rem;
+}
+.guess::before {
+  content: "추정"; display: inline-block; font-size: 0.7rem; font-weight: 700;
+  color: var(--warn-line); letter-spacing: 0.06em; margin-right: 8px;
+  vertical-align: 1px;
+}
+
+/* ── 두 층 ────────────────────────────────────────────────────
+   위(1·2절)는 저장소를 모르는 사람도 읽는다. 아래는 접어 둔다 */
+.inner { margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.inner > summary {
+  cursor: pointer; padding: 16px 20px; font-weight: 600; font-size: 1rem;
+  list-style: none; display: flex; align-items: center; gap: 10px;
+}
+.inner > summary::-webkit-details-marker { display: none; }
+.inner > summary::before { content: "▸"; color: var(--accent); font-size: 0.85em; }
+.inner[open] > summary::before { content: "▾"; }
+.inner > summary .hint { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+.inner > .body { padding: 0 20px 24px; border-top: 1px solid var(--line); }
+.inner > .body h2:first-of-type { margin-top: 24px; border-top: none; padding-top: 0; }
+
+/* ── 다이어그램 ──────────────────────────────────────────────
+   mermaid 가 못 뜨면 이 <pre> 의 소스가 그대로 보인다.
+   그것이 폴백이고, JS 로 따로 만들지 않는다 */
+pre.mermaid {
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px; overflow-x: auto; font-size: 0.82rem; line-height: 1.55;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  margin: 0 0 8px;
+}
+pre.mermaid[data-processed="true"] { text-align: center; font-size: inherit; }
+.dgm-note { font-size: 0.78rem; color: var(--muted); margin: 0 0 20px; }
+
+pre.code {
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; overflow-x: auto; font-size: 0.84rem; line-height: 1.6;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; margin: 0 0 16px;
+}
+p code, li code, td code {
+  background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+  font-size: 0.87em; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.tablewrap { overflow-x: auto; margin: 0 0 20px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+th { background: var(--accent-bg); font-weight: 600; }
+
+.sources { margin: 16px 0 0; font-size: 0.83rem; }
+.sources > summary { cursor: pointer; color: var(--muted); }
+.sources ol { margin: 10px 0 0; color: var(--muted); }
+.sources code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+footer {
+  margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+  font-size: 0.8rem; color: var(--muted);
+}
+footer ul { columns: 2; column-gap: 28px; }
+@media (max-width: 560px) { footer ul { columns: 1; } }
+</style>
+</head>
+<body>
+
+<!-- 토글 체크박스는 .wrap 의 형제여야 CSS 가 본문에 닿는다 -->
+<input type="checkbox" id="showsrc">
+<div class="wrap">
+
+<header>
+  <!-- CODE-TRACKER: 범위와 생성 시각 -->
+  <h1>범위 — 코드 흐름</h1>
+  <div class="meta">
+    <span>범위 <code>경로</code></span>
+    <span>생성 YYYY-MM-DD</span>
+    <span>읽은 파일 N개</span>
+  </div>
+</header>
+
+<label class="toggle" for="showsrc"><span class="box"></span>근거를 본문에 펼치기</label>
+
+<!-- ══ 바깥 층 — 저장소를 모르는 사람도 읽는다 ══════════════ -->
+
+<h2>1. 무엇을 하나</h2>
+<!-- CODE-TRACKER: 3~5문장. 내부 어휘를 쓰기 전에 표준 용어로 먼저 푼다 -->
+<p>
+  본문 예시입니다.<span class="ev"><a href="#f1"><span class="num">[1]</span><span class="full">파일.py:심볼()</span></a></span>
+</p>
+
+<h2>2. 어떻게 도나</h2>
+<!-- CODE-TRACKER: mermaid. 실선은 코드에서 확인한 호출만, 확인 못 한 관계는 점선(-.->) 이나 생략 -->
+<pre class="mermaid">
+flowchart TD
+  A[진입점] --> B[단계]
+  B -.-> C[확인 못 한 관계는 점선]
+</pre>
+<p class="dgm-note">실선은 코드에서 호출을 확인한 관계, 점선은 확인 못 한 관계입니다. 다이어그램이 글자로 보이면 그림 라이브러리를 못 받은 것이고 내용은 같습니다.</p>
+
+<details class="sources">
+  <summary>이 절의 근거</summary>
+  <ol>
+    <li id="f1"><code>파일.py:심볼()</code> — 무엇을 확인했는지</li>
+  </ol>
+</details>
+
+<!-- ══ 안쪽 층 — 저장소를 아는 사람용 ══════════════════════ -->
+
+<details class="inner">
+  <summary>저장소를 아는 사람용 상세 <span class="hint">— 왜 이렇게 됐나 · 조심할 것 · 문서와 어긋난 자리</span></summary>
+  <div class="body">
+
+    <h2>3. 왜 이렇게 됐나</h2>
+    <!-- CODE-TRACKER: docstring·주석에 근거가 있을 때만. 없으면 이 절을 통째로 생략하고
+         「이 범위의 코드에는 결정 근거가 남아 있지 않습니다」 한 줄 -->
+    <p>고른 것과 버린 것.</p>
+
+    <h2>4. 조심할 것</h2>
+    <!-- CODE-TRACKER: 되돌리면 조용히 깨지는 것 -->
+    <ul><li>항목</li></ul>
+
+    <h2>5. 문서와 어긋난 자리</h2>
+    <!-- CODE-TRACKER: 코드와 위키가 다른 자리. **없으면 "없음"을 적는다** — 절을 지우면
+         「대조를 안 했다」와 「대조했는데 어긋난 게 없다」가 안 갈린다 -->
+    <p>없음.</p>
+
+  </div>
+</details>
+
+<footer>
+  <!-- CODE-TRACKER: 실제로 연 파일 전부. 2절의 다이어그램과 근거가 여기서 나온다 -->
+  <p>읽은 파일</p>
+  <ul><li><code>파일.py</code></li></ul>
+</footer>
+
+</div>
+
+<!-- mermaid 는 있으면 그리고 없으면 소스가 그대로 보인다. 폴백 코드를 따로 두지 않는 이유다 -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  if (window.mermaid) {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral" });
+  }
+</script>
+</body>
+</html>

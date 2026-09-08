@@ -36,7 +36,7 @@ from typing import Any
 
 import pymupdf
 
-from rag_pipeline.config import ContentRoutingConfig
+from rag_pipeline.config import OPENAI_CONNECT_TIMEOUT_SEC, ContentRoutingConfig
 from rag_pipeline.cost_log import CostOutcome, append_cost_log, split_tokens
 from rag_pipeline.ingestion.loader.content.base import (
     ContentRegion,
@@ -91,14 +91,19 @@ _PROMPT = """아래는 PDF 표에서 뽑아낸 격자다. 글자는 이미 추�
 
 # OpenAI 클라이언트를 만든다. 키가 없으면 None.
 # **이 함수가 이 모듈의 유일한 모킹 이음새다** — 인라인화하면 외부 API 테스트가 전부 깨진다
-def _make_client(api_key: str | None) -> Any | None:
+def _make_client(api_key: str | None, timeout: float) -> Any | None:
     if not api_key:
         return None
     try:
+        import httpx
         from openai import OpenAI
     except ImportError:
         return None
-    return OpenAI(api_key=api_key)
+    # 맨 float 을 주면 connect 까지 덮여 연결 실패가 5초에서 이 값으로 늘어난다 (config.py)
+    return OpenAI(
+        api_key=api_key,
+        timeout=httpx.Timeout(timeout, connect=OPENAI_CONNECT_TIMEOUT_SEC),
+    )
 
 
 # 비용 로그 한 줄. **`image_vision` 과 같은 `stage="vision"` 을 쓴다** — 상한(`max_vision_
@@ -243,7 +248,7 @@ def _call_vision(
         )
         return None
 
-    client = _make_client(cfg.openai_api_key)
+    client = _make_client(cfg.openai_api_key, cfg.openai_timeout_sec)
     if client is None:
         ctx.warn("OPENAI_API_KEY가 없어 표를 로컬 추출로 처리했습니다.")
         return None
