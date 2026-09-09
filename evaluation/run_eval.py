@@ -108,8 +108,16 @@ def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
     # 세트의 구성을 먼저 보여준다. 부정 예시는 아래 span 검증을 통째로 건너뛰므로
     # (gold_spans 가 비어 있어 반복문이 안 돈다) 그것이 몇 건인지가 안 보이면
     # "왜 검사가 이것밖에 안 나왔나" 를 알 수 없다
+    #
+    # **부분 답을 따로 찍는다**(2026-09-09) — 갈래를 열고 이 줄이 안 보여주면 «긍정 18» 로만
+    # 읽혀 갈래가 없는 것과 같다. 부분 답은 `answerable` 이 참이라 긍정 안에 숨는다
     negatives = sum(1 for item in qa.items if not item.answerable)
-    print(f"  세트 {len(qa.items)}건 — 정답 있음 {len(qa.items) - negatives} · 부정 예시 {negatives}")
+    partials = sum(1 for item in qa.items if item.partial)
+    line = (
+        f"  세트 {len(qa.items)}건 — 정답 있음 {len(qa.items) - negatives - partials}"
+        f" · 부정 예시 {negatives}"
+    )
+    print(f"{line} · 부분 답 {partials}" if partials else line)
 
     groups = sorted({item.source_doc for item in qa.items})
     corpus = build_corpus(groups, refresh=refresh)

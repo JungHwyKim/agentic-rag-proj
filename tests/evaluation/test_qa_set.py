@@ -358,8 +358,8 @@ def test_moving_a_string_into_must_not_claim_is_caught_by_the_stamp():
     assert bundled(kept) == bundled(moved), "묶은 지문은 이 편집을 못 잡는다"
 
 
-# **골든 답변 라벨의 도장도 `--check` 가 본다**(2026-08-29). 도장이 셋인 것은 되풀이가 아니라
-# 사람이 판단한 것이 셋이기 때문이다 — 여기서는 «필수 사실» 쪽을 고치고 도장을 안 고친 것을 잡는다
+# **골든 답변 라벨의 도장도 `--check` 가 본다**(2026-08-29). 도장이 넷인 것은 되풀이가 아니라
+# 사람이 판단한 것이 넷이기 때문이다 — 여기서는 «필수 사실» 쪽을 고치고 도장을 안 고친 것을 잡는다
 def test_the_must_stamp_breaks_when_the_label_changes():
     import dataclasses
 
@@ -407,7 +407,7 @@ def test_a_negative_may_not_carry_golden_answer_labels():
 def test_a_pending_label_is_not_a_problem():
     item = QAItem(
         query_id="x-14", query="질문", source_doc="시행령-개정안-안내서",
-        gold_spans=["어떤 정답 문장"], gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로쪽": 1},
+        gold_spans=["어떤 정답 문장"], gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로": 1},
         reviewed_by="pending", must_not_claim=["아직 안 읽은 항목"],
     )
 
@@ -431,3 +431,177 @@ def test_must_not_claim_records_carry_their_own_stamp():
         assert item.must_not_claim_reviewed_hash == expected, (
             f"{item.query_id}: 문구가 바뀌었다 — 다시 읽고 도장을 갱신하거나 pending 으로 되돌려라"
         )
+
+
+# ── 산문 골든 `reference` (17회차) ──────────────────────────────────────────
+#
+# **넷째 독립 도장이다.** 같은 payload 에 넣었으면 `reviewed_by` 가 `human` 인 103건
+# (사람 43 + 자동 60)이 전부 깨져 재검수를 강요한다 — `must_*` 가 이미 피한 자리다.
+
+
+# 칸을 더한 것이 **기존 도장을 한 건도 안 건드린다.** 이 테스트가 이 축의 전제다 —
+# 깨지면 골든 답변 작업이 아니라 세트 전체가 재검수 대상이 된다
+def test_reference_does_not_disturb_the_span_review_stamp():
+    import dataclasses
+
+    for path in (QA_SET_PATH, HUMAN_SET_PATH):
+        items = load_qa_set(path).items
+        stamped = [i for i in items if i.reviewed_by == "human"]
+        assert stamped, f"{path.name}: 도장 찍힌 레코드가 없다 — 이 검사가 무의미해진다"
+
+        with_reference = [
+            dataclasses.replace(i, reference="사람이 쓴 산문 골든입니다.") for i in stamped
+        ]
+        problems = [p for p in validate_items(with_reference) if "질의나 정답이 바뀌었다" in p]
+        assert not problems, f"{path.name}: reference 를 달았더니 span 도장이 깨졌다 — {problems[:2]}"
+
+
+# 라벨을 고치고 도장을 안 고친 것을 잡는다. **셋과 독립이라 이것만 움직인다** —
+# 묶였다면 여기서 네 도장이 함께 깨져 무엇이 바뀌었는지 못 읽는다
+def test_the_reference_stamp_moves_alone():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    base = next(i for i in items if i.must_points and i.must_reviewed_by == "human")
+    labeled = dataclasses.replace(
+        base,
+        reference="원래 쓴 산문 골든입니다.",
+        reference_reviewed_by="human",
+        reference_reviewed_hash=content_hash(base.query, ["원래 쓴 산문 골든입니다."]),
+    )
+    assert not validate_items([labeled])
+
+    tampered = dataclasses.replace(labeled, reference="몰래 바꾼 산문 골든입니다.")
+    problems = validate_items([tampered])
+    assert len(problems) == 1, problems
+    assert "산문 골든 라벨이 바뀌었다" in problems[0]
+
+    fixed = dataclasses.replace(
+        tampered, reference_reviewed_hash=content_hash(tampered.query, [tampered.reference])
+    )
+    assert not validate_items([fixed])
+
+
+# **부정 예시에는 안 단다.** 부정의 골든은 «기권» 이고 negative 버킷이 이미 잰다 —
+# 산문으로 한 번 더 적으면 *«답할 수 없다»* 가 두 곳에 적히고 한쪽이 조용히 낡는다
+def test_a_negative_may_not_carry_a_reference():
+    problems = validate_items([_negative(reference="이 질문에는 답할 수 없습니다.")])
+    assert any("골든 답변 라벨이 달려 있다" in p for p in problems)
+
+
+# 오타 난 키는 여전히 막힌다. **필드를 더하면 이 가드가 헐거워지기 쉽다** —
+# dataclass 를 먼저 고치고 jsonl 을 나중에 고치는 순서를 강제하는 것이 이 검사다
+def test_a_typo_in_the_reference_field_is_still_rejected():
+    with pytest.raises(ValueError, match="모르는 키"):
+        QAItem.from_json(
+            {
+                "query_id": "x-90",
+                "query": "질문",
+                "source_doc": "시행령-개정안-안내서",
+                "gold_spans": ["어떤 정답 문장"],
+                "referance": "오타 난 키",
+            }
+        )
+
+
+# 같은 문자열을 `must_points` ↔ `reference` 로 **옮긴 편집**이 잡히나.
+# 뜻이 크게 달라지는 편집인데(담아야 할 것 ↔ 답 자체) 도장을 묶었으면 안 걸린다
+def test_moving_a_string_between_reference_and_must_points_is_caught():
+    text = "행정정보 데이터세트 관리기준표를 시스템별로 작성한다"
+    common = dict(
+        query_id="x-91",
+        query="질문",
+        source_doc="시행령-개정안-안내서",
+        gold_spans=["어떤 정답 문장"],
+        gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로": 1},
+    )
+    as_point = QAItem(
+        **common,
+        must_points=[text],
+        must_reviewed_by="human",
+        must_reviewed_hash=content_hash("질문", [text]),
+    )
+    as_reference = QAItem(
+        **common,
+        reference=text,
+        reference_reviewed_by="human",
+        reference_reviewed_hash=content_hash("질문", [text]),
+    )
+
+    # 각각은 제 도장으로 성립한다
+    assert not [p for p in validate_items([as_point]) if "라벨이 바뀌었다" in p]
+    assert not [p for p in validate_items([as_reference]) if "라벨이 바뀌었다" in p]
+
+    # 도장을 그대로 둔 채 옮기면 **양쪽 다** 깨진다 — 묶었으면 payload 가 같아 안 걸린다
+    moved = QAItem(
+        **common,
+        reference=text,
+        reference_reviewed_by="human",
+        reference_reviewed_hash=content_hash("질문", []),
+        must_reviewed_by="human",
+        must_reviewed_hash=content_hash("질문", [text]),
+    )
+    problems = validate_items([moved])
+    assert any("필수 사실 라벨이 바뀌었다" in p for p in problems), problems
+    assert any("산문 골든 라벨이 바뀌었다" in p for p in problems), problems
+
+
+# ── 부분 답 `partial` (17회차 뒤, 2026-09-09) ────────────────────────────────
+#
+# 긍정/부정 둘로는 안 담기는 질의가 실재한다 — 문서가 절반만 답하는 것들이다.
+# 긍정으로 두면 골든이 질문에 답한 척하고, 부정으로 두면 답한 절반을 버린다.
+
+
+def _partial(**over):
+    base = dict(
+        query_id="p-01",
+        query="어떤 처벌을 받게 되나요?",
+        source_doc="시행령-개정안-안내서",
+        gold_spans=["손상시킨 자는 벌칙 대상이다"],
+        gold_page={"hwpx": 1, "pdf": 1, "hwpx-가로": 1},
+        partial=True,
+        must_not_claim=["구체적 처벌 내용"],
+    )
+    base.update(over)
+    return QAItem(**base)
+
+
+# **절반은 답하므로 긍정이다.** 통째로 없으면 그건 부분 답이 아니라 부정이다 —
+# 둘을 섞으면 「답이 없다」와 「답이 반만 있다」가 같은 칸에 앉는다
+def test_a_partial_answer_stays_answerable():
+    assert not validate_items([_partial()])
+
+    problems = validate_items([_partial(answerable=False, gold_spans=[], gold_page={})])
+    assert any("partial 인데 answerable 이 거짓이다" in p for p in problems), problems
+
+
+# **무엇이 비는지를 적어야 갈래가 관측이 된다.** 안 적으면 이름만 남고 «어디가 비었나» 를
+# 아무도 못 되짚는다 — 부정 예시가 라벨을 못 다는 것의 짝이다(저쪽은 적을 것이 없다)
+def test_a_partial_answer_must_say_what_is_missing():
+    problems = validate_items([_partial(must_not_claim=[])])
+    assert any("must_not_claim 이 비었다" in p for p in problems), problems
+
+
+# **도장 넷 어느 것도 안 건드린다** — `answerable` 과 같은 자리라 지문 밖이다.
+# 켰다고 사람이 정답을 다시 볼 이유가 없다
+def test_partial_does_not_disturb_any_stamp():
+    import dataclasses
+
+    items = load_qa_set(HUMAN_SET_PATH).items
+    base = next(i for i in items if i.must_not_claim and i.reviewed_by == "human")
+    flipped = dataclasses.replace(base, partial=not base.partial)
+
+    assert not [p for p in validate_items([flipped]) if "바뀌었다" in p]
+
+
+# 커밋된 세트가 이 갈래를 실제로 담고 있고 계약을 지키나. **0건이면 이 검사가 아무것도 안
+# 보고 있다** — 갈래를 열어 놓고 아무도 안 쓰는 상태를 잡는 자리다
+def test_the_committed_set_carries_partial_answers():
+    items = load_qa_set(HUMAN_SET_PATH).items
+    partial = [i for i in items if i.partial]
+    assert partial, "부분 답이 하나도 없다 — 갈래만 열고 안 쓰고 있다"
+
+    for item in partial:
+        assert item.answerable, f"{item.query_id}: 부분 답인데 부정으로 적혀 있다"
+        assert item.must_not_claim, f"{item.query_id}: 무엇이 비는지가 안 적혀 있다"
+        assert item.gold_spans, f"{item.query_id}: 답한 절반의 근거가 없다"
