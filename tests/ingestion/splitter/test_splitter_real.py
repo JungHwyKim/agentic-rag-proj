@@ -23,9 +23,9 @@ from rag_pipeline.schemas.document import ElementType
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 
 AI_GUIDE_PDF = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드.pdf"
-# 2026-08-23 에 들어온 한컴 변환본. 2026-08-20 에 뺀 옛 HWPX 판을 대신한다.
+# 2026-08-23 에 들어온 한컴 변환본. 2026-08-20 에 뺀 옛 HWPX 파일을 대신한다.
 # **옛 값(요소 721 / 제목 54 / 청크 47)과 대조하지 말 것 — 다른 파일이다.**
-# 옛 판도 fixtures 에 남아 있지만 cleaner/test_real.py 의 머리말 테스트 전용이다
+# 옛 파일도 fixtures 에 남아 있지만 cleaner/test_real.py 의 머리말 테스트 전용이다
 AI_GUIDE_HWPX_FIXED = "[DNA+_2019-5]_공공기관_신뢰가능_AI_구현_실용가이드_fixed.hwpx"
 DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).hwpx"
 
@@ -33,7 +33,7 @@ DECREE_HWPX = "시행령 개정안 안내서(정보시스템의무사항알림).
 # 양쪽을 함께 잠근다. 승격된 제목 수가 곧 섹션 경계 수다
 EXPECTED = {
     AI_GUIDE_PDF: {"elements": 509, "titles": 74, "chunks": 70},
-    # 변환본은 표가 0개라 청크가 전부 본문이다. PDF 판과 청크 수가 68 / 70 으로 비슷해
+    # 변환본은 표가 0개라 청크가 전부 본문이다. PDF 파일과 청크 수가 68 / 70 으로 비슷해
     # 보이지만 구성이 다르다 — 저쪽 70 에는 표 청크 10개가 들어 있다.
     #
     # **이 문서만 잔챙이 청크 상한을 따로 준다**(8, 기본 10% 규칙으로는 6). 느슨하게 푸는
@@ -41,7 +41,7 @@ EXPECTED = {
     # 두 결함에서 곧바로 나온다: 3개는 쪽이 1로 붕괴해 cleaner 가 못 지운 머리말·꼬리말
     # (`공공기관 신뢰가능 AI 구현 실용가이드` / `DNA플러스 2019`)이고, 4개는 [붙임]의
     # 위험도 2x2 상자가 표가 아니라 각각 별개 도형이라 따로 떨어진 것이다.
-    # 옛 HWPX 판은 0/47 · PDF 판은 6/70 이라 **이 문서의 변환본에서만 넘친다**
+    # 옛 HWPX 파일은 0/47 · PDF 파일은 6/70 이라 **이 문서의 변환본에서만 넘친다**
     AI_GUIDE_HWPX_FIXED: {"elements": 856, "titles": 99, "chunks": 68, "tiny_max": 8},
     DECREE_HWPX: {"elements": 285, "titles": 27, "chunks": 47},
 }

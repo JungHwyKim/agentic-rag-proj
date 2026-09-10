@@ -40,7 +40,7 @@ qdrant 의 sparse 벡터로 얹으면 `VectorStore` Protocol 과 컬렉션 스�
 ## 왜 `k1`·`b` 를 설정으로 안 여나
 
 `rank_bm25` 기본값(1.5 / 0.75)을 쓴다. 이 코퍼스에서 무엇이 나은지 잰 적이 없어 지금
-열면 근거 없는 값이 `.env` 로 굳는다. 잴 자[尺]가 생기면 그때 더한다.
+열면 근거 없는 값이 `.env` 로 굳는다. 잴 방법이 생기면 그때 더한다.
 """
 
 from __future__ import annotations

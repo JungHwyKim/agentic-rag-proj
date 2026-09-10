@@ -1,15 +1,15 @@
 """채점자가 «미지지» 를 **어느 세기의 오류부터** 내는지 잰다. `answer_eval` 이 자기 자신을
 검사하는 두 번째 자리다.
 
-## 왜 따로 있나 — «재는 일» 과 «자[尺]를 검사하는 일» 은 다르다
+## 왜 따로 있나 — «재는 일» 과 «재는 도구를 검사하는 일» 은 다르다
 
-`answer_eval` 은 파이프라인을 재고, 여기는 **그 자[尺]를 잰다.** 같은 파일에 `--probe` 로
-붙이면 프로브가 본판의 회계 게이트를 우회하거나 오염시키는 자리가 생긴다 —
+`answer_eval` 은 파이프라인을 재고, 여기는 **그 도구를 잰다.** 같은 파일에 `--probe` 로
+붙이면 프로브가 본 실행의 회계 게이트를 우회하거나 오염시키는 자리가 생긴다 —
 `verdicts.py` · `rerank_diff.py` · `retry_diff.py` 와 같은 «이미 잰 것을 읽는 도구» 계보다.
 
 ## 표본이 0이었던 것이 아니라 **해상도**를 몰랐다
 
-첫 판(2026-08-28, 사람 43건)은 본판 28건이 전부 `supported` 로 나와 *"미지지를 제대로 내는가의
+첫 실행(2026-08-28, 사람 43건)은 원래 답변 28건이 전부 `supported` 로 나와 *"미지지를 제대로 내는가의
 표본이 0"* 으로 닫혔다. 그런데 **음성 대조군이 이미 `unsupported` 를 28건 냈다** — 즉
 «채점자가 미지지를 낼 수 있나» 는 이미 28/28 로 답이 나와 있다. 못 답한 것은
 **«어느 세기의 오류부터 잡나»** 이고, 「통째로 남의 근거」(대조군)와 「값 하나 바꿔치기」
@@ -25,12 +25,12 @@
 2단은 문장 하나가 통째로 근거 밖이라 문장 단위로 대조하면 반드시 걸린다 — 음성 대조군과
 같은 «구성으로 만든 known-bad» 이고, 그래서 게이트가 될 수 있다. 1단은 **문장의 나머지가
 근거와 같아** 놓칠 여지가 구조적으로 있다. 거기에 통과선을 두면 그 숫자의 출처가 없다 —
-이 저장소가 `_MARK_AREA_RATIO` 와 되붙이기 12pt 를 **분포의 틈**에서만 고른 잣대와 어긋난다.
+이 저장소가 `_MARK_AREA_RATIO` 와 되붙이기 12pt 를 **분포의 틈**에서만 고른 기준과 어긋난다.
 그래서 1단은 관측값이고, 못 잡은 건은 `--wrong` 으로 사람이 읽는다.
 
 ## 변조는 **결정적**이어야 한다
 
-LLM 으로 변조본을 만들면 자연스럽지만 (a) 다시 돌리면 다른 판이 되고 (b) 끼워 넣은 값이
+LLM 으로 변조본을 만들면 자연스럽지만 (a) 다시 돌리면 다른 변조본이 되고 (b) 끼워 넣은 값이
 우연히 근거에 있으면 *"정답은 unsupported"* 라는 **라벨 자체가 거짓**이 된다. 그래서 규칙으로
 만들고, 만든 값이 근거 전체에 없는지 `squash()` 로 확인한다 — 공백을 지우고 보는 이유는
 PDF 가 한국어 낱말 사이 공백을 잃기 때문이다(`evaluation/scoring.py`).
@@ -40,7 +40,7 @@ PDF 가 한국어 낱말 사이 공백을 잃기 때문이다(`evaluation/scorin
 
 ## 저장된 `abstained` 를 **안 믿는다**
 
-디스크의 리포트는 `is_abstention()` 이 인용 번호를 걷어내기 **전** 판일 수 있다(첫 판이
+디스크의 리포트는 `is_abstention()` 이 인용 번호를 걷어내기 **전** 버전일 수 있다(첫 실행이
 그랬다 — 판정 30 · 대조군 `supported` 2 로 스스로 무효를 선언한 회차다). 기권은 판정 대상이
 아니므로 여기서 `is_abstention()` 을 **다시 먹인다.**
 
@@ -138,7 +138,7 @@ _DOCUMENT_PATTERN = r"[「『][^」』\n]{2,40}[」』]"
 _FAKE_DOCUMENTS: tuple[str, ...] = ("전자기록물표준화법", "기록물보존특례법", "공공데이터관리법")
 
 # 2단에서 덧붙일 문장들. 날짜·기관·금액·기한을 한 문장에 담아 **근거로는 확인할 길이 없게**
-# 만든다. 인용 번호는 일부러 안 붙인다 — 붙이면 인용 축을 건드리는데 이 판은 지지만 잰다
+# 만든다. 인용 번호는 일부러 안 붙인다 — 붙이면 인용 축을 건드리는데 이 실행은 지지만 잰다
 EXTRA_SENTENCES: tuple[str, ...] = (
     "이 절차는 2029년 3월 1일부터 한국기록평가원의 사전 승인을 받아 시행됩니다.",
     "위반 시 과태료 750만원이 부과되며 처리 기한은 영업일 기준 17일입니다.",
@@ -258,7 +258,7 @@ def mutate_value(answer: str, chunks: list[RetrievedChunk]) -> tuple[str, str] |
                 return mutated, f"{original} -> {replacement}"
 
     # **낫표 축이 기관명보다 먼저다** — 확인 단위가 이름 통째라, 우연히 근거에 있어 라벨이
-    # 거짓이 될 위험이 맨 이름보다 작다(숫자 축을 그 순서로 둔 것과 같은 잣대다)
+    # 거짓이 될 위험이 맨 이름보다 작다(숫자 축을 그 순서로 둔 것과 같은 기준이다)
     for match in re.finditer(_DOCUMENT_PATTERN, answer):
         original = match.group(0)
         opener, closer = original[0], original[-1]
@@ -501,7 +501,7 @@ def probe(
         "source_rewrite_profile": source_meta.get("rewrite_profile"),
         "source_generation_profile": source_meta.get("generation_profile"),
         # **프로필 이름만으로는 생성 조건이 안 잡힌다** — `SYSTEM_PROMPT` 를 고쳐도 이름은
-        # `prod` 그대로다. 옛 리포트에는 이 칸이 없어 `None` 이고 그것이 곧 «그전 판» 이다
+        # `prod` 그대로다. 옛 리포트에는 이 칸이 없어 `None` 이고 그것이 곧 «그전 버전» 이다
         "source_generation_prompt_version": source_meta.get("generation_prompt_version"),
         "probed_queries": len({row.query_id for row in rows}),
         "abstained": abstained,
@@ -565,7 +565,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="답변을 일부러 틀리게 고쳐 채점자가 그것을 미지지로 잡는지 잰다"
     )
-    # **경로로 직접 받는다** — 이름 규칙으로 유추하면 리포트 이름이 바뀔 때 옛 판을 못 연다
+    # **경로로 직접 받는다** — 이름 규칙으로 유추하면 리포트 이름이 바뀔 때 옛 실행을 못 연다
     parser.add_argument("--report", required=True, help="answer_eval 이 남긴 리포트 JSON 경로")
     # **기본이 `answer_eval` 과 다르다** — 저쪽은 `off` 가 기본이고 여기는 채점자가 있어야 한다
     parser.add_argument("--judge", default=DEFAULT_PROBE_JUDGE_PROFILE)

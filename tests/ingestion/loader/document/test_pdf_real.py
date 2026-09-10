@@ -3,8 +3,8 @@
 합성 문서는 "규칙이 도는가"에만 답한다. **이 규칙이 실제로 필요한가**는 실파일만 보여준다 —
 시행령 안내서 24~25쪽에 걸친 67행 표가 그 근거이고, 사용자가 원본과 대조해 잡아낸 결함이다.
 
-기대값은 **같은 문서 HWPX 판과 셀 단위로 대조해** 얻었다(2026-08-21). 상수로 박아 두는 이유는
-HWPX 판이 없는 환경에서도 이 규칙이 검증되게 하려는 것이다.
+기대값은 **같은 문서 HWPX 파일과 셀 단위로 대조해** 얻었다(2026-08-21). 상수로 박아 두는 이유는
+HWPX 파일이 없는 환경에서도 이 규칙이 검증되게 하려는 것이다.
 
 tests/fixtures/ 에 실제 파일이 있을 때만 돌고 없으면 조용히 건너뛴다.
 """
@@ -23,10 +23,10 @@ from rag_pipeline.schemas.document import ElementType
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
-# 이름이 겹친다 — 가로쪽 판 이름이 이 이름을 접두사로 갖는다. 조각이 아니라 전체를 적는다
+# 이름이 겹친다 — 가로쪽 파일 이름이 이 이름을 접두사로 갖는다. 조각이 아니라 전체를 적는다
 DECREE = "시행령 개정안 안내서(정보시스템의무사항알림)"
 
-# 24~25쪽에 걸친 표. 사람이 확인한 값이고 HWPX 판 67행과 셀 단위로 맞다
+# 24~25쪽에 걸친 표. 사람이 확인한 값이고 HWPX 파일 67행과 셀 단위로 맞다
 DECREE_SPAN_TABLE_ROWS = 67
 DECREE_SPAN_TABLE_PAGES = (24, 25)
 # 쪽 경계가 이 셀을 가로질러 24쪽 `업무정보` + 25쪽 `(4)` 로 갈려 있었다.
@@ -84,7 +84,7 @@ def _span_table(config: IngestConfig) -> list[list[str]]:
     pytest.fail(f"{start}~{end}쪽에 걸친 표를 못 찾았습니다.")
 
 
-# 쪽을 가로지르는 표가 하나로 합쳐지고 행 수가 HWPX 판과 같아야 한다.
+# 쪽을 가로지르는 표가 하나로 합쳐지고 행 수가 HWPX 파일과 같아야 한다.
 # 33 + 35 - 되풀이된 헤더 1 = 67 이다
 def test_decree_span_table_row_count(structure_only_config: IngestConfig) -> None:
     assert len(_span_table(structure_only_config)) == DECREE_SPAN_TABLE_ROWS

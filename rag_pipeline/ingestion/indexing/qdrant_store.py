@@ -158,7 +158,7 @@ class QdrantStore:
     #
     # **한 번 지웠다가 되살린 API 다.** 2026-08-24 다중 임베더 융합이 쓰던 것을 25일에
     # 되돌리며 지웠는데, 그때 근거가 *"호출부가 0개인 죽은 축"* 이었다. 그림자 색인이
-    # 살아 있는 호출부를 만들어 사실이 바뀌었다 — 잣대는 그대로다
+    # 살아 있는 호출부를 만들어 사실이 바뀌었다 — 기준은 그대로다
     def sibling_for(self, embedding: EmbeddingConfig) -> QdrantStore:
         return QdrantStore(self._config, embedding, shares_client_with=self)
 
@@ -334,7 +334,7 @@ class QdrantStore:
     # 색인된 문서 목록. 문서당 (document_id, source_name, chunk_count) 하나로 접는다.
     #
     # **Protocol(base.py)에는 안 올린다.** 저장소 중립을 지키는 쪽이 그것이고, 두 번째
-    # 구현체가 실재할 때 올린다 (.claude/wiki/plan_log/검색-생성.md 의 "새 추상화를 안 만든다"와 같은 잣대).
+    # 구현체가 실재할 때 올린다 (.claude/wiki/plan_log/검색-생성.md 의 "새 추상화를 안 만든다"와 같은 기준).
     # 그래서 이 메서드는 backend 가 QdrantStore 를 구체 타입으로 아는 유일한 자리다.
     #
     # **컬렉션이 없으면 search() 와 달리 빈 리스트다.** 저쪽은 "색인한 적 없음"과 "질의가 안
@@ -436,7 +436,7 @@ class QdrantStore:
     # point id 로 골라 온다. **찾은 것만 돌려주므로 길이가 입력보다 짧을 수 있다** —
     # 그 차이가 곧 "그 사이 지워졌다"는 신호라, 없는 것을 빈 자리로 채우면 그 신호가 사라진다.
     #
-    # **Protocol(base.py)에는 안 올린다** — list_documents() 와 같은 잣대이고, 소비자가
+    # **Protocol(base.py)에는 안 올린다** — list_documents() 와 같은 기준이고, 소비자가
     # retriever 가 아니라서다(그쪽은 *"VectorStore Protocol 만 받는다"* 가 확정이다).
     # 벡터는 안 받는다. 이 메서드의 소비자는 텍스트만 본다
     def fetch_by_ids(self, ids: list[str]) -> list[StoredChunk]:

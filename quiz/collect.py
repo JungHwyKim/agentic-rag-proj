@@ -313,7 +313,7 @@ def parse_file(path: Path, warnings: list[str]) -> list[Question]:
     return questions
 
 
-# 지난 판에서 지적이 있었던 문항 id 를 읽는다. **`style` 은 안 센다** — 모드에 따라 있을
+# 지난 회차에서 지적이 있었던 문항 id 를 읽는다. **`style` 은 안 센다** — 모드에 따라 있을
 # 수도 없을 수도 있는 칸이라, 세면 구술로 푼 문항만 약한 것으로 몰린다
 def weak_ids(log_path: Path | None = None) -> set[str]:
     path = log_path or QUIZ_LOG_PATH
@@ -418,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file", default=None, help="이 단원만 (파일 stem 의 일부)")
     parser.add_argument("--star", action="store_true", help="★ 문항만")
     parser.add_argument("--ids", default=None, help="이 id 만 (쉼표로 구분)")
-    parser.add_argument("--weak", action="store_true", help="지난 판에 지적이 있었던 문항만")
+    parser.add_argument("--weak", action="store_true", help="지난 회차에 지적이 있었던 문항만")
     parser.add_argument("--count", type=int, default=None, help="앞에서 N개만")
     parser.add_argument("--seed", type=int, default=None, help="이 씨앗으로 섞는다")
     parser.add_argument("--answers", action="store_true", help="모범답안·꼬리질문을 싣는다")

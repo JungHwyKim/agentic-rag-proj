@@ -140,7 +140,7 @@ def test_no_marker_when_the_shadow_is_complete(wired):
 
 
 # **그림자 조회가 실패해도 목록은 보여야 한다.** 여기서 죽으면 비교용 부가 기능 때문에
-# 화면의 본 기능이 죽는다 — 그림자 실패를 삼키기로 한 판단과 같은 잣대다
+# 화면의 본 기능이 죽는다 — 그림자 실패를 삼키기로 한 판단과 같은 기준이다
 def test_list_survives_a_broken_shadow(wired, mocker):
     primary = wired(documents=[{"document_id": "가.pdf", "source_name": "가.pdf", "chunk_count": 3}])
     mocker.patch.object(primary.sibling, "list_documents", side_effect=RuntimeError("잠금"))

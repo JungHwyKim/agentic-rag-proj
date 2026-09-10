@@ -58,7 +58,7 @@ def test_empty_findings_are_written_as_empty_lists():
 
 
 # **쓰기 모드의 `style` 은 `[]` 가 아니라 `null` 이다.** 빈 목록은 «봤는데 없었다» 이고
-# null 은 «안 봤다» 라 뜻이 다르다 — 섞이면 쓰기로만 연습한 판이 «말투는 문제없었다» 가 된다
+# null 은 «안 봤다» 라 뜻이 다르다 — 섞이면 쓰기로만 연습한 회차가 «말투는 문제없었다» 가 된다
 def test_write_mode_records_style_as_null_not_empty():
     assert row(mode="write")["style"] is None
     assert row(mode="speak")["style"] == []

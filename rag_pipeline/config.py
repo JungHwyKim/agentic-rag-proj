@@ -115,7 +115,7 @@ class ContentRoutingConfig(BaseSettings):
     # 이 크기(px) 미만 이미지는 로고·아이콘·구분선으로 보고 건너뛴다
     min_image_width: int = 100
     min_image_height: int = 100
-    # 쪽 위에 **표시되는** 크기(pt) 기준. 위 픽셀 자[尺]와 서로를 대신하지 못한다 —
+    # 쪽 위에 **표시되는** 크기(pt) 기준. 위 픽셀 기준과 서로를 대신하지 못한다 —
     # 12.8x15.2pt 장식 글리프가 115x127px 로 저장돼 픽셀 필터를 그냥 통과한다(실측).
     # 20pt 는 "16.7 이하가 전부 OCR 0~1자"에서, 8:1 은 진짜 내용 최대 5.9:1 과 띠 최소
     # 10.0:1 사이 1.7배 틈에서 나왔다. 두 신호가 각자 다른 것을 잡는다 — 20pt 는 정사각
@@ -365,7 +365,7 @@ class RerankConfig(BaseSettings):
     cohere_timeout_sec: float = 60.0
 
     # 어느 구현체로 다시 정렬하나. **구현체가 셋이라 여는 설정이다** — `embedding_provider`
-    # 와 같은 잣대이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
+    # 와 같은 기준이고, 하나뿐일 때는 합법값이 하나뿐인 죽은 설정이라 안 만든다.
     # `local` 은 sentence-transformers CrossEncoder, `openai` 는 LLM 채점기(listwise),
     # `cohere` 는 전용 리랭킹 API 다 — **뒤 둘은 같은 '유료'가 아니라 종류가 다르다.**
     # **키가 없어도 도는 갈래라** tests/conftest.py 의 offline_config 가 이 값을 못 박는다
@@ -431,7 +431,7 @@ class RewriteConfig(BaseSettings):
     rewrite_model: str | None = None
 
     # 재작성 질의의 검색 결과를 원 질의와 어떻게 합치나. **합법값 둘이 실재해 죽은 설정이
-    # 아니다** — `rerank_provider` 와 같은 잣대다.
+    # 아니다** — `rerank_provider` 와 같은 기준이다.
     #
     # `fuse` 는 원 질의 갈래를 남기고 재작성 갈래를 RRF 에 더한다(7회차 로드맵).
     # `replace` 는 재작성 질의로만 검색한다 — **21회차 프로브가 잰 것이 이쪽이다**
@@ -479,7 +479,7 @@ class GenerationConfig(BaseSettings):
     # **여기가 제일 먼저 잘릴 자리다** — 답변 생성이 이 파이프라인에서 제일 긴 호출이다
     openai_timeout_sec: float = 60.0
 
-    # **임시값이고 실측 전이다.** 답변 품질을 재는 자[尺]가 아직 없다 — evaluation/ 의 60건
+    # **임시값이고 실측 전이다.** 답변 품질을 재는 방법이 아직 없다 — evaluation/ 의 60건
     # 세트는 gold_spans 가 정답 "문자열"이라 검색을 재지 생성을 못 잰다(.claude/wiki/plan_log/backend.md).
     # Vision 과 같은 모델을 쓰는 것은 우연이 아니라 싼 쪽에서 시작한다는 같은 판단이다
     generation_model: str = "gpt-4.1-mini"
@@ -525,12 +525,12 @@ class AnswerCacheConfig(BaseSettings):
 
     # 무엇을 "같은 질문"으로 보나. **임계값과 다른 축이라 따로 둔다.**
     #
-    # `semantic` 은 질문 벡터의 유사도를 재고 `answer_cache_threshold` 가 그 자[尺]다.
+    # `semantic` 은 질문 벡터의 유사도를 재고 `answer_cache_threshold` 가 그 기준이다.
     # `exact` 는 **정규화한 문자열이 같은가**만 본다 — `cache_point_id_for()` 가 NFC + 공백
-    # 정규화 uuid5 라 같은 질문이 늘 같은 자리이고, 그래서 자[尺]가 아예 필요 없다.
+    # 정규화 uuid5 라 같은 질문이 늘 같은 자리이고, 그래서 기준이 아예 필요 없다.
     #
-    # **`threshold=1.0` 으로 흉내 내지 않는 이유**: 임계값은 *같은 벡터인가*를 재는 자인데
-    # 완전 일치가 묻는 것은 *같은 문자열인가*다. 한 자로 둘을 재면 어느 쪽이 발화했는지
+    # **`threshold=1.0` 으로 흉내 내지 않는 이유**: 임계값은 *같은 벡터인가*를 재는 값인데
+    # 완전 일치가 묻는 것은 *같은 문자열인가*다. 한 기준으로 둘을 재면 어느 쪽이 발화했는지
     # 코드가 못 말하고, 부동소수라 보장도 없다(실측 노름 0.999562~1.000417).
     #
     # **`exact` 는 임계값 없이도 켜진다** — 이 축에는 정할 값이 없기 때문이다.
@@ -765,7 +765,7 @@ class RuntimeConfig(BaseSettings):
     # **기본을 낮추지 않는 것이 결정이다.** `.claude/wiki/verify_log/` 의 모든 벽시계와
     # `regression/baseline.json` 이 8스레드에서 잰 값이라, 기본을 바꾸면 과거 수치가
     # **조용히 비교 불가**가 된다. `embedding_device` 가 자동 감지를 안 하는 것과 같은
-    # 잣대이고, 발열을 줄이려면 사용자가 `.env` 에서 명시로 내린다.
+    # 기준이고, 발열을 줄이려면 사용자가 `.env` 에서 명시로 내린다.
     #
     # **GPU 로 갔다고 이 축이 죽지 않는다** — CPU 에 남는 갈래가 셋이다:
     # ① 재현성 때문에 일부러 `cpu` 를 못 박은 `evaluation/config.py` 의 프로필
@@ -801,19 +801,19 @@ class WebSearchConfig(BaseSettings):
     tavily_timeout_sec: float = 60.0
 
     # 몇 건을 받아오나. `generation_top_k`(5)와 나란한 수로 뒀다 — **임시값이고 실측 전이다.**
-    # 웹 근거가 답변에 실리는 경로가 아직 없어(Router 가 이 도구를 안 고른다) 잴 자[尺]가 없다
+    # 웹 근거가 답변에 실리는 경로가 아직 없어(Router 가 이 도구를 안 고른다) 잴 방법이 없다
     web_search_max_results: int = 5
 
     # 검색 깊이. **합법값 둘이 크레딧을 갈라 죽은 설정이 아니다** — `rerank_provider`·
-    # `rewrite_mode` 와 같은 잣대이고, 구현체가 Tavily 하나뿐이라 `WEB_SEARCH_PROVIDER` 를
-    # **안 만든 것**이 그 잣대의 반대쪽 사례다. `advanced` 는 같은 질의에 크레딧을 더 쓴다
+    # `rewrite_mode` 와 같은 기준이고, 구현체가 Tavily 하나뿐이라 `WEB_SEARCH_PROVIDER` 를
+    # **안 만든 것**이 그 기준의 반대쪽 사례다. `advanced` 는 같은 질의에 크레딧을 더 쓴다
     web_search_depth: Literal["basic", "advanced"] = "basic"
 
     # **호출 캐시 설정이 없는 것이 결정이다.** 이 저장소의 캐시 셋(embedding·rerank·rewrite)은
     # 전부 *같은 입력이면 같은 출력* 이 참이라 내용 해시만으로 키가 서는데, 웹 검색은 그것이
     # **거짓**이다 — 결과가 시간에 따라 변하는 것이 이 도구의 존재 이유다. TTL 없이 붙이면
     # «최신을 찾는 도구가 옛 답을 준다» 가 에러 없이 생기고, TTL 값은 재야 정해지는데 잴
-    # 자[尺]가 없다(이 저장소의 임계값은 전부 분포의 틈에서 나왔다).
+    # 방법이 없다(이 저장소의 임계값은 전부 분포의 틈에서 나왔다).
     # 대가는 **테스트·탐색을 되풀이하면 크레딧이 그만큼 나간다**는 것이다
 
 

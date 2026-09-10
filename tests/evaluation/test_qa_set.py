@@ -295,7 +295,7 @@ def test_must_labels_are_read_from_json():
 
 # **13회차 결정을 잠그는 테스트다 — `must_*` 는 `reviewed_hash` 를 안 건드린다.**
 # 넣었으면 이미 검수된 43건의 도장이 전부 깨져 재검수를 강요하는데, 그것이
-# `.claude/wiki/plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 판이 못 견주게 된다"*
+# `.claude/wiki/plan_log/검색-생성.md` 56회차가 *"기대 열이 움직여 혼동행렬 여섯 실행이 못 견주게 된다"*
 # 며 라벨을 안 건드린 자리다. 도장이 둘인 것은 실수가 아니라 그 이유로 고른 것이다
 def test_must_labels_do_not_disturb_the_span_review_stamp():
     base = {

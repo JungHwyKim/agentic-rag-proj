@@ -8,7 +8,7 @@
 미들웨어는 반대쪽 문제가 있다: `Answer` 를 못 봐 **캐시 히트 여부를 못 실어 분자가 사라진다.**
 
 덤으로 진입점 셋이 HTTP 를 모르는 경계가 그대로 산다. 원본 보관이 backend 만의 일인 것과
-같은 잣대다(`Settings.originals_dir` 주석).
+같은 기준이다(`Settings.originals_dir` 주석).
 
 ## 정규화 키를 왜 캐시 것으로 쓰나
 
@@ -130,7 +130,7 @@ def normalize_source(raw: str | None) -> str:
 # 질의 하나를 로그에 한 줄 붙인다. **실패해도 아무것도 안 던진다** (모듈 docstring 참고).
 #
 # 라우트에 인라인하지 않은 이유는 테스트 이음새를 남기기 위해서다 — 외부 API 핸들러의
-# `_make_client()` 가 모듈 레벨 함수인 것과 같은 잣대다.
+# `_make_client()` 가 모듈 레벨 함수인 것과 같은 기준이다.
 def append_query_log(
     path: Path,
     query: str,

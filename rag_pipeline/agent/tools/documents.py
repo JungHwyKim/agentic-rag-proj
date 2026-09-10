@@ -4,7 +4,7 @@
 
 `QdrantStore.list_documents()` 를 그대로 부른다. 한 줄이라도 여기서 다시 짜면 사이드바
 (`backend/app/api/routes/query.py`)와 **두 번째 진실**이 생기고, 한쪽만 고쳐져도 에러가 안
-난다 — `RetrieverTool` 이 `retrieve()` 를 감싸기만 하는 것과 같은 잣대다.
+난다 — `RetrieverTool` 이 `retrieve()` 를 감싸기만 하는 것과 같은 기준이다.
 
 ## `getattr` 로 받는 것이 규약이다
 

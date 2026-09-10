@@ -5,7 +5,7 @@
 컬렉션은 설정(`IndexingConfig.collection_name`)에서 오고 store 인스턴스가 들고 있다.
 메서드마다 인자로 받으면 **합법값이 하나뿐인 인자**가 여섯 개 생긴다. embedding 이
 `provider` 설정을 "구현체가 하나면 합법값이 하나뿐인 죽은 설정"이라며 안 만든 것과 같은
-잣대다. 컬렉션을 실제로 여럿 쓸 요구가 생기면 그때 인자를 더한다.
+기준이다. 컬렉션을 실제로 여럿 쓸 요구가 생기면 그때 인자를 더한다.
 
 같은 이유로 `create_collection` / `delete_collection` / `collection_exists` 셋을 두지 않고
 `ensure_collection()` 하나만 둔다. 나머지 둘은 지금 부를 곳이 없다.
@@ -67,7 +67,7 @@ class VectorStore(Protocol):
 
     # 저장된 청크를 전부 훑는다. 벡터는 안 싣는다 — BM25 인덱스를 짓는 것이 소비자다.
     # **컬렉션이 없으면 예외가 아니라 빈 이터레이터다** (구현체 주석에 이유가 있다).
-    # 배치 크기를 인자로 받지 않는 것은 위 "왜 메서드가 collection 인자를 안 받나"와 같은 잣대다
+    # 배치 크기를 인자로 받지 않는 것은 위 "왜 메서드가 collection 인자를 안 받나"와 같은 기준이다
     def iter_chunks(self) -> Iterator[StoredChunk]: ...
 
     # 컬렉션에 든 point 수. 컬렉션이 없으면 0

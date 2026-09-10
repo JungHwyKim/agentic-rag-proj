@@ -1,4 +1,4 @@
-"""비용을 재는 자[尺]. `evaluation/`(품질) · `regression/`(회귀)와 나란한 자리다.
+"""비용을 재는 도구. `evaluation/`(품질) · `regression/`(회귀)와 나란한 자리다.
 
 `rag_pipeline` 이 아니라 **그것이 쓴 돈을 읽는** 쪽이라 최상위에 산다.
 
