@@ -78,7 +78,7 @@ docstring). 읽어서 `Answer.rewrite` 에 싣는 것까지가 여기 몫이고 
 
 **지금은 판정을 `Answer.verdict` 에 싣기만 한다.** *불충분* 이어도 생성을 막지 않고 프롬프트도
 안 바꾼다. 재시도할 Rewriter 가 없기도 하고(`.claude/wiki/plan_log/검색-생성.md` 7회차가 물렸다), 생성을
-바꾸면 *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞이는데 **답변 품질을 재는 자[尺]가
+바꾸면 *판정이 맞았나* 와 *답이 좋아졌나* 가 한 실행에 섞이는데 **답변 품질을 재는 방법이
 아직 없다.** 판정을 무엇으로 재는지는 `evaluation/verdicts.py` 다.
 
 **실패는 예외가 아니라 제3의 상태다** — `verdict="failed"` 가 그대로 실려 나가고 사유는
@@ -234,7 +234,7 @@ def answer_question(
 # `retrieved_chunks` 만 남는다. 그것을 `sources` 로 쓰면 `check_citations()` 의 범위가
 # `1..len(sources)` 로 **넓어져 범위 밖 인용을 놓치고**, 화면 출처 목록도 모델이 안 본
 # 청크를 보여준다. 예산을 켜려면 상태에 «보여준 목록» 칸이 먼저 있어야 한다 — 그때까지는
-# 안 자르는 것이 `answer_question()` 과 같은 자[尺]를 지킨다
+# 안 자르는 것이 `answer_question()` 과 같은 기준을 지킨다
 def answer_question_with_retries(
     query: str,
     *,

@@ -531,7 +531,7 @@ def _rewrite_row(body: str) -> str:
 
 
 # **다시 쓴 질의를 사용자가 볼 수 있어야 한다.** 재작성이 엉뚱하게 좁혔을 때 알아볼 수 있는
-# 자리가 화면에 이것 하나다 — 캐시 배지가 원 질문을 보여주는 것과 같은 잣대다
+# 자리가 화면에 이것 하나다 — 캐시 배지가 원 질문을 보여주는 것과 같은 기준이다
 def test_rewrite_row_shows_the_rewritten_query(mocker):
     rewritten = "2026 중등 기초학력 보장 사업의 지원 방식 및 운영 방법 안내"
     mocker.patch(

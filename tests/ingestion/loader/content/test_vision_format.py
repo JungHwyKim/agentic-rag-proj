@@ -120,7 +120,7 @@ def test_undecodable_image_falls_back_quietly(mocker) -> None:
 #
 # max_completion_tokens 에서 응답이 잘리면 JSON 이 미완성이라 파싱이 깨진다. 예전 폴백은
 # **문자열 전체를 description 으로** 썼고, 그래서 `{`·`"description":` 같은 스캐폴딩과
-# 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 판에서 6개 청크,
+# 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 파일에서 6개 청크,
 # 하나가 3,593자). 값만 건져내는 것이 이 절의 계약이다.
 
 _TRUNCATED = (

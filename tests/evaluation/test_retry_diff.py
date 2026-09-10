@@ -294,7 +294,7 @@ def _item(gold: list[str]) -> QAItem:
     return QAItem(query_id="q1", query="질의", source_doc="시행령", gold_spans=gold)
 
 
-# 회차 텍스트에서 정답 순위를 잰다. `hit_rank` 를 그대로 쓴다 — 자[尺]가 두 벌이면 안 된다
+# 회차 텍스트에서 정답 순위를 잰다. `hit_rank` 를 그대로 쓴다 — 재는 기준이 두 가지면 안 된다
 def test_rank_comes_from_the_round_texts():
     tool = _StubProbe(
         [

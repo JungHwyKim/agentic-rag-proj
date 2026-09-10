@@ -40,7 +40,7 @@
 
 `stop_reason` 은 *루프가 왜 멈췄나* 다. `retry_count` 로는 유추가 안 된다 — 충분 판정으로
 끝났는데 마침 3회차였을 수도 있고, *재작성이 승급할 질의를 못 냈다* 와 *재시도 소진* 이
-같은 수를 낸다. `Answer.verdict`·`Answer.rewrite` 를 필드로 실은 것과 같은 잣대이고,
+같은 수를 낸다. `Answer.verdict`·`Answer.rewrite` 를 필드로 실은 것과 같은 기준이고,
 **필드여야 LangGraph 경로에서도 같은 자리에서 읽힌다**(그래프 노드는 상태를 주고받는다).
 
 ## `evidence_unchanged_at` 은 접는 칸이 아니라 **세는 칸**이다

@@ -6,7 +6,7 @@
 (.claude/wiki/plan_log/검색-생성.md 10·11회차).
 
 **셋째가 47회차에 붙었다** — 재작성 축이 실제로 검색에 닿는 것과, 리포트 이름이 리랭커·재작성으로
-갈리는 것. 뒤엣것을 놓치면 계단으로 잰 세 판이 **에러 없이 서로를 덮는다.**
+갈리는 것. 뒤엣것을 놓치면 계단으로 잰 세 실행이 **에러 없이 서로를 덮는다.**
 """
 
 from __future__ import annotations
@@ -228,7 +228,7 @@ def test_confusion_shape_is_stable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 총점이 자[尺]가 못 되는 자리 — 죽은 판정자 기준선과 균형 정확도
+# 총점이 기준이 못 되는 자리 — 죽은 판정자 기준선과 균형 정확도
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +279,7 @@ def test_balanced_is_none_when_a_class_is_empty() -> None:
     assert _balanced([_row("insufficient", "insufficient")])[1] is None
 
 
-# **`--rewrite` 가 실제로 검색에 닿아야 한다** — 인자만 받고 안 쓰면 계단 세 판이 같은 실행이
+# **`--rewrite` 가 실제로 검색에 닿아야 한다** — 인자만 받고 안 쓰면 계단 세 조건이 같은 실행이
 # 되는데 표는 멀쩡해 보인다 (.claude/wiki/plan_log/검색-생성.md 47회차)
 def test_rewrite_profile_reaches_retrieve(mocker, qa_path) -> None:
     _wire(mocker, _FakeEvaluator({}), {})
@@ -317,7 +317,7 @@ def test_rewrite_off_passes_none_instead_of_stopping(mocker, qa_path) -> None:
     assert meta["rewrite_warnings"] == []
 
 
-# **이름이 안 갈리면 계단 세 판이 서로를 에러 없이 덮는다** — 13회차가 그렇게 표를 잃었다
+# **이름이 안 갈리면 계단 세 실행이 서로를 에러 없이 덮는다** — 13회차가 그렇게 표를 잃었다
 def test_report_name_splits_on_rerank_and_rewrite() -> None:
     base = {"label": "h", "evaluator": "mini", "prompt_version": "v3"}
     ladder = (("local-gpu", "off"), ("cohere", "off"), ("cohere", "fuse"))

@@ -519,7 +519,7 @@ def test_mark_cells_sees_hole_but_not_merged_slot() -> None:
     assert signatures == {"hole-sig"}
 
 
-# 칸을 통째로 덮는 드로잉은 배경 음영이다. 구멍에서도 같은 자[尺]가 그대로 돈다
+# 칸을 통째로 덮는 드로잉은 배경 음영이다. 구멍에서도 같은 기준이 그대로 돈다
 def test_mark_cells_ignores_background_shading_in_hole() -> None:
     table = _hole_table()
     values = _fill_merged_cells(table)

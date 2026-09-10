@@ -3,14 +3,14 @@
 ## 왜 가르나
 
 `ResponseRelevancy` 는 기권 답변을 0점으로 깎는다(noncommittal 감지). 그런데 이 저장소의 사람
-세트는 **부정 예시 25건에서 기권이 정답**이다 — 실측(`h-cohere-18w3` 판)으로 부정 25 중 기권
+세트는 **부정 예시 25건에서 기권이 정답**이다 — 실측(`h-cohere-18w3` 실행)으로 부정 25 중 기권
 11 · 답한 14 이고, 지표는 **정답인 11을 0으로 깎고 오답인 14를 높게 준다.** 합쳐서 한 수로
 내면 그 뒤집힘이 평균 안에 녹아 사라진다.
 
 **«분모에서 빼자» 를 기각한 이유가 이것이다.** 빼면 표는 깨끗해지지만 *왜 뺐나* 가 산문으로만
 남아 다음 사람이 같은 질문을 다시 한다. 갈라서 내면 그 한 줄이 곧 관측이 된다.
 
-## 비[比]를 안 낸다
+## 비율을 안 낸다
 
 부정 두 갈래에 어떤 분수를 얹어도 「오류율」로 읽히는데, **기권 11은 이 코퍼스에서 제일 좋은
 답변이다.** 그래서 여기서 내는 것은 갈래마다의 **점수 분포**(건수·중앙값·평균·못 잰 수)뿐이고
@@ -19,15 +19,31 @@
 ## 판정 규칙은 돌리기 전에 정해졌다
 
 `plan_log/검색-생성.md` 59회차에 못 박은 셋을 여기서 그대로 대 본다. **결과를 보고 규칙을
-만들면 자[尺]가 결론을 따라간다** — `exact` 캐시의 5% 컷과 같은 자리다.
+만들면 재는 것이 결론을 따라간다** — `exact` 캐시의 5% 컷과 같은 자리다.
 
 1. 대조군(남의 질문)이 자기 질문과 **안 갈리면 기각** — 지표가 애초에 안 도는 것이다
-2. LLM 네 판의 관측 폭이 **대조군 폭 안이면 축으로 안 씀** — 조건을 안 가르는 지표는 조건을
+2. LLM 네 실행의 관측 폭이 **대조군 폭 안이면 축으로 안 씀** — 조건을 안 가르는 지표는 조건을
    견주는 데 못 쓴다
 3. 부정에서 «답한 쪽» 이 «기권 쪽» 보다 높으면 **사람 세트에는 안 씀**
 
 **셋 다 통과선이 아니라 갈림이다.** 어느 쪽으로 나오든 그것이 이 회차의 산출이고, 「기각」도
 결론이다.
+
+## 이 리포트는 «응답 적합성 · 남의 질문» 한 조합만 읽는다 — 문을 잠가 뒀다
+
+2026-09-09 에 `ragas_export` 가 **대조군 축을 «남의 골든» 으로 갈아끼웠고**, 같은 날 탐침이
+지표 넷을 고를 수 있게 됐다. 이 리포트는 그 둘을 **아직 안 따라갔다**(갈래 재작성은 산문
+골든 축이 값을 한다고 판정된 뒤의 일이다). 그런데 안 막으면 **조용히 틀린다**:
+
+- `bucket_rows()` 가 `row.get(METRIC_NAME)` 을 써서, 다른 지표의 점수 파일을 먹이면
+  `KeyError` 가 아니라 **전부 `None`** 이 되어 「행 34 · 못잼 34 · 규칙 전부 잴 수 없다」라는
+  멀쩡해 보이는 표가 나온다
+- `ResponseRelevancy` 는 `reference` 를 안 읽으므로, «남의 골든» 축으로 만든 대조군 행은
+  self 와 **입력이 글자까지 같다.** 규칙 1 이 «차 0.0000 → 기각» 을 내는데 그것은 지표가
+  아니라 재료가 만든 수다
+
+그래서 `render()` 가 `meta.metric` 과 `meta.control_axis` 를 먼저 보고 **사유를 내고 죽는다.**
+헛경보가 아니라 **못 읽는 조합을 못 읽는다고 말하는 것**이라 `SKIP_*` 습관과 무관하다.
 """
 
 from __future__ import annotations
@@ -41,10 +57,14 @@ from typing import Any
 
 METRIC_NAME = "answer_relevancy"
 
-__all__ = ["Bucket", "bucket_rows", "summarize"]
+# 이 리포트가 읽을 수 있는 대조군 축. **`None` 은 옛 재료다** — `control_axis` 칸이 생기기
+# 전(2026-09-08 566행)에는 축이 «남의 질문» 하나뿐이라, 없는 것이 곧 그 축이라는 뜻이다
+READABLE_CONTROL_AXES = frozenset({None, "question"})
+
+__all__ = ["Bucket", "bucket_rows", "check_readable", "summarize"]
 
 
-# 한 갈래의 분포. **비[比] 칸이 없다** (모듈 docstring 참고)
+# 한 갈래의 분포. **비율 칸이 없다** (모듈 docstring 참고)
 @dataclass
 class Bucket:
     name: str
@@ -124,17 +144,17 @@ def check_rules(buckets: dict[str, Bucket]) -> list[str]:
     llm = [b for name, b in buckets.items() if name.startswith("LLM 세트")]
     llm_medians = [b.median for b in llm if b.median is not None]
     if len(llm_medians) < 2:
-        lines.append("규칙 2 (조건 축) — 잴 수 없다: LLM 판이 둘 미만이다")
+        lines.append("규칙 2 (조건 축) — 잴 수 없다: LLM 실행이 둘 미만이다")
     else:
         spread = max(llm_medians) - min(llm_medians)
         if gap is None:
-            lines.append(f"규칙 2 (조건 축) — 네 판 폭 {spread:.4f} · 대조군 폭을 못 재 판정 보류")
+            lines.append(f"규칙 2 (조건 축) — 네 실행 폭 {spread:.4f} · 대조군 폭을 못 재 판정 보류")
         else:
             verdict = (
                 "조건을 가른다" if spread > abs(gap) else "**축으로 안 씀** — 대조군 폭 안이다"
             )
             lines.append(
-                f"규칙 2 (조건 축) — 판 사이 폭 {spread:.4f} vs 대조군 폭 {abs(gap):.4f} "
+                f"규칙 2 (조건 축) — 실행 사이 폭 {spread:.4f} vs 대조군 폭 {abs(gap):.4f} "
                 f"→ {verdict}"
             )
 
@@ -154,13 +174,37 @@ def check_rules(buckets: dict[str, Bucket]) -> list[str]:
     return lines
 
 
+# 이 리포트가 읽을 수 있는 조합인지 먼저 본다. **읽을 수 없으면 표를 안 그린다** —
+# 못 읽는 것을 «전부 못 쟀다» 나 «차 0» 으로 그리면 재료 문제가 지표 결론으로 읽힌다
+# (모듈 docstring 끝 절)
+def check_readable(meta: dict[str, Any]) -> None:
+    metric = meta.get("metric")
+    if metric != METRIC_NAME:
+        raise SystemExit(
+            f"이 리포트는 `{METRIC_NAME}` 만 읽습니다 (받은 것: {metric!r}).\n"
+            "  다른 지표의 점수 파일을 먹이면 표가 전부 «못 잼» 으로 나오는데 그것은 지표가"
+            " 아니라 이 도구가 만든 수입니다.\n"
+            "  산문 골든 축의 갈래 재작성은 그 축이 값을 한다고 판정된 뒤의 일입니다."
+        )
+    axis = meta.get("control_axis")
+    if axis not in READABLE_CONTROL_AXES:
+        raise SystemExit(
+            f"이 리포트는 «남의 질문» 대조군만 읽습니다 (받은 축: {axis!r}).\n"
+            f"  `{METRIC_NAME}` 은 `reference` 를 안 읽어서, «남의 골든» 축으로 만든 대조군"
+            " 행은 self 와 입력이 글자까지 같습니다.\n"
+            "  그 재료로 규칙 1 을 대면 «차 0.0000 → 기각» 이 나오는데 그것은 지표가 아니라"
+            " 재료가 만든 수입니다."
+        )
+
+
 # 표를 찍는다
 def render(payload: dict[str, Any]) -> None:
     meta = payload.get("meta") or {}
+    check_readable(meta)
     usage = meta.get("usage") or {}
     print(f"metric={meta.get('metric')} · ragas {meta.get('ragas_version')} ")
     print(
-        f"strictness={meta.get('strictness')} — **샘플링이 자[尺] 안에 있어 재현되지 않는다**"
+        f"strictness={meta.get('strictness')} — **재는 것 자체에 샘플링이 들어 있어 재현되지 않는다**"
     )
     print(
         f"회계: 모델 {usage.get('model')} · 입력 {usage.get('input_tokens')} · "
@@ -189,7 +233,7 @@ def render(payload: dict[str, Any]) -> None:
     for line in check_rules(buckets):
         print(f"  {line}")
     print()
-    print("부정 두 갈래에 비[比]를 안 낸다 — 어떤 분수도 「오류율」로 읽히는데 기권 쪽이")
+    print("부정 두 갈래에 비율을 안 낸다 — 어떤 분수도 「오류율」로 읽히는데 기권 쪽이")
     print("이 코퍼스에서 제일 좋은 답변이다.")
 
 

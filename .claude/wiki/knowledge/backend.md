@@ -189,7 +189,7 @@
   이유는 **화면 문구가 mode 에서 갈리기** 때문이다 — `fuse` 는 원 질의 갈래도 함께 돌았으므로
   *"…로 바꿔 검색했습니다"* 가 거짓이고 `replace` 는 *"…도 함께"* 가 거짓이다. 나란한 두
   필드로 쪼개면 *질의는 있는데 mode 가 없는* 조합을 템플릿이 매번 방어해야 한다.
-  `cached_from` 이 셋을 묶은 것과 같은 잣대다
+  `cached_from` 이 셋을 묶은 것과 같은 기준이다
 - **`retrieve()` 가 다시 쓴 질의를 돌려주게 넓히지 않는다.** 반환은 공개 계약이고
   `evaluation/run_eval.py` 가 그 모양에 맞춰져 있다. 읽는 자리는 `rewriter.last_rewritten`
   이고, `warnings`·`usage` 를 부르는 쪽이 읽는 것과 같은 관행이다
@@ -271,7 +271,7 @@
   을 그리자는 제안도 기각이다 — 단발과 화면상 구별할 것이 없다(6절 배지 규칙과 같다).
   `tests/api/test_query_route.py::test_a_successful_retry_is_still_drawn` 이 막는다
 - **`query_log` 의 `generation_model` 을 «다시 계산되니 빼자» 로 지적하지 않는다.**
-  7절이 `rewritten` 에 쓴 잣대가 그대로다 — 인용 검사는 `(text, sources)` 로 언제든 다시
+  7절이 `rewritten` 에 쓴 기준이 그대로다 — 인용 검사는 `(text, sources)` 로 언제든 다시
   계산되지만 **모델 이름은 모델을 바꾼 뒤에 되짚을 방법이 없고**, 화면 질의의 기록은 이
   파일 하나뿐이다. `source=` 와 같이 기본값을 안 두는 것도 유지한다
 - **`tests/api/test_query_route.py` 의 `_client()` 안 `_agent` 핀과 `offline_config` 의

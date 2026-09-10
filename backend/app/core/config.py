@@ -11,7 +11,7 @@ from rag_pipeline.config import PROJECT_ROOT, EmbeddingConfig
 # 그림자 색인이 쓰는 임베딩 설정. **2026-08-25 에 갈아타기 전의 기본값 그대로다.**
 #
 # 설정이 아니라 상수인 것이 요점이다 — 고를 수 있게 열면 합법값이 하나뿐인 축이 하나 더
-# 생기고, 그것이 `Settings.shadow_index_enabled` 주석이 말하는 그 잣대다. 켜고 끄는 것만
+# 생기고, 그것이 `Settings.shadow_index_enabled` 주석이 말하는 그 기준이다. 켜고 끄는 것만
 # 설정이고 **무엇을 쌓을지는 이 회차가 정했다.**
 #
 # `openai_api_key` 를 안 적는다 — `EmbeddingConfig()` 가 `.env` 에서 읽는다. 키가 없으면

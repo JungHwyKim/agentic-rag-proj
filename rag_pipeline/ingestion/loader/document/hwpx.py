@@ -189,7 +189,7 @@ def _usable_body_height(section_root: etree._Element) -> int | None:
 
     # 가로 쪽에서도 width/height 에는 물리 용지(세로) 치수가 그대로 들어 있고 방향은
     # landscape 속성으로만 표시된다. 그래서 가로 섹션의 세로 여유는 width 에서 얻어야 한다.
-    # (실측: 시행령 개정안 안내서 가로쪽 판 — 가로 섹션과 세로 섹션 모두 width=59528
+    # (실측: 시행령 개정안 안내서 가로쪽 파일 — 가로 섹션과 세로 섹션 모두 width=59528
     #  height=84188 으로 같고 landscape 만 NARROWLY/WIDELY 로 갈렸다. WIDELY 섹션의
     #  최상위 문단 vertpos 가 69898 까지 올라가 71435(=height-여백)에 육박하는 것이
     #  WIDELY=세로임을 확정한다 — 가로였다면 46775 를 넘을 수 없다)

@@ -191,7 +191,7 @@ class QdrantAnswerCache:
         return self._mode
 
     # 같은 질문으로 볼 최소 유사도. **`exact` 갈래에서는 None 이고 안 쓰인다** —
-    # 저쪽은 자[尺]가 필요 없는 판정이라 값을 요구하면 근거 없는 수를 만들게 된다
+    # 저쪽은 재는 기준이 필요 없는 판정이라 값을 요구하면 근거 없는 수를 만들게 된다
     @property
     def threshold(self) -> float | None:
         return self._threshold

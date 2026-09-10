@@ -77,7 +77,7 @@ def test_size_filter_applies_to_every_mode(mode: str, tiny_image_file: Path) -> 
 
 # --- 쪽 위 표시 크기 필터 ---
 #
-# 저장 픽셀 자[尺]와 이 자[尺]는 서로를 대신하지 못한다. 아래 크기들은 실측에서 나온
+# 저장 픽셀 기준과 이 기준은 서로를 대신하지 못한다. 아래 크기들은 실측에서 나온
 # 값이고, 근거는 .claude/wiki/plan_log/이미지-경로.md 2회차다.
 
 
@@ -93,7 +93,7 @@ def test_tiny_display_glyph_is_skipped(png_bytes) -> None:
 
 # 6쪽에 반복되는 제목 띠. 짧은 변은 20pt 를 넘지만 14.8:1 로 납작하다.
 # 크기만 보는 규칙으로는 이것이 그대로 살아남는다.
-# 저장은 900x150px 이라 픽셀 필터에도 안 걸린다 — 두 자[尺]가 갈리는 자리다
+# 저장은 900x150px 이라 픽셀 필터에도 안 걸린다 — 두 기준이 갈리는 자리다
 def test_wide_banner_is_skipped_by_aspect_ratio(png_bytes) -> None:
     image = Image.open(io.BytesIO(png_bytes(900, 150)))
 

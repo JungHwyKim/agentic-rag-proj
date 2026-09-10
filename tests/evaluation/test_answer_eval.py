@@ -177,7 +177,7 @@ def test_the_two_skip_sites(text, chunks, expected) -> None:
     assert is_abstention(text, chunks) is expected
 
 
-# **인용이 붙은 기권을 놓치면 회차가 통째로 무효로 찍힌다.** 첫 판(2026-08-28)에서 실제로
+# **인용이 붙은 기권을 놓치면 회차가 통째로 무효로 찍힌다.** 첫 실행(2026-08-28)에서 실제로
 # 났다 — 모델이 `문서에서 찾지 못했습니다. [1][2][3][4][5]` 를 2건 냈고, 그것이 판정 대상이
 # 되자 *"못 찾았습니다"* 가 **어떤 근거로도 뒷받침되어** 음성 대조군이 `supported` 를 냈다.
 # 채점자는 멀쩡했는데(그 둘을 빼면 0/28) 게이트가 회차를 버리게 만든다
@@ -350,7 +350,7 @@ def test_the_same_question_hits_the_cache(judge, mocker) -> None:
     assert judge.usage.cache_hits == 1
 
 
-# **프롬프트 판이 캐시를 가른다.** 안 가르면 프롬프트를 고쳐도 옛 응답이 새 프롬프트의
+# **프롬프트 버전이 캐시를 가른다.** 안 가르면 프롬프트를 고쳐도 옛 응답이 새 프롬프트의
 # 답인 척 돌아오는데, 에러가 아니라 수치로만 드러난다
 def test_prompt_version_is_in_the_salt(judge, mocker) -> None:
     client = FakeClient('{"verdict": "supported"}')
@@ -545,7 +545,7 @@ def test_chance_and_ceiling_come_from_the_evidence() -> None:
 
 # **최대는 관측 아래로 못 내려간다** — `min(c,G) >= hits` 가 늘 참이다.
 # **반대쪽(무작위 <= 관측)은 일부러 안 잠근다** — 관측이 무작위보다 낮게 나올 수 있고
-# 그것도 이 판이 얻으려는 답이다. 잠그면 자[尺]가 결론을 미리 정한다
+# 그것도 이 측정이 얻으려는 답이다. 잠그면 지표가 결론을 미리 정한다
 def test_the_ceiling_never_falls_below_the_observation() -> None:
     rows = [
         AnswerRow(
@@ -580,7 +580,7 @@ def test_a_row_without_the_baseline_makes_both_none() -> None:
 
 
 # **채점자를 꺼도 대조군은 나온다** — 지지 칸이 `None` 이 되는 것과 갈리는 자리이고,
-# 강등된 자[尺]에서 실제로 변별하는 축이 이것 하나라는 51회차 결론이 여기 서 있다
+# 강등된 지표에서 실제로 변별하는 축이 이것 하나라는 51회차 결론이 여기 서 있다
 def test_the_baseline_survives_a_judgeless_run() -> None:
     rows = [
         AnswerRow(
@@ -775,8 +775,8 @@ def test_abstained_rows_are_not_in_the_ledger() -> None:
 
 
 # **재작성 프로필이 이름에 들어가야 한다.** 안 들어가면 같은 라벨에 `--rewrite fuse` 로 한 번
-# 더 돌린 회차가 본판 리포트를 **에러 없이 덮는다** — `verdicts.py` 가 13회차에 실제로 잃은
-# 사고와 같은 모양이고, 재작성 판을 재는 회차는 그것을 반드시 밟는다
+# 더 돌린 회차가 원래 리포트를 **에러 없이 덮는다** — `verdicts.py` 가 13회차에 실제로 잃은
+# 사고와 같은 모양이고, 재작성 축을 재는 회차는 그것을 반드시 밟는다
 def test_the_rewrite_profile_splits_the_report() -> None:
     common = {
         "label": "L",
@@ -811,7 +811,7 @@ def test_the_judge_profile_splits_the_report() -> None:
 
 
 # **리랭커 프로필도 가른다.** 기본값이 `off` 라 `--rerank` 를 빠뜨린 실행이 조용히 다른
-# 실험이 되는데, 이름까지 같으면 그 실행이 제대로 돌린 판을 **에러 없이 덮는다**
+# 실험이 되는데, 이름까지 같으면 그 실행이 제대로 돌린 실행을 **에러 없이 덮는다**
 def test_the_rerank_profile_splits_the_report() -> None:
     common = {
         "label": "L",
@@ -829,8 +829,8 @@ def test_the_rerank_profile_splits_the_report() -> None:
 
 
 # **생성 프로필도 가른다 — 이 축만 44회차에 생기고 이름이 안 따라왔다.** `--generation luna`
-# 로 한 판 돌리면 짝으로 쓸 `prod` 판을 **에러 없이 덮는데**, 두 모델을 견주는 회차에서
-# 그 짝이 판의 전부다. `generation` 을 기본값 없는 필수 인자로 둔 것도 같은 이유다 —
+# 로 한 번 돌리면 짝으로 쓸 `prod` 실행을 **에러 없이 덮는데**, 두 모델을 견주는 회차에서
+# 그 짝이 이 비교의 전부다. `generation` 을 기본값 없는 필수 인자로 둔 것도 같은 이유다 —
 # 새 호출부가 빠뜨리면 조용히 같은 자리를 다투는 대신 `TypeError` 로 터진다
 def test_the_generation_profile_splits_the_report() -> None:
     common = {
@@ -848,9 +848,9 @@ def test_the_generation_profile_splits_the_report() -> None:
     )
 
 
-# **세트도 가른다 — `--qa-set` 은 기본이 사람 세트라 인자를 빠뜨린 실행이 다른 세트의 판을
-# 같은 이름으로 낸다.** 43회차의 판 넷은 `qa_set.jsonl`(60건)을 명시해 돌린 것이라, 이름이
-# 안 갈리면 43건 판과 60건 판이 **에러 없이 한 자리를 다툰다**. 값이 `Path(...).stem` 인 것은
+# **세트도 가른다 — `--qa-set` 은 기본이 사람 세트라 인자를 빠뜨린 실행이 다른 세트의 결과를
+# 같은 이름으로 낸다.** 43회차의 실행 넷은 `qa_set.jsonl`(60건)을 명시해 돌린 것이라, 이름이
+# 안 갈리면 43건 실행과 60건 실행이 **에러 없이 한 자리를 다툰다**. 값이 `Path(...).stem` 인 것은
 # 새 세트가 생겨도 저절로 갈리게 하려는 것이다 — 별명표는 거기 없는 세트를 조용히 합친다
 def test_the_qa_set_splits_the_report() -> None:
     common = {
@@ -869,7 +869,7 @@ def test_the_qa_set_splits_the_report() -> None:
 
 
 # **경로가 달라도 같은 세트면 같은 이름이다** — meta 는 파일명만, CLI 는 경로를 넘길 수 있어
-# 둘이 다른 이름을 내면 같은 판이 두 자리에 앉는다
+# 둘이 다른 이름을 내면 같은 실행이 두 자리에 앉는다
 def test_the_qa_set_path_does_not_change_the_name() -> None:
     common = {
         "label": "L",
@@ -1036,7 +1036,7 @@ def test_the_off_judge_splits_the_report() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 생성 프롬프트 판 — 리포트가 자기 생성 조건을 말할 수 있어야 한다
+# 생성 프롬프트 버전 — 리포트가 자기 생성 조건을 말할 수 있어야 한다
 # ---------------------------------------------------------------------------
 
 
@@ -1113,7 +1113,7 @@ def _row(**over) -> dict:
 
 
 # **기권 행은 `score_answers()` 가 인용 칸을 아예 안 계산한다.** 백필이 그것을 모르고 다시
-# 돌리면 `None` 이 `0` 이 되어 «인용을 다 틀렸다» 가 없던 데서 생긴다 — 실제로 첫 판이
+# 돌리면 `None` 이 `0` 이 되어 «인용을 다 틀렸다» 가 없던 데서 생긴다 — 실제로 첫 실행이
 # 자기 검증에 걸려 잡혔다. **그 자리를 여기서 잠근다**
 def test_backfill_skips_abstained_rows_like_the_run_did(tmp_path, mocker) -> None:
     rows = [
@@ -1176,7 +1176,7 @@ def test_backfill_writes_nothing_without_the_flag(tmp_path, mocker) -> None:
     assert "evidence_gold_chunks" not in json.loads(path.read_text(encoding="utf-8"))["rows"][0]
 
 
-# **옛 요약 칸이 움직여도 안 쓴다.** 대조군을 «더하는» 판이라, 이미 산 수치가 바뀌면
+# **옛 요약 칸이 움직여도 안 쓴다.** 대조군을 «더하는» 회차라, 이미 산 수치가 바뀌면
 # 그것은 더하기가 아니라 고쳐 쓰기다
 def test_backfill_refuses_when_an_old_summary_cell_moves(tmp_path, mocker) -> None:
     payload = _report([_row()])
@@ -1211,8 +1211,8 @@ def test_must_values_are_matched_against_the_answer() -> None:
     assert (scored.must_values_hit, scored.must_values_total) == (1, 2)
 
 
-# **이 테스트는 실측이 만들었다.** 날짜 정규화 없이 저장된 답변 두 판을 소급했더니 값 6개 중
-# `2020.10.1.` 하나가 **두 판 모두** 거짓 음성이었다 — 두 답변 다 `2020년 10월 1일` 로
+# **이 테스트는 실측이 만들었다.** 날짜 정규화 없이 저장된 답변 두 벌을 소급했더니 값 6개 중
+# `2020.10.1.` 하나가 **두 답변 모두** 거짓 음성이었다 — 두 답변 다 `2020년 10월 1일` 로
 # 그 날짜를 정확히 말한다. 되돌리면 그 거짓 음성이 그대로 돌아온다
 def test_a_date_written_the_other_way_still_counts() -> None:
     scored = AnswerRow(
@@ -1314,8 +1314,8 @@ def test_a_sentence_carrying_the_word_becomes_a_candidate() -> None:
 
 # **부정문도 후보로 남는다 — 일부러 그렇게 뒀다.**
 #
-# 실측(2026-08-29, 저장된 답변 두 판)에서 금지어가 나온 문 넷 중 **둘이 부정문**이었고
-# 그 둘은 전제가 틀린 질문을 바로잡은 **제일 좋은 답변**이다. 그래서 이 자[尺]는 세지 않고
+# 실측(2026-08-29, 저장된 답변 두 벌)에서 금지어가 나온 문 넷 중 **둘이 부정문**이었고
+# 그 둘은 전제가 틀린 질문을 바로잡은 **제일 좋은 답변**이다. 그래서 이 지표는 세지 않고
 # 후보만 낸다. 여기서 부정문을 걸러내기 시작하면 «어디까지가 부정문인가» 가 곧 임계값이 되고
 # (단위 정규화를 기각한 그 모양이다), 지금 표본은 문 넷뿐이라 그 임계값을 검증할 데이터가 없다
 def test_a_denial_is_still_a_candidate_because_the_reader_decides() -> None:
@@ -1336,8 +1336,8 @@ def test_one_sentence_is_listed_once_per_entry() -> None:
 
 # **걸린 낱말을 전부 싣는다 — 이 테스트는 실측이 만들었다.**
 #
-# 저장된 답변 두 판에 소급했더니 `hai-05` 의 「설명 대상을 국민으로」가 «설명» 하나로만 찍혔다.
-# 그 낱말은 그 답변의 거의 모든 문장에 있어 두 판의 목록이 똑같아 보였고, 정작 가르는 낱말
+# 저장된 답변 두 벌에 소급했더니 `hai-05` 의 「설명 대상을 국민으로」가 «설명» 하나로만 찍혔다.
+# 그 낱말은 그 답변의 거의 모든 문장에 있어 두 답변의 목록이 똑같아 보였고, 정작 가르는 낱말
 # («국민» — 근거는 「소비자 또는 고객」이라고 적는다)이 목록에서 안 보였다. 첫 낱말만 실으면
 # **읽는 사람이 어느 문장을 봐야 하는지 못 본다** — 사람이 읽는 것이 이 칸의 계약이라 치명적이다
 def test_every_matching_word_is_listed_not_just_the_first() -> None:
@@ -1347,7 +1347,7 @@ def test_every_matching_word_is_listed_not_just_the_first() -> None:
     assert scored.must_not_claim_candidates[0]["tokens"].split() == ["설명", "국민"]
 
 
-# **블록에 비[比]가 한 칸도 없어야 한다.** 후보에는 부정문이 섞여 있어 어떤 분수를 내도
+# **블록에 비율이 한 칸도 없어야 한다.** 후보에는 부정문이 섞여 있어 어떤 분수를 내도
 # «오류율» 로 읽히고, 그러면 제일 좋은 답변이 분자에 앉는다
 def test_the_block_carries_no_ratio() -> None:
     scored = _claim_row("사전에 안전성 검증을 받아야 합니다.")

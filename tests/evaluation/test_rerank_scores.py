@@ -80,7 +80,7 @@ def test_agreement_at_one_is_the_winner():
     assert agreement(["a", "b"], ["b", "a"], 1) is False
 
 
-# 신참 자리를 풀 크기로 나눈 값이다. **자리 자체를 쓰면 풀 크기가 다른 판끼리 못 견준다**
+# 신참 자리를 풀 크기로 나눈 값이다. **자리 자체를 쓰면 풀 크기가 다른 실행끼리 못 견준다**
 def test_percentiles_are_normalized_by_pool_size():
     row = _row(off=["a", "b"], on=["x", "a"])
     assert newcomer_percentiles([row]) == [0.5]
@@ -151,7 +151,7 @@ def test_cached_scores_reads_what_the_reranker_wrote(tmp_path):
     assert _cached_scores("질의", pool, cache=cache, salt="salt") == [0.2, 0.8]
 
 
-# **salt 가 다르면 못 읽는다** — 이것이 device·프롬프트 판이 섞이지 않는 이유다
+# **salt 가 다르면 못 읽는다** — 이것이 device·프롬프트 버전이 섞이지 않는 이유다
 def test_cached_scores_misses_on_a_different_salt(tmp_path):
     cache = ResultCache(tmp_path, enabled=True)
     pool = [_chunk("c1"), _chunk("c2")]

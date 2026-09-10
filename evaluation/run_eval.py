@@ -11,9 +11,9 @@
 
 ## 왜 포맷마다 저장 경로를 가르나
 
-포맷 비교(`.claude/wiki/plan_log/검색-생성.md` 비교 5번)는 "같은 질의를 HWPX 판만 색인했을 때와 PDF 판만
+포맷 비교(`.claude/wiki/plan_log/검색-생성.md` 비교 5번)는 "같은 질의를 HWPX 파일만 색인했을 때와 PDF 파일만
 색인했을 때" 를 견주는 것이다. 한 컬렉션에 둘 다 넣으면 같은 내용의 청크가 **서로 경쟁**해서
-비교가 성립하지 않는다. 그래서 `--format` 으로 고른 판만 색인하고 저장 경로에 그 이름을 붙인다.
+비교가 성립하지 않는다. 그래서 `--format` 으로 고른 형식만 색인하고 저장 경로에 그 이름을 붙인다.
 
 ## 왜 확장자가 아니라 포맷 라벨인가
 
@@ -22,9 +22,9 @@
 
 ## 어느 라벨로 baseline 을 재나
 
-**PDF 다.** 네 그룹 모두 PDF 판이 있어 60건 전부가 유효하다. HWPX 로 돌리면 신뢰가능 AI
+**PDF 다.** 네 그룹 모두 PDF 파일이 있어 60건 전부가 유효하다. HWPX 로 돌리면 신뢰가능 AI
 가이드에 HWPX 가 없어(`documents.py` 참고) **그 15건이 문서 없이 채점되어** 점수가 가짜로
-낮아진다. 포맷 비교는 **두 판을 다 가진 그룹으로 제한**해야 성립한다 — `--groups` 가 그 자리다.
+낮아진다. 포맷 비교는 **두 형식을 다 가진 그룹으로 제한**해야 성립한다 — `--groups` 가 그 자리다.
 
 qdrant 로컬 파일 모드가 디렉터리에 배타 잠금을 걸어 **서버를 띄운 채로는 못 돌린다**
 (CLAUDE.md). 기본 `.qdrant` 를 안 쓰고 실행마다 갈라 두는 이유이기도 하다.
@@ -108,8 +108,16 @@ def check(refresh: bool = False, qa_path: Path | None = None) -> list[str]:
     # 세트의 구성을 먼저 보여준다. 부정 예시는 아래 span 검증을 통째로 건너뛰므로
     # (gold_spans 가 비어 있어 반복문이 안 돈다) 그것이 몇 건인지가 안 보이면
     # "왜 검사가 이것밖에 안 나왔나" 를 알 수 없다
+    #
+    # **부분 답을 따로 찍는다**(2026-09-09) — 갈래를 열고 이 줄이 안 보여주면 «긍정 18» 로만
+    # 읽혀 갈래가 없는 것과 같다. 부분 답은 `answerable` 이 참이라 긍정 안에 숨는다
     negatives = sum(1 for item in qa.items if not item.answerable)
-    print(f"  세트 {len(qa.items)}건 — 정답 있음 {len(qa.items) - negatives} · 부정 예시 {negatives}")
+    partials = sum(1 for item in qa.items if item.partial)
+    line = (
+        f"  세트 {len(qa.items)}건 — 정답 있음 {len(qa.items) - negatives - partials}"
+        f" · 부정 예시 {negatives}"
+    )
+    print(f"{line} · 부분 답 {partials}" if partials else line)
 
     groups = sorted({item.source_doc for item in qa.items})
     corpus = build_corpus(groups, refresh=refresh)
@@ -192,9 +200,9 @@ def run_dense(
     for group in wanted:
         name = DOCUMENT_GROUPS.get(group, {}).get(fmt)
         if not name or not (FIXTURES_DIR / name).exists():
-            # 그 그룹에 이 판이 없다. **조용히 넘어가면 그 그룹 질의가 문서 없이 채점된다**
+            # 그 그룹에 이 형식이 없다. **조용히 넘어가면 그 그룹 질의가 문서 없이 채점된다**
             raise SystemExit(
-                f"{group} 에 '{fmt}' 판이 없습니다. --groups 로 그룹을 제한하거나 "
+                f"{group} 에 '{fmt}' 형식이 없습니다. --groups 로 그룹을 제한하거나 "
                 f"다른 --format 을 고르세요 (있는 라벨: {sorted(DOCUMENT_GROUPS.get(group, {}))})"
             )
         result = index_document(FIXTURES_DIR / name, original_name=name, config=config)
@@ -388,7 +396,7 @@ def as_baseline(report: dict[str, Any]) -> dict[str, Any]:
 def compare_to_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
     if baseline.get("format") != report.get("format"):
         return [
-            f"  (기준선은 '{baseline.get('format')}' 판이라 "
+            f"  (기준선은 '{baseline.get('format')}' 형식이라 "
             f"'{report.get('format')}' 과 직접 비교하지 않습니다)"
         ]
 

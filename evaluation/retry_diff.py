@@ -1,8 +1,8 @@
 """근거가 안 바뀐 재시도 회차의 **다음 회차**가 무엇을 찾았나.
 
 `AgentState.evidence_unchanged_at` 은 *재시도가 질의를 바꿨는데 검색이 글자 그대로 같은 근거를
-물어온 회차* 를 세기만 한다. 접을지는 **«접었다면 놓쳤을 회차가 실제로 무엇을 찾았나»** 를 몇 판
-모아 본 뒤에 정하기로 했고(`.claude/wiki/plan_log/검색-생성.md` 「다음 승인 단위 A」), 이 도구가 그 판을 만든다.
+물어온 회차* 를 세기만 한다. 접을지는 **«접었다면 놓쳤을 회차가 실제로 무엇을 찾았나»** 를 몇 번
+모아 본 뒤에 정하기로 했고(`.claude/wiki/plan_log/검색-생성.md` 「다음 승인 단위 A」), 이 도구가 그 재료를 만든다.
 
 ## 왜 이 도구가 따로 있나 — `run_eval` 로는 못 잰다
 
@@ -398,7 +398,7 @@ def production_stop(rounds: list[RetryRound]) -> int | None:
     return rounds[-1].retry_count if rounds else None
 
 
-# 표를 한 줄 요약으로. **«못 봤다» 를 분모에서 빼지 않는다** — 빼면 «판이 몇 개인가» 가 사라진다
+# 표를 한 줄 요약으로. **«못 봤다» 를 분모에서 빼지 않는다** — 빼면 «실행이 몇 개인가» 가 사라진다
 def summarize(runs: list[RetryRun], rows: list[PairRow]) -> dict[str, Any]:
     seen = [r for r in rows if r.seen]
     return {

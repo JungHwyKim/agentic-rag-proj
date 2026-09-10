@@ -453,7 +453,7 @@ def report(tmp_path):
                 "abstained": False,
             },
             {
-                # **저장된 `abstained` 가 낡았다** — 첫 판이 인용 붙은 기권을 판정으로 흘렸다
+                # **저장된 `abstained` 가 낡았다** — 첫 실행이 인용 붙은 기권을 판정으로 흘렸다
                 "query_id": "stale", "query": "질문", "source_doc": "d", "answerable": False,
                 "answer": f"{NO_EVIDENCE_ANSWER} [1][2]", "chunk_ids": ["c1", "c2"],
                 "abstained": False,

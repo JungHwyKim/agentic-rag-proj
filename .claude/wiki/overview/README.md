@@ -57,7 +57,7 @@
 - **구현된 단계** — `rag_pipeline/` 아래 디렉터리가 전부다
 - **예약된 다음 단계** — `pipeline.py:ingest()` 안의 주석
 - **품질을 무엇으로 재나** — 검색은 `evaluation/README.md`, 적재는 `regression/baseline.json` 과
-  `tests/ingestion/**/test_*_real.py`, 생성은 `evaluation/answer_eval.py`. **자[尺]가 서로
+  `tests/ingestion/**/test_*_real.py`, 생성은 `evaluation/answer_eval.py`. **재는 기준이 서로
   달라 섞지 않는다**
 - **안 끝난 일** — `openwork` 스킬(재료는 `plan_log/*.md` 의 `## 미결` 과 `task_log/*.md` 의
   `## 7. 남은 것`)

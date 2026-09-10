@@ -20,7 +20,7 @@
 보인다. `top_k=컬렉션 크기` 로 한 번 검색하면 전체 순위가 나오고, **그 앞 20개가 곧 실제로
 올라왔던 후보**라 검색이 한 번으로 끝난다. qdrant 가 로컬이라 k 를 키워도 비용이 0 이다.
 
-순위 판정은 `scoring.hit_rank()` 를 그대로 쓴다. **채점과 해부가 같은 자[尺]를 써야** 여기서
+순위 판정은 `scoring.hit_rank()` 를 그대로 쓴다. **채점과 해부가 같은 기준을 써야** 여기서
 "1위"라고 읽은 것이 기준선에서도 1위다(`squash()` 로 공백을 지우는 규칙까지 같다).
 
 ## 왜 정답 청크로 묶나
@@ -102,7 +102,7 @@ def load_report(label: str, fmt: str) -> dict[str, Any]:
             if report.get("format") == fmt:
                 print(f"리포트: {path}")
                 return report
-    raise SystemExit(f"'{fmt}' 판 리포트를 못 찾았습니다: {run} · {BASELINE_PATH}")
+    raise SystemExit(f"'{fmt}' 형식 리포트를 못 찾았습니다: {run} · {BASELINE_PATH}")
 
 
 # 못 찾은 질의마다 정답 청크의 전체 순위를 재고, 같은 청크끼리 묶는다

@@ -161,7 +161,7 @@ def test_documents_without_headers_lose_nothing(
 # **AI가이드 HWPX 는 2026-08-20 에 실데이터에서 뺐는데 이 테스트에만 남겼다.** 뺀 사유가
 # '깨진 도형·표' 인데 이 테스트는 도형도 표도 안 쓴다 — 쪽 첫 요소의 텍스트만 본다.
 # 그리고 실측으로 **다른 세 문서 짝(학교기록물·2026중등·시행령)은 두 포맷 모두 머리말 제거
-# 0건**이라, 이 짝을 빼면 '걸친 폭' 판정을 검증할 자[尺]가 저장소에서 사라진다
+# 0건**이라, 이 짝을 빼면 '걸친 폭' 판정을 검증할 방법이 저장소에서 사라진다
 @pytest.mark.parametrize("name", [AI_GUIDE_HWPX, AI_GUIDE_PDF])
 def test_running_header_removed_in_both_formats(
     name: str, structure_only_config: IngestConfig

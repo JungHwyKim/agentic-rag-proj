@@ -130,7 +130,7 @@ def _salvage_field(content: str, key: str) -> str:
 #
 # **파싱 실패 시 전체를 설명으로 쓰면 안 된다.** 예전에는 그렇게 했는데, 응답이
 # max_completion_tokens 에서 잘리면 JSON 이 미완성이라 파싱이 깨지고 `{`·`"description":`
-# 같은 스캐폴딩과 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 판에서 6개 청크,
+# 같은 스캐폴딩과 이스케이프된 개행이 통째로 본문에 실려 색인됐다(실측: 시행령 세 파일에서 6개 청크,
 # 하나가 3,593자). 그래서 값만 건져내고, 그것도 못하면 스캐폴딩을 걷어낸 나머지를 쓴다.
 # **어떤 경로로도 `{"description":` 이 본문에 남지 않는 것이 이 함수의 계약이다.**
 def _parse_response(content: str) -> dict[str, Any]:
@@ -223,7 +223,7 @@ def _call_vision(blob: bytes, ctx: LoadContext) -> dict[str, Any] | None:
 
     # 여기서 올린다. 아래 해석이 실패해도 이 호출은 이미 과금됐다.
     # **비용 로그도 같은 이유로 여기다** — 아래 해석 실패로 옮기면 그 회차가 공짜로
-    # 기록된다(`generation/answer.py` 가 빈 응답 검사 앞에서 남기는 것과 같은 잣대다)
+    # 기록된다(`generation/answer.py` 가 빈 응답 검사 앞에서 남기는 것과 같은 기준이다)
     ctx.vision_calls += 1
     prompt_tokens, completion_tokens = split_tokens(response)
     append_cost_log(

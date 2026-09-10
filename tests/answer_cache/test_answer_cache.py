@@ -777,7 +777,7 @@ def test_fingerprint_splits_on_output_deciding_settings(label: str, parts: dict[
 
 
 # **`rewrite_mode` 는 지문을 가른다 — `retrieval/rewrite.py` 의 캐시 salt 와 반대다.**
-# 잣대는 같다(*출력을 가르는 것만 넣는다*): 재작성 **호출** 은 `(질의, 1차 pool)` 만 보고
+# 기준은 같다(*출력을 가르는 것만 넣는다*): 재작성 **호출** 은 `(질의, 1차 pool)` 만 보고
 # mode 는 그 뒤에서 갈리므로 저쪽 출력을 안 가르지만, 여기가 가리는 것은 *검색 결과와 답
 # 본문* 이라 `fuse`/`replace` 가 실제로 가른다.
 # 짝은 `tests/retrieval/test_rewrite.py::test_mode_does_not_split_the_cache` 다 —
