@@ -76,7 +76,7 @@ Evaluator → Rewriter → Retriever 재호출 루프, 그리고 재시도 2~3�
 Agent가 여러 tool 중 하나를 선택하는 구조이지만, 11-phase 목록엔 Retriever 계열만 명시돼 있었다. 이 tool이 Phase 6에 포함되는지 미리 정하지 않으면 Phase 8(Router) 설계 시 "라우터가 고를 수 있는 선택지"가 불명확해진다. **Vision·LlamaParse 는 이 질문에서 빠졌다** — 2장 참고.
 
 **5.5 저장소를 갈아끼울 수 있게 하되 새 추상화는 만들지 않는다**
-`ingestion/indexing/base.py` 의 `VectorStore` Protocol 에 `search()` 가 이미 있다. retriever 가 `QdrantStore` 를 직접 잡지 않고 이 Protocol 만 받으면 교체 가능성이 충족된다. `provider` 설정은 **두 번째 구현체가 실재할 때** 더한다 — 구현체가 하나면 합법값이 하나뿐인 죽은 설정이고, 이 저장소가 `embedding.provider` 를 안 만든 것과 같은 잣대다. Reranker 도 같은 모양이다(Protocol + 팩토리 먼저, 설정은 나중).
+`ingestion/indexing/base.py` 의 `VectorStore` Protocol 에 `search()` 가 이미 있다. retriever 가 `QdrantStore` 를 직접 잡지 않고 이 Protocol 만 받으면 교체 가능성이 충족된다. `provider` 설정은 **두 번째 구현체가 실재할 때** 더한다 — 구현체가 하나면 합법값이 하나뿐인 죽은 설정이고, 이 저장소가 `embedding.provider` 를 안 만든 것과 같은 기준이다. Reranker 도 같은 모양이다(Protocol + 팩토리 먼저, 설정은 나중).
 
 **5.6 질의 시점 비용은 적재 시점과 축이 다르다**
 적재는 문서당 1회라 `max_vision_calls_per_doc` 같은 문서 단위 상한이 성립한다. 질의는 **반복된다** — Router + Evaluator×3 + Rewriter×3 + Generator 로 질문 하나에 최대 ~10회 LLM 호출이 일어난다. 상한과 카운터를 어디에 둘지는 Phase 4~5 에서 실제 호출 수를 보고 정한다(미결).

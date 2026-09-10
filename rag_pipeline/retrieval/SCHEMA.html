@@ -258,7 +258,7 @@ flowchart TD
 <p class="cap">
   채점과 세트 검증이 <strong>같은 <code>squash()</code></strong> 를 쓴다. 두 곳에서 따로
   정규화하면 한쪽을 고쳤을 때 조용히 갈린다. 공백을 지우는 이유는 <strong>PDF 경로가 한국어
-  낱말 사이 공백을 잃기</strong> 때문이다 — 살려서 대조하면 PDF 판이 정답을 못 맞힌 게 아니라
+  낱말 사이 공백을 잃기</strong> 때문이다 — 살려서 대조하면 PDF 파일이 정답을 못 맞힌 게 아니라
   띄어쓰기 때문에 0점이 되고, 포맷 비교가 검색이 아니라 추출 품질을 재게 된다.
 </p>
 </div>
@@ -269,7 +269,7 @@ flowchart TD
     <td><code>chunk_id</code> 목록</td>
     <td>
       청킹을 고치면 세트가 통째로 무효다. 그런데 <strong>청크 상한 재판정이 이 세트의 목적</strong>
-      중 하나라 자기 자신을 못 잰다. 게다가 같은 문서의 HWPX 판과 PDF 판은 chunk_id 가
+      중 하나라 자기 자신을 못 잰다. 게다가 같은 문서의 HWPX 파일과 PDF 파일은 chunk_id 가
       애초에 달라, 양쪽에 따로 정답을 매기면 두 포맷이 아니라 <strong>두 세트를 비교</strong>하게 된다
     </td>
   </tr>

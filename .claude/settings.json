@@ -79,6 +79,11 @@
           },
           {
             "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/prose_style_check.py\"",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe\" \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/plan_log_check.py\"",
             "timeout": 15
           },
