@@ -122,11 +122,12 @@ Copy-Item .env.example .env
 | `tests/` | 단위·통합 테스트 |
 | `.claude/wiki/` | 설계 논의(`plan_log`), 작업 회고(`task_log`), 검증 수치(`verify_log`), 지금 동작 방식(`knowledge`) |
 
-- 시스템의 모양과 경계 → [`architecture.md`](.claude/wiki/overview/architecture.md)
-- 왜 그렇게 골랐나 → [`plan_log`](.claude/wiki/plan_log/INDEX.md) · [`task_log`](.claude/wiki/task_log/INDEX.md)
-- 얼마가 나왔나 → [`verify_log`](.claude/wiki/verify_log/INDEX.md)
+- 시스템의 구조 → [`architecture.md`](.claude/wiki/overview/architecture.md)
+- 설계와 작업 로그 → [`plan_log`](.claude/wiki/plan_log/INDEX.md) · [`task_log`](.claude/wiki/task_log/INDEX.md)
+- 측정값 로그 → [`verify_log`](.claude/wiki/verify_log/INDEX.md)
 
 ## 데이터와 출처
 
 평가에는 공개된 한국어 공문서 4종(시행령 개정안 안내서, 공공기관 신뢰가능 AI 구현 실용가이드, 중등 기초학력 보장 계획, 학교기록물 관리 지침)을 사용했습니다. **원본 파일은 저장소에 포함하지 않았고**, 정답 세트에는 평가에 필요한 짧은 발췌만 들어 있습니다. 문서의 저작권은 각 발행 기관에 있습니다.
+
 
