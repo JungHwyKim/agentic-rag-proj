@@ -44,3 +44,10 @@ output/
 
 # backend/preview.py 산출물. 템플릿을 고치면 곧바로 낡아 어느 시점의 화면인지 알 수 없게 된다
 /preview.html
+
+# 개인 작업 도구와 그 테스트. 제품 코드가 아니라 추적에서 뺐다 — 파일은 로컬에 그대로 남는다.
+# 둘을 같이 빼는 이유는 tests/ 만 남으면 클론한 쪽에서 import 가 깨지기 때문이다
+/openwork/
+/quiz/
+/tests/openwork/
+/tests/quiz/
