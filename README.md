@@ -146,6 +146,13 @@ flowchart LR
 - **개선:** 6회 반복 측정으로 병목을 확인하고, Cohere API 기반 리랭커로 전환
 - **성과:** 색인 시간을 48.72초로 회복
 
+### 4. AI 기반 개발의 품질 관리 체계 개선 (my-harness v1 → v2)
+
+- **문제:** 기존 하네스에서 개발 규칙과 작업 기록이 혼재하고, 로그가 누적되면서 컨텍스트 관리와 유지보수에 한계가 발생했습니다.
+- **개선:** Wiki를 Overview·Knowledge·History로 분리하고, Fast/Full Quality Gate와 중요 기록 선별 체계를 도입했습니다.
+- **성과:** 필요한 정보만 선택적으로 참조하고, 변경 범위에 따라 검증을 수행하도록 개발 프로세스를 구조화했습니다.
+= GitHub: my-harness-v2 — Agentic RAG 개발 경험을 바탕으로 개선한 AI 개발 하네스
+
 
 평가 방법과 전체 수치는 [EVALUATION.md](EVALUATION.md) 에 있습니다.
 
@@ -226,7 +233,7 @@ tests/               단위·통합 테스트
 
 - 설계 및 작업 로그 → [`plan_log`](.claude/wiki/plan_log/INDEX.md) · [`task_log`](.claude/wiki/task_log/INDEX.md)
 - 결과값 기록 → [`verify_log`](.claude/wiki/verify_log/INDEX.md)
-- LLM Wiki → [`knowledge`](.claude/wiki/knowledge/) 
+- LLM Wiki → [`knowledge`](.claude/wiki/knowledge/)
 
 ## 데이터와 출처
 
