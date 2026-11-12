@@ -151,7 +151,7 @@ flowchart LR
 - **문제:** 기존 하네스에서 개발 규칙과 작업 기록이 혼재하고, 로그가 누적되면서 컨텍스트 관리와 유지보수에 한계가 발생했습니다.
 - **개선:** Wiki를 Overview·Knowledge·History로 분리하고, Fast/Full Quality Gate와 중요 기록 선별 체계를 도입했습니다.
 - **성과:** 필요한 정보만 선택적으로 참조하고, 변경 범위에 따라 검증을 수행하도록 개발 프로세스를 구조화했습니다.
-- GitHub: my-harness-v2 — Agentic RAG 개발 경험을 바탕으로 개선한 AI 개발 하네스
+- GitHub: [my-harness-v2](https://github.com/JungHwyKim/my-harness) — Agentic RAG 개발 경험을 바탕으로 개선한 AI 개발 하네스
 
 
 평가 방법과 전체 수치는 [EVALUATION.md](EVALUATION.md) 에 있습니다.
